@@ -12,6 +12,8 @@ def current_weights(
     by_symbol = {position.symbol: position for position in positions}
     if account.equity <= 0:
         raise ValueError("Account equity must be positive.")
+    # Any symbol not currently held is treated as a zero-weight position so the
+    # optimizer and rebalance layer can work off the same ordered universe.
     return {
         symbol: by_symbol.get(symbol, Position(symbol=symbol, qty=0.0, market_value=0.0)).market_value
         / account.equity
@@ -32,6 +34,8 @@ def build_order_plan(
     for symbol, target_weight in zip(symbols, target_weights, strict=True):
         current_weight = weights_now.get(symbol, 0.0)
         delta_weight = float(target_weight - current_weight)
+        # Convert weight deltas into notional dollars so order sizing is tied
+        # to portfolio equity instead of per-asset share math in this layer.
         notional_usd = abs(delta_weight) * account.equity
         # Ignore small drifts so the strategy does not churn on every run.
         if abs(delta_weight) < config.rebalance_threshold:

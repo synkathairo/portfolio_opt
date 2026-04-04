@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -37,6 +38,37 @@ class AlpacaClient:
             symbol: float(trade["p"])
             for symbol, trade in trades.items()
         }
+
+    def get_daily_closes(self, symbols: list[str], lookback_days: int) -> dict[str, list[float]]:
+        end = datetime.now(UTC)
+        # Ask for more calendar days than the trading lookback to survive weekends
+        # and holidays while still ending up with enough bars.
+        start = end - timedelta(days=max(lookback_days * 3, 30))
+        closes_by_symbol: dict[str, list[float]] = {}
+        for symbol in symbols:
+            # Use the single-symbol endpoint here. Alpaca's multi-symbol bars
+            # endpoint sorts results by symbol first, so a modest limit can
+            # return only the first symbol and leave the rest empty.
+            query = urlencode(
+                {
+                    "timeframe": "1Day",
+                    "start": start.isoformat().replace("+00:00", "Z"),
+                    "end": end.isoformat().replace("+00:00", "Z"),
+                    "limit": str(lookback_days + 5),
+                    "adjustment": "all",
+                    "feed": "iex",
+                }
+            )
+            payload = self._request_json("GET", f"/v2/stocks/{symbol}/bars?{query}", data_api=True)
+            series = payload.get("bars", [])
+            closes = [float(row["c"]) for row in series][-lookback_days:]
+            if len(closes) < 2:
+                raise RuntimeError(
+                    f"Not enough daily bars returned for {symbol}. "
+                    f"Requested {lookback_days} trading days, got {len(closes)}."
+                )
+            closes_by_symbol[symbol] = closes
+        return closes_by_symbol
 
     def submit_order_plan(self, plans: list[OrderPlan]) -> None:
         for plan in plans:

@@ -4,11 +4,14 @@ import argparse
 import json
 from dataclasses import asdict
 
+import numpy as np
+
 from .alpaca import AlpacaClient, format_order_plans
 from .config import AlpacaConfig, OptimizationConfig
+from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
 from .model import load_model_inputs
 from .optimizer import optimize_weights
-from .rebalance import build_order_plan
+from .rebalance import build_order_plan, current_weights
 
 
 def parse_args() -> argparse.Namespace:
@@ -18,6 +21,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-weight", type=float, default=0.0)
     parser.add_argument("--max-weight", type=float, default=0.35)
     parser.add_argument("--rebalance-threshold", type=float, default=0.02)
+    parser.add_argument("--turnover-penalty", type=float, default=0.02)
+    parser.add_argument(
+        "--estimate-from-history",
+        action="store_true",
+        help="Estimate expected returns and covariance from Alpaca daily bars.",
+    )
+    parser.add_argument("--lookback-days", type=int, default=60)
+    parser.add_argument(
+        "--mean-shrinkage",
+        type=float,
+        default=0.75,
+        help="Shrink sample mean returns toward zero to reduce estimation noise.",
+    )
+    parser.add_argument(
+        "--return-model",
+        choices=("sample-mean", "momentum"),
+        default="sample-mean",
+        help="How to estimate expected returns when using --estimate-from-history.",
+    )
+    parser.add_argument(
+        "--momentum-window",
+        type=int,
+        default=63,
+        help="Trailing trading-day window used by the momentum return model.",
+    )
     parser.add_argument(
         "--submit",
         action="store_true",
@@ -35,19 +63,66 @@ def main() -> None:
         min_weight=args.min_weight,
         max_weight=args.max_weight,
         rebalance_threshold=args.rebalance_threshold,
-    )
-
-    target_weights = optimize_weights(
-        expected_returns=model.expected_returns,
-        covariance=model.covariance,
-        config=opt_config,
+        turnover_penalty=args.turnover_penalty,
     )
 
     # The optimizer is intentionally decoupled from data acquisition so the
     # expected return and covariance model can be replaced later.
     alpaca = AlpacaClient(AlpacaConfig.from_env())
+    # Even in dry-run mode we fetch live account state, because the rebalance
+    # plan depends on current equity, holdings, and market prices.
     account = alpaca.get_account()
     positions = alpaca.get_positions()
+    existing_weights_map = current_weights(model.symbols, account, positions)
+    existing_weights = np.array([existing_weights_map[symbol] for symbol in model.symbols], dtype=float)
+
+    if args.estimate_from_history:
+        closes_by_symbol = alpaca.get_daily_closes(model.symbols, args.lookback_days)
+        if args.return_model == "momentum":
+            estimated = estimate_inputs_from_momentum(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                mean_shrinkage=args.mean_shrinkage,
+                momentum_window=args.momentum_window,
+            )
+        else:
+            estimated = estimate_inputs_from_prices(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                mean_shrinkage=args.mean_shrinkage,
+            )
+        # Both return models reuse the same covariance estimate from recent
+        # daily returns; only the expected return signal changes.
+        expected_returns = estimated.expected_returns
+        covariance = estimated.covariance
+        estimation_metadata = {
+            "method": "alpaca_daily_bars",
+            "return_model": args.return_model,
+            "lookback_days": args.lookback_days,
+            "mean_shrinkage": args.mean_shrinkage,
+            "observations": estimated.observations,
+        }
+        if args.return_model == "momentum":
+            estimation_metadata["momentum_window"] = min(args.momentum_window, args.lookback_days - 1)
+    else:
+        if model.expected_returns is None or model.covariance is None:
+            raise ValueError(
+                "Model file must include expected_returns and covariance unless "
+                "--estimate-from-history is used."
+            )
+        expected_returns = model.expected_returns
+        covariance = model.covariance
+        estimation_metadata = {"method": "model_file"}
+
+    target_weights = optimize_weights(
+        expected_returns=expected_returns,
+        covariance=covariance,
+        config=opt_config,
+        current_weights=existing_weights,
+    )
+
+    # Convert target weights into dollar notional orders using the latest
+    # available prices and a minimum rebalance threshold.
     latest_prices = alpaca.get_latest_prices(model.symbols)
     plan = build_order_plan(
         symbols=model.symbols,
@@ -60,9 +135,25 @@ def main() -> None:
 
     result = {
         "symbols": model.symbols,
+        "estimation": estimation_metadata,
+        "optimization": {
+            "risk_aversion": args.risk_aversion,
+            "turnover_penalty": args.turnover_penalty,
+            "min_weight": args.min_weight,
+            "max_weight": args.max_weight,
+            "rebalance_threshold": args.rebalance_threshold,
+        },
         "target_weights": {
             symbol: round(float(weight), 6)
             for symbol, weight in zip(model.symbols, target_weights, strict=True)
+        },
+        "current_weights": {
+            symbol: round(float(weight), 6)
+            for symbol, weight in zip(model.symbols, existing_weights, strict=True)
+        },
+        "expected_returns": {
+            symbol: round(float(value), 6)
+            for symbol, value in zip(model.symbols, expected_returns, strict=True)
         },
         "orders": [asdict(item) for item in plan],
     }

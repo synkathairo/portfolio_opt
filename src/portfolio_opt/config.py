@@ -34,3 +34,5 @@ class OptimizationConfig:
     min_weight: float = 0.0
     max_weight: float = 0.35
     rebalance_threshold: float = 0.02
+    turnover_penalty: float = 0.02
+    force_full_investment: bool = True
