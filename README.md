@@ -115,6 +115,21 @@ uv run portfolio-opt \
   --min-invested-weight 0.30
 ```
 
+To run a simple parameter sweep in backtest mode:
+
+```bash
+uv run portfolio-opt \
+  --model examples/sample_universe.json \
+  --estimate-from-history \
+  --return-model momentum \
+  --lookback-days 126 \
+  --backtest-days 252 \
+  --rebalance-every 21 \
+  --max-turnover 0.30 \
+  --sweep \
+  --top-n 5
+```
+
 ## Submit Orders
 
 ```bash
@@ -176,4 +191,5 @@ For universe-only files, you can also provide asset-class metadata and policy bo
 - Asset-class bounds can be defined in the model file to keep allocations within a portfolio policy.
 - Backtest mode reuses the same optimizer with rolling historical estimates and periodic rebalancing.
 - Backtest output includes simple fixed-weight benchmarks for comparison.
+- Sweep mode runs a small backtest grid over core policy parameters and returns the top results.
 - The project is managed with `uv`; keep `pyproject.toml` and `uv.lock` in sync.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 from dataclasses import asdict
 
@@ -119,6 +120,17 @@ def parse_args() -> argparse.Namespace:
         help="Trading-day interval between rebalances in backtest mode.",
     )
     parser.add_argument(
+        "--sweep",
+        action="store_true",
+        help="Run a simple parameter sweep in backtest mode.",
+    )
+    parser.add_argument(
+        "--top-n",
+        type=int,
+        default=5,
+        help="Number of top parameter combinations to show in sweep mode.",
+    )
+    parser.add_argument(
         "--submit",
         action="store_true",
         help="Submit market orders to Alpaca. Default behavior is dry-run output only.",
@@ -166,6 +178,98 @@ def main() -> None:
     if args.backtest_days > 0:
         total_days = args.lookback_days + args.backtest_days + 1
         closes_by_symbol = alpaca.get_daily_closes_for_period(model.symbols, total_days)
+        if args.sweep:
+            risk_grid = [1.0, 2.0, 4.0]
+            cash_grid = [0.05, 0.10, 0.20]
+            invested_grid = [0.20, 0.30, 0.40]
+            turnover_grid = [0.02, 0.05]
+            momentum_grid = [42, 63, 84]
+            results: list[dict[str, float | int | dict[str, float]]] = []
+            skipped: list[dict[str, float | int | str]] = []
+
+            for risk_aversion, min_cash_weight, min_invested_weight, turnover_penalty, momentum_window in itertools.product(
+                risk_grid,
+                cash_grid,
+                invested_grid,
+                turnover_grid,
+                momentum_grid,
+            ):
+                sweep_config = OptimizationConfig(
+                    risk_aversion=risk_aversion,
+                    min_weight=args.min_weight,
+                    max_weight=args.max_weight,
+                    rebalance_threshold=args.rebalance_threshold,
+                    turnover_penalty=turnover_penalty,
+                    force_full_investment=False,
+                    min_cash_weight=min_cash_weight,
+                    max_turnover=args.max_turnover,
+                    min_invested_weight=min_invested_weight,
+                    class_min_weights=model.class_min_weights,
+                    class_max_weights=model.class_max_weights,
+                )
+                try:
+                    sweep_backtest = run_backtest(
+                        symbols=model.symbols,
+                        closes_by_symbol=closes_by_symbol,
+                        lookback_days=args.lookback_days,
+                        rebalance_every=args.rebalance_every,
+                        return_model=args.return_model,
+                        mean_shrinkage=args.mean_shrinkage,
+                        momentum_window=momentum_window,
+                        opt_config=sweep_config,
+                        asset_class_matrix=asset_class_matrix if constrained_class_names else None,
+                    )
+                except RuntimeError as exc:
+                    skipped.append(
+                        {
+                            "risk_aversion": risk_aversion,
+                            "min_cash_weight": min_cash_weight,
+                            "min_invested_weight": min_invested_weight,
+                            "turnover_penalty": turnover_penalty,
+                            "momentum_window": momentum_window,
+                            "reason": str(exc),
+                        }
+                    )
+                    continue
+                results.append(
+                    {
+                        "risk_aversion": risk_aversion,
+                        "min_cash_weight": min_cash_weight,
+                        "min_invested_weight": min_invested_weight,
+                        "turnover_penalty": turnover_penalty,
+                        "momentum_window": momentum_window,
+                        "annualized_return": round(float(sweep_backtest.annualized_return), 6),
+                        "annualized_volatility": round(float(sweep_backtest.annualized_volatility), 6),
+                        "max_drawdown": round(float(sweep_backtest.max_drawdown), 6),
+                        "average_turnover": round(float(sweep_backtest.average_turnover), 6),
+                    }
+                )
+
+            results.sort(
+                key=lambda item: (
+                    float(item["annualized_return"]),
+                    -float(item["max_drawdown"]),
+                ),
+                reverse=True,
+            )
+            print(
+                json.dumps(
+                    {
+                        "symbols": model.symbols,
+                        "sweep": {
+                            "days": args.backtest_days,
+                            "rebalance_every": args.rebalance_every,
+                            "top_n": args.top_n,
+                            "tested": len(results),
+                            "skipped": len(skipped),
+                            "results": results[: args.top_n],
+                            "skipped_examples": skipped[: min(5, len(skipped))],
+                        },
+                    },
+                    indent=2,
+                )
+            )
+            return
         backtest = run_backtest(
             symbols=model.symbols,
             closes_by_symbol=closes_by_symbol,
