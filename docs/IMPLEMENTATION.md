@@ -18,7 +18,7 @@ The optimizer solves a constrained mean-variance problem with a turnover penalty
 maximize
   mu^T w
   - risk_aversion * w^T Sigma w
-  - turnover_penalty * ||w - w_current||_1
+  - effective_turnover_penalty * ||w - w_current||_1
 ```
 
 Subject to:
@@ -32,6 +32,7 @@ Interpretation:
 - `Sigma` is the covariance matrix
 - `risk_aversion` penalizes volatility
 - `turnover_penalty` discourages large changes from current holdings
+- `effective_turnover_penalty` scales that penalty by current invested weight, so an all-cash account is not discouraged from entering its first positions
 
 This is still a single-step rebalance model. It is not a multi-period planner.
 
@@ -59,6 +60,6 @@ The momentum mode is usually easier to interpret than raw sample means.
 ## Current Limitations
 
 - no explicit cash sleeve unless the optimizer is changed to allow partial investment
-- no hard turnover cap, only a penalty
+- turnover penalty scaling is simple and does not distinguish buys from sells
 - no transaction-cost model beyond turnover discouragement
 - no tax logic, borrow costs, or multi-period planning

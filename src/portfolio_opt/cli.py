@@ -10,7 +10,7 @@ from .alpaca import AlpacaClient, format_order_plans
 from .config import AlpacaConfig, OptimizationConfig
 from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
 from .model import load_model_inputs
-from .optimizer import optimize_weights
+from .optimizer import effective_turnover_penalty, optimize_weights
 from .rebalance import build_order_plan, current_weights
 
 
@@ -22,6 +22,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-weight", type=float, default=0.35)
     parser.add_argument("--rebalance-threshold", type=float, default=0.02)
     parser.add_argument("--turnover-penalty", type=float, default=0.02)
+    parser.add_argument(
+        "--allow-cash",
+        action="store_true",
+        help="Allow the optimizer to leave part of the portfolio in cash.",
+    )
+    parser.add_argument(
+        "--min-cash-weight",
+        type=float,
+        default=0.0,
+        help="Minimum cash weight to hold when --allow-cash is enabled.",
+    )
+    parser.add_argument(
+        "--max-turnover",
+        type=float,
+        default=None,
+        help="Hard cap on one-step turnover, measured as sum(abs(target-current)).",
+    )
     parser.add_argument(
         "--estimate-from-history",
         action="store_true",
@@ -64,6 +81,9 @@ def main() -> None:
         max_weight=args.max_weight,
         rebalance_threshold=args.rebalance_threshold,
         turnover_penalty=args.turnover_penalty,
+        force_full_investment=not args.allow_cash,
+        min_cash_weight=args.min_cash_weight,
+        max_turnover=args.max_turnover,
     )
 
     # The optimizer is intentionally decoupled from data acquisition so the
@@ -75,6 +95,7 @@ def main() -> None:
     positions = alpaca.get_positions()
     existing_weights_map = current_weights(model.symbols, account, positions)
     existing_weights = np.array([existing_weights_map[symbol] for symbol in model.symbols], dtype=float)
+    scaled_turnover_penalty = effective_turnover_penalty(opt_config, existing_weights)
 
     if args.estimate_from_history:
         closes_by_symbol = alpaca.get_daily_closes(model.symbols, args.lookback_days)
@@ -120,6 +141,9 @@ def main() -> None:
         config=opt_config,
         current_weights=existing_weights,
     )
+    target_cash_weight = max(0.0, 1.0 - float(target_weights.sum()))
+    current_cash_weight = max(0.0, 1.0 - float(existing_weights.sum()))
+    realized_turnover = float(np.abs(target_weights - existing_weights).sum())
 
     # Convert target weights into dollar notional orders using the latest
     # available prices and a minimum rebalance threshold.
@@ -139,9 +163,13 @@ def main() -> None:
         "optimization": {
             "risk_aversion": args.risk_aversion,
             "turnover_penalty": args.turnover_penalty,
+            "effective_turnover_penalty": round(float(scaled_turnover_penalty), 6),
+            "max_turnover": args.max_turnover,
             "min_weight": args.min_weight,
             "max_weight": args.max_weight,
             "rebalance_threshold": args.rebalance_threshold,
+            "allow_cash": args.allow_cash,
+            "min_cash_weight": args.min_cash_weight,
         },
         "target_weights": {
             symbol: round(float(weight), 6)
@@ -154,6 +182,14 @@ def main() -> None:
         "expected_returns": {
             symbol: round(float(value), 6)
             for symbol, value in zip(model.symbols, expected_returns, strict=True)
+        },
+        "cash": {
+            "current_weight": round(current_cash_weight, 6),
+            "target_weight": round(target_cash_weight, 6),
+        },
+        "turnover": {
+            "proposed": round(realized_turnover, 6),
+            "max_allowed": args.max_turnover,
         },
         "orders": [asdict(item) for item in plan],
     }

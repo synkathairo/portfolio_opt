@@ -22,6 +22,8 @@ Baseline assumptions:
 
 This is an allocation engine, not a signal-generation system. The strategy quality depends on how you estimate expected returns and covariance.
 
+For a walkthrough of the current implementation and model assumptions, see `docs/IMPLEMENTATION.md`.
+
 ## Install
 
 ```bash
@@ -66,6 +68,37 @@ uv run portfolio-opt --model examples/sample_model.json --dry-run
 
 This uses the current Alpaca account equity and positions, computes target weights with `cvxpy`, and prints the order plan without submitting trades.
 
+To estimate inputs from Alpaca history instead of a static model file:
+
+```bash
+uv run portfolio-opt \
+  --model examples/sample_universe.json \
+  --estimate-from-history \
+  --return-model momentum \
+  --lookback-days 126 \
+  --momentum-window 63 \
+  --mean-shrinkage 0.75 \
+  --turnover-penalty 0.05 \
+  --dry-run
+```
+
+To allow cash and cap rebalance aggressiveness:
+
+```bash
+uv run portfolio-opt \
+  --model examples/sample_universe.json \
+  --estimate-from-history \
+  --return-model momentum \
+  --lookback-days 126 \
+  --momentum-window 63 \
+  --mean-shrinkage 0.75 \
+  --allow-cash \
+  --min-cash-weight 0.10 \
+  --max-turnover 0.30 \
+  --turnover-penalty 0.05 \
+  --dry-run
+```
+
 ## Submit Orders
 
 ```bash
@@ -98,5 +131,8 @@ Returns and covariance should be on the same annualized basis.
 
 - Fractional quantity handling is intentionally conservative and uses notional order sizing logic derived from current prices.
 - The current code pulls latest trade prices from Alpaca for order sizing.
-- No market data estimation pipeline is included yet. Feed the optimizer with your own model inputs.
+- Historical estimation can use either annualized sample mean returns or a simpler trailing momentum signal.
+- The optimizer can optionally hold cash instead of forcing every dollar into risky assets.
+- A hard `max_turnover` constraint can be used alongside the soft turnover penalty.
+- The soft turnover penalty is scaled down automatically when the account is mostly in cash.
 - The project is managed with `uv`; keep `pyproject.toml` and `uv.lock` in sync.

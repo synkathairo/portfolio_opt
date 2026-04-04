@@ -12,6 +12,18 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 
+def effective_turnover_penalty(
+    config: OptimizationConfig,
+    current_weights: np.ndarray | None,
+) -> float:
+    if current_weights is None:
+        return 0.0
+    invested_weight = float(np.clip(np.sum(np.array(current_weights, dtype=float)), 0.0, 1.0))
+    # Scale the turnover penalty by the currently invested risky weight so an
+    # all-cash portfolio is not punished for entering its first positions.
+    return config.turnover_penalty * invested_weight
+
+
 def optimize_weights(
     expected_returns: np.ndarray,
     covariance: np.ndarray,
@@ -25,20 +37,27 @@ def optimize_weights(
         if current_weights is not None
         else np.zeros(asset_count, dtype=float)
     )
+    scaled_turnover_penalty = effective_turnover_penalty(config, baseline_weights)
 
     # This objective still uses single-period mean-variance optimization, but it
     # is more realistic than the original version because it penalizes turnover
-    # away from the current holdings.
+    # away from the current holdings. The turnover penalty is scaled by the
+    # currently invested weight so a cash-only account can establish an initial
+    # portfolio without being artificially discouraged from investing at all.
     objective = cp.Maximize(
         expected_returns @ weights
         - config.risk_aversion * cp.quad_form(weights, covariance)
-        - config.turnover_penalty * cp.norm1(weights - baseline_weights)
+        - scaled_turnover_penalty * cp.norm1(weights - baseline_weights)
     )
     constraints = [weights >= config.min_weight, weights <= config.max_weight]
     if config.force_full_investment:
         constraints.append(cp.sum(weights) == 1)
     else:
-        constraints.append(cp.sum(weights) <= 1)
+        # Allowing partial investment leaves the remainder in cash.
+        constraints.append(cp.sum(weights) <= 1.0 - config.min_cash_weight)
+    if config.max_turnover is not None:
+        # Hard turnover cap for operational control on top of the soft penalty.
+        constraints.append(cp.norm1(weights - baseline_weights) <= config.max_turnover)
     problem = cp.Problem(objective, constraints)
     problem.solve()
 
@@ -48,9 +67,14 @@ def optimize_weights(
     solution = np.array(weights.value, dtype=float)
     # Normalize after clipping to keep the output usable even if the solver
     # returns tiny numerical violations around the bounds.
-    # With force_full_investment enabled this keeps the weights summing to one.
     clipped = np.clip(solution, config.min_weight, config.max_weight)
     total = clipped.sum()
-    if total <= 0:
-        raise RuntimeError("Optimization returned non-positive total weight.")
-    return clipped / total
+    if config.force_full_investment:
+        if total <= 0:
+            raise RuntimeError("Optimization returned non-positive total weight.")
+        # With full investment enabled this keeps weights summing to one.
+        return clipped / total
+
+    # In partial-investment mode the leftover weight is explicit cash, so keep
+    # the raw clipped solution instead of renormalizing it back to 100%.
+    return clipped
