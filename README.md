@@ -23,6 +23,7 @@ Baseline assumptions:
 This is an allocation engine, not a signal-generation system. The strategy quality depends on how you estimate expected returns and covariance.
 
 For a walkthrough of the current implementation and model assumptions, see `docs/IMPLEMENTATION.md`.
+For the planned parallel `cvxportfolio` experiment, see `docs/CVXPORTFOLIO_PLAN.md`.
 
 ## Install
 
@@ -192,4 +193,5 @@ For universe-only files, you can also provide asset-class metadata and policy bo
 - Backtest mode reuses the same optimizer with rolling historical estimates and periodic rebalancing.
 - Backtest output includes simple fixed-weight benchmarks for comparison.
 - Sweep mode runs a small backtest grid over core policy parameters and returns the top results.
+- `src/cvxportfolio_impl/` is reserved for a side-by-side `cvxportfolio` experiment.
 - The project is managed with `uv`; keep `pyproject.toml` and `uv.lock` in sync.
