@@ -100,6 +100,21 @@ uv run portfolio-opt \
   --dry-run
 ```
 
+To run a simple offline backtest with the same policy constraints:
+
+```bash
+uv run portfolio-opt \
+  --model examples/sample_universe.json \
+  --estimate-from-history \
+  --return-model momentum \
+  --lookback-days 126 \
+  --backtest-days 252 \
+  --rebalance-every 21 \
+  --allow-cash \
+  --min-cash-weight 0.10 \
+  --min-invested-weight 0.30
+```
+
 ## Submit Orders
 
 ```bash
@@ -159,4 +174,5 @@ For universe-only files, you can also provide asset-class metadata and policy bo
 - A hard `max_turnover` constraint can be used alongside the soft turnover penalty.
 - The soft turnover penalty is scaled down automatically when the account is mostly in cash.
 - Asset-class bounds can be defined in the model file to keep allocations within a portfolio policy.
+- Backtest mode reuses the same optimizer with rolling historical estimates and periodic rebalancing.
 - The project is managed with `uv`; keep `pyproject.toml` and `uv.lock` in sync.

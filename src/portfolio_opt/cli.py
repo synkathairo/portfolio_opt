@@ -7,6 +7,7 @@ from dataclasses import asdict
 import numpy as np
 
 from .alpaca import AlpacaClient, format_order_plans
+from .backtest import run_backtest
 from .config import AlpacaConfig, OptimizationConfig
 from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
 from .model import load_model_inputs
@@ -28,6 +29,26 @@ def build_asset_class_matrix(
             continue
         matrix[class_names.index(class_name), symbol_index] = 1.0
     return matrix
+
+
+def clean_weights(weights: np.ndarray, tolerance: float = 1e-5) -> np.ndarray:
+    cleaned = np.array(weights, dtype=float)
+    cleaned[np.abs(cleaned) < tolerance] = 0.0
+    return cleaned
+
+
+def asset_class_exposures(
+    symbols: list[str],
+    weights: np.ndarray,
+    asset_classes: dict[str, str],
+) -> dict[str, float]:
+    return {
+        class_name: round(
+            float(sum(weights[index] for index, symbol in enumerate(symbols) if asset_classes.get(symbol) == class_name)),
+            6,
+        )
+        for class_name in sorted(set(asset_classes.values()))
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -86,6 +107,18 @@ def parse_args() -> argparse.Namespace:
         help="Trailing trading-day window used by the momentum return model.",
     )
     parser.add_argument(
+        "--backtest-days",
+        type=int,
+        default=0,
+        help="Run a simple offline backtest over this many trading days instead of a live rebalance.",
+    )
+    parser.add_argument(
+        "--rebalance-every",
+        type=int,
+        default=21,
+        help="Trading-day interval between rebalances in backtest mode.",
+    )
+    parser.add_argument(
         "--submit",
         action="store_true",
         help="Submit market orders to Alpaca. Default behavior is dry-run output only.",
@@ -129,6 +162,48 @@ def main() -> None:
         asset_classes=model.asset_classes,
         class_names=constrained_class_names,
     )
+
+    if args.backtest_days > 0:
+        total_days = args.lookback_days + args.backtest_days + 1
+        closes_by_symbol = alpaca.get_daily_closes_for_period(model.symbols, total_days)
+        backtest = run_backtest(
+            symbols=model.symbols,
+            closes_by_symbol=closes_by_symbol,
+            lookback_days=args.lookback_days,
+            rebalance_every=args.rebalance_every,
+            return_model=args.return_model,
+            mean_shrinkage=args.mean_shrinkage,
+            momentum_window=args.momentum_window,
+            opt_config=opt_config,
+            asset_class_matrix=asset_class_matrix if constrained_class_names else None,
+        )
+        latest_weights = clean_weights(backtest.latest_weights)
+        result = {
+            "symbols": model.symbols,
+            "backtest": {
+                "days": args.backtest_days,
+                "rebalance_every": args.rebalance_every,
+                "final_value": round(float(backtest.final_value), 6),
+                "total_return": round(float(backtest.total_return), 6),
+                "annualized_return": round(float(backtest.annualized_return), 6),
+                "annualized_volatility": round(float(backtest.annualized_volatility), 6),
+                "max_drawdown": round(float(backtest.max_drawdown), 6),
+                "rebalance_count": backtest.rebalance_count,
+                "average_turnover": round(float(backtest.average_turnover), 6),
+            },
+            "latest_target_weights": {
+                symbol: round(float(weight), 6)
+                for symbol, weight in zip(model.symbols, latest_weights, strict=True)
+            },
+            "latest_cash_weight": round(max(0.0, 1.0 - float(latest_weights.sum())), 6),
+            "latest_asset_class_exposures": asset_class_exposures(
+                symbols=model.symbols,
+                weights=latest_weights,
+                asset_classes=model.asset_classes,
+            ),
+        }
+        print(json.dumps(result, indent=2))
+        return
 
     if args.estimate_from_history:
         closes_by_symbol = alpaca.get_daily_closes(model.symbols, args.lookback_days)
@@ -175,16 +250,11 @@ def main() -> None:
         current_weights=existing_weights,
         asset_class_matrix=asset_class_matrix if constrained_class_names else None,
     )
+    target_weights = clean_weights(target_weights)
     target_cash_weight = max(0.0, 1.0 - float(target_weights.sum()))
     current_cash_weight = max(0.0, 1.0 - float(existing_weights.sum()))
     realized_turnover = float(np.abs(target_weights - existing_weights).sum())
-    class_exposures = {
-        class_name: round(
-            float(sum(target_weights[index] for index, symbol in enumerate(model.symbols) if model.asset_classes.get(symbol) == class_name)),
-            6,
-        )
-        for class_name in sorted(set(model.asset_classes.values()))
-    }
+    current_weights_clean = clean_weights(existing_weights)
 
     # Convert target weights into dollar notional orders using the latest
     # available prices and a minimum rebalance threshold.
@@ -221,7 +291,7 @@ def main() -> None:
         },
         "current_weights": {
             symbol: round(float(weight), 6)
-            for symbol, weight in zip(model.symbols, existing_weights, strict=True)
+            for symbol, weight in zip(model.symbols, current_weights_clean, strict=True)
         },
         "expected_returns": {
             symbol: round(float(value), 6)
@@ -231,7 +301,18 @@ def main() -> None:
             "current_weight": round(current_cash_weight, 6),
             "target_weight": round(target_cash_weight, 6),
         },
-        "asset_class_exposures": class_exposures,
+        "asset_class_exposures": {
+            "current": asset_class_exposures(
+                symbols=model.symbols,
+                weights=current_weights_clean,
+                asset_classes=model.asset_classes,
+            ),
+            "target": asset_class_exposures(
+                symbols=model.symbols,
+                weights=target_weights,
+                asset_classes=model.asset_classes,
+            ),
+        },
         "turnover": {
             "proposed": round(realized_turnover, 6),
             "max_allowed": args.max_turnover,

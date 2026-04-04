@@ -70,6 +70,9 @@ class AlpacaClient:
             closes_by_symbol[symbol] = closes
         return closes_by_symbol
 
+    def get_daily_closes_for_period(self, symbols: list[str], total_days: int) -> dict[str, list[float]]:
+        return self.get_daily_closes(symbols, total_days)
+
     def submit_order_plan(self, plans: list[OrderPlan]) -> None:
         for plan in plans:
             # Notional market orders keep the rebalance layer independent from

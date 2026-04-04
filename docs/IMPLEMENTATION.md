@@ -59,6 +59,15 @@ The momentum mode is usually easier to interpret than raw sample means.
 
 `--dry-run` does not submit orders, but it still queries Alpaca for account state and prices because the rebalance plan depends on live holdings and equity.
 
+`--backtest-days` switches the CLI into a simple offline simulation mode. It repeatedly:
+
+1. takes a rolling lookback window of closes
+2. re-estimates expected returns and covariance
+3. solves for target weights
+4. applies those weights until the next rebalance date
+
+Cash is assumed to earn zero in the backtest.
+
 ## Current Limitations
 
 - no explicit cash sleeve unless the optimizer is changed to allow partial investment
