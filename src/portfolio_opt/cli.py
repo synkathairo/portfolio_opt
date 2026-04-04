@@ -43,6 +43,8 @@ def main() -> None:
         config=opt_config,
     )
 
+    # The optimizer is intentionally decoupled from data acquisition so the
+    # expected return and covariance model can be replaced later.
     alpaca = AlpacaClient(AlpacaConfig.from_env())
     account = alpaca.get_account()
     positions = alpaca.get_positions()

@@ -20,6 +20,7 @@ def optimize_weights(
     asset_count = expected_returns.shape[0]
     weights = cp.Variable(asset_count)
 
+    # Classic single-period mean-variance objective with box constraints.
     objective = cp.Maximize(
         expected_returns @ weights - config.risk_aversion * cp.quad_form(weights, covariance)
     )
@@ -35,6 +36,8 @@ def optimize_weights(
         raise RuntimeError(f"Optimization failed with status {problem.status}.")
 
     solution = np.array(weights.value, dtype=float)
+    # Normalize after clipping to keep the output usable even if the solver
+    # returns tiny numerical violations around the bounds.
     clipped = np.clip(solution, config.min_weight, config.max_weight)
     total = clipped.sum()
     if total <= 0:

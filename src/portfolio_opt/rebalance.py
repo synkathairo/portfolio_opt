@@ -33,6 +33,7 @@ def build_order_plan(
         current_weight = weights_now.get(symbol, 0.0)
         delta_weight = float(target_weight - current_weight)
         notional_usd = abs(delta_weight) * account.equity
+        # Ignore small drifts so the strategy does not churn on every run.
         if abs(delta_weight) < config.rebalance_threshold:
             continue
         if latest_prices.get(symbol, 0.0) <= 0.0:

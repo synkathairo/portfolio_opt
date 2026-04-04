@@ -25,10 +25,11 @@ This is an allocation engine, not a signal-generation system. The strategy quali
 ## Install
 
 ```bash
-uv venv
+uv sync
 source .venv/bin/activate
-uv pip install -e .
 ```
+
+`uv.lock` is checked in and should be updated with `uv lock` whenever dependencies change.
 
 ## Configure Alpaca
 
@@ -59,7 +60,7 @@ That means the current code does not yet model:
 ## Run A Dry Rebalance
 
 ```bash
-portfolio-opt --model examples/sample_model.json --dry-run
+uv run portfolio-opt --model examples/sample_model.json --dry-run
 ```
 
 This uses the current Alpaca account equity and positions, computes target weights with `cvxpy`, and prints the order plan without submitting trades.
@@ -67,7 +68,7 @@ This uses the current Alpaca account equity and positions, computes target weigh
 ## Submit Orders
 
 ```bash
-portfolio-opt --model examples/sample_model.json --submit
+uv run portfolio-opt --model examples/sample_model.json --submit
 ```
 
 ## Model File Format
@@ -97,4 +98,4 @@ Returns and covariance should be on the same annualized basis.
 - Fractional quantity handling is intentionally conservative and uses notional order sizing logic derived from current prices.
 - The current code pulls latest trade prices from Alpaca for order sizing.
 - No market data estimation pipeline is included yet. Feed the optimizer with your own model inputs.
-- The project is `uv`-first for environment and dependency management, but still uses standard `pyproject.toml` packaging so it remains compatible with regular `pip` workflows if needed.
+- The project is managed with `uv`; keep `pyproject.toml` and `uv.lock` in sync.

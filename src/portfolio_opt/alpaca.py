@@ -40,6 +40,8 @@ class AlpacaClient:
 
     def submit_order_plan(self, plans: list[OrderPlan]) -> None:
         for plan in plans:
+            # Notional market orders keep the rebalance layer independent from
+            # per-symbol share rounding logic.
             order = {
                 "symbol": plan.symbol,
                 "notional": round(plan.notional_usd, 2),
