@@ -33,15 +33,16 @@ source .venv/bin/activate
 
 ## Configure Alpaca
 
-Set environment variables:
+Set environment variables directly, or place them in a local `.env` file:
 
 ```bash
-export APCA_API_KEY_ID=your_key
-export APCA_API_SECRET_KEY=your_secret
-export APCA_API_BASE_URL=https://paper-api.alpaca.markets
+APCA_API_KEY_ID=your_key
+APCA_API_SECRET_KEY=your_secret
+APCA_API_BASE_URL=https://paper-api.alpaca.markets
+APCA_API_DATA_URL=https://data.alpaca.markets
 ```
 
-Paper trading is the default safe target.
+`.env` is gitignored in this repository. Paper trading is the default safe target.
 
 ## Why This Is Not `cvxportfolio`
 

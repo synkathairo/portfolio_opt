@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from os import getenv
 
+from dotenv import load_dotenv
+
 
 @dataclass(frozen=True)
 class AlpacaConfig:
@@ -13,6 +15,7 @@ class AlpacaConfig:
 
     @classmethod
     def from_env(cls) -> "AlpacaConfig":
+        load_dotenv()
         api_key = getenv("APCA_API_KEY_ID")
         api_secret = getenv("APCA_API_SECRET_KEY")
         base_url = getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
@@ -20,7 +23,7 @@ class AlpacaConfig:
         if not api_key or not api_secret:
             raise ValueError(
                 "Missing Alpaca credentials. Set APCA_API_KEY_ID and "
-                "APCA_API_SECRET_KEY."
+                "APCA_API_SECRET_KEY in your environment or a local .env file."
             )
         return cls(api_key=api_key, api_secret=api_secret, base_url=base_url, data_url=data_url)
 
