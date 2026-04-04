@@ -24,6 +24,21 @@ class BacktestResult:
     latest_weights: np.ndarray
 
 
+def summarize_return_series(returns: np.ndarray) -> tuple[float, float, float, float]:
+    portfolio_value = 1.0
+    peak_value = portfolio_value
+    max_drawdown = 0.0
+    for period_return in returns:
+        portfolio_value *= 1.0 + float(period_return)
+        peak_value = max(peak_value, portfolio_value)
+        max_drawdown = max(max_drawdown, 1.0 - portfolio_value / peak_value)
+
+    periods = max(len(returns), 1)
+    annualized_return = portfolio_value ** (TRADING_DAYS_PER_YEAR / periods) - 1.0
+    annualized_volatility = returns.std(ddof=0) * np.sqrt(TRADING_DAYS_PER_YEAR)
+    return portfolio_value, portfolio_value - 1.0, annualized_return, annualized_volatility, max_drawdown
+
+
 def run_backtest(
     symbols: list[str],
     closes_by_symbol: dict[str, list[float]],
@@ -88,9 +103,7 @@ def run_backtest(
         max_drawdown = max(max_drawdown, 1.0 - portfolio_value / peak_value)
 
     returns_array = np.array(portfolio_returns, dtype=float)
-    periods = max(len(returns_array), 1)
-    annualized_return = portfolio_value ** (TRADING_DAYS_PER_YEAR / periods) - 1.0
-    annualized_volatility = returns_array.std(ddof=0) * np.sqrt(TRADING_DAYS_PER_YEAR)
+    _, _, annualized_return, annualized_volatility, _ = summarize_return_series(returns_array)
     average_turnover = float(np.mean(turnovers)) if turnovers else 0.0
 
     return BacktestResult(
@@ -103,3 +116,31 @@ def run_backtest(
         average_turnover=average_turnover,
         latest_weights=weights,
     )
+
+
+def run_fixed_weight_benchmark(
+    symbols: list[str],
+    closes_by_symbol: dict[str, list[float]],
+    weights_by_symbol: dict[str, float],
+    start_day: int,
+) -> dict[str, float]:
+    price_matrix = np.array([closes_by_symbol[symbol] for symbol in symbols], dtype=float)
+    returns = price_matrix[:, 1:] / price_matrix[:, :-1] - 1.0
+    benchmark_weights = np.array([weights_by_symbol.get(symbol, 0.0) for symbol in symbols], dtype=float)
+    benchmark_returns = np.array(
+        [
+            float(np.dot(benchmark_weights, returns[:, step]))
+            for step in range(start_day, returns.shape[1])
+        ],
+        dtype=float,
+    )
+    final_value, total_return, annualized_return, annualized_volatility, max_drawdown = summarize_return_series(
+        benchmark_returns
+    )
+    return {
+        "final_value": round(float(final_value), 6),
+        "total_return": round(float(total_return), 6),
+        "annualized_return": round(float(annualized_return), 6),
+        "annualized_volatility": round(float(annualized_volatility), 6),
+        "max_drawdown": round(float(max_drawdown), 6),
+    }

@@ -175,4 +175,5 @@ For universe-only files, you can also provide asset-class metadata and policy bo
 - The soft turnover penalty is scaled down automatically when the account is mostly in cash.
 - Asset-class bounds can be defined in the model file to keep allocations within a portfolio policy.
 - Backtest mode reuses the same optimizer with rolling historical estimates and periodic rebalancing.
+- Backtest output includes simple fixed-weight benchmarks for comparison.
 - The project is managed with `uv`; keep `pyproject.toml` and `uv.lock` in sync.

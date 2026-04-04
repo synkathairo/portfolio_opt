@@ -7,7 +7,7 @@ from dataclasses import asdict
 import numpy as np
 
 from .alpaca import AlpacaClient, format_order_plans
-from .backtest import run_backtest
+from .backtest import run_backtest, run_fixed_weight_benchmark
 from .config import AlpacaConfig, OptimizationConfig
 from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
 from .model import load_model_inputs
@@ -178,6 +178,32 @@ def main() -> None:
             asset_class_matrix=asset_class_matrix if constrained_class_names else None,
         )
         latest_weights = clean_weights(backtest.latest_weights)
+        benchmark_results = {
+            "spy": run_fixed_weight_benchmark(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                weights_by_symbol={"SPY": 1.0},
+                start_day=args.lookback_days,
+            ),
+            "sixty_forty_spy_tlt": run_fixed_weight_benchmark(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                weights_by_symbol={"SPY": 0.6, "TLT": 0.4},
+                start_day=args.lookback_days,
+            ),
+            "equal_weight": run_fixed_weight_benchmark(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                weights_by_symbol={symbol: 1.0 / len(model.symbols) for symbol in model.symbols},
+                start_day=args.lookback_days,
+            ),
+            "half_spy_half_cash": run_fixed_weight_benchmark(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                weights_by_symbol={"SPY": 0.5},
+                start_day=args.lookback_days,
+            ),
+        }
         result = {
             "symbols": model.symbols,
             "backtest": {
@@ -201,6 +227,7 @@ def main() -> None:
                 weights=latest_weights,
                 asset_classes=model.asset_classes,
             ),
+            "benchmarks": benchmark_results,
         }
         print(json.dumps(result, indent=2))
         return
