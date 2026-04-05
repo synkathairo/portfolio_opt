@@ -38,10 +38,22 @@ def bars_to_market_data(
         symbol: [float(row["close"]) for row in bars]
         for symbol, bars in bars_by_symbol.items()
     }
+
+    # Align to common trailing history — Alpaca may return uneven bar counts.
+    lengths = [len(closes_by_symbol[s]) for s in symbols]
+    common_length = min(lengths)
+    if len(set(lengths)) > 1:
+        closes_by_symbol = {
+            s: closes_by_symbol[s][-common_length:] for s in symbols
+        }
+
     timestamp_series = pd.to_datetime(
         [str(row["timestamp"]) for row in bars_by_symbol[symbols[0]][1:]],
         utc=True,
     )
+    # Slice timestamps to match the aligned close lengths (minus one for returns).
+    timestamp_series = timestamp_series[-(common_length - 1):]
+
     price_frame = pd.DataFrame({symbol: closes_by_symbol[symbol] for symbol in symbols})
     if price_frame.isna().any().any():
         raise ValueError("Price history contains missing values.")
