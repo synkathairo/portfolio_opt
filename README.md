@@ -211,6 +211,7 @@ uv run cvxportfolio-backtest \
 ```
 
 For a less defensive broad-universe starting point, see `examples/cvxportfolio_broad_high_equity_preset.json`.
+For a benchmark-aware starting point that keeps `SPY` as a core holding, see `examples/cvxportfolio_spy_core_preset.json`.
 
 To compare that `cvxportfolio` configuration against the repo's best-known custom baseline on the same cached data and benchmarks:
 
@@ -244,6 +245,24 @@ uv run cvxportfolio-backtest \
   --linear-trade-cost 0.001 \
   --rolling-window-days 63 \
   --rolling-step-days 21 \
+  --offline
+```
+
+To keep `SPY` as a required core holding and let the optimizer allocate active tilts around it:
+
+```bash
+uv run cvxportfolio-backtest \
+  --model examples/broad_universe.json \
+  --lookback-days 126 \
+  --backtest-days 252 \
+  --risk-aversion 0.5 \
+  --mean-shrinkage 0.5 \
+  --momentum-window 84 \
+  --min-cash-weight 0.0 \
+  --min-invested-weight 0.8 \
+  --core-symbol SPY \
+  --core-weight 0.35 \
+  --linear-trade-cost 0.001 \
   --offline
 ```
 

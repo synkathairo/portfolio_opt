@@ -22,6 +22,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-cash-weight", type=float, default=0.10)
     parser.add_argument("--min-invested-weight", type=float, default=0.30)
     parser.add_argument("--max-weight", type=float, default=0.35)
+    parser.add_argument("--core-symbol", default=None)
+    parser.add_argument("--core-weight", type=float, default=0.0)
     parser.add_argument("--linear-trade-cost", type=float, default=0.0)
     parser.add_argument("--planning-horizon", type=int, default=1)
     parser.add_argument("--rolling-window-days", type=int, default=0)
@@ -50,6 +52,8 @@ def main() -> None:
             "min_cash_weight": args.min_cash_weight,
             "min_invested_weight": args.min_invested_weight,
             "max_weight": args.max_weight,
+            "core_symbol": args.core_symbol,
+            "core_weight": args.core_weight,
             "linear_trade_cost": args.linear_trade_cost,
             "planning_horizon": args.planning_horizon,
         }
@@ -73,6 +77,8 @@ def main() -> None:
             top_n=args.top_n,
             linear_trade_cost=args.linear_trade_cost,
             planning_horizon=args.planning_horizon,
+            core_symbol=args.core_symbol,
+            core_weight=args.core_weight,
             use_cache=args.use_cache,
             refresh_cache=args.refresh_cache,
             offline=args.offline,
@@ -87,6 +93,8 @@ def main() -> None:
         min_cash_weight=args.min_cash_weight,
         min_invested_weight=args.min_invested_weight,
         max_weight=args.max_weight,
+        core_symbol=args.core_symbol,
+        core_weight=args.core_weight,
         mean_shrinkage=args.mean_shrinkage,
         momentum_window=args.momentum_window,
         linear_trade_cost=args.linear_trade_cost,

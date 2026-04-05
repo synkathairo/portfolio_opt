@@ -110,6 +110,24 @@ uv run cvxportfolio-backtest \
   --offline
 ```
 
+For a `SPY` core plus active-tilt policy:
+
+```bash
+uv run cvxportfolio-backtest \
+  --model examples/broad_universe.json \
+  --lookback-days 126 \
+  --backtest-days 252 \
+  --risk-aversion 0.5 \
+  --mean-shrinkage 0.5 \
+  --momentum-window 84 \
+  --min-cash-weight 0.0 \
+  --min-invested-weight 0.8 \
+  --core-symbol SPY \
+  --core-weight 0.35 \
+  --linear-trade-cost 0.001 \
+  --offline
+```
+
 ## Comparison Rule
 
 Do not replace `src/portfolio_opt/` yet. The point of this package is side-by-side evaluation, not migration by assumption.

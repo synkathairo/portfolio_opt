@@ -164,6 +164,8 @@ def run_cvxportfolio_backtest(
     max_weight: float,
     mean_shrinkage: float,
     momentum_window: int,
+    core_symbol: str | None = None,
+    core_weight: float = 0.0,
     linear_trade_cost: float = 0.0,
     planning_horizon: int = 1,
     rolling_window_days: int = 0,
@@ -204,6 +206,8 @@ def run_cvxportfolio_backtest(
         class_min_weights=model.class_min_weights,
         class_max_weights=model.class_max_weights,
         asset_classes=model.asset_classes,
+        core_symbol=core_symbol,
+        core_weight=core_weight,
         planning_horizon=planning_horizon,
     )
     simulator = cvx.MarketSimulator(returns=returns_frame, prices=prices_frame, cash_key="USDOLLAR")
@@ -287,6 +291,8 @@ def run_cvxportfolio_backtest(
             "risk_aversion": risk_aversion,
             "mean_shrinkage": mean_shrinkage,
             "momentum_window": momentum_window,
+            "core_symbol": core_symbol,
+            "core_weight": core_weight,
             "linear_trade_cost": linear_trade_cost,
             "planning_horizon": planning_horizon,
             "first_timestamp": first_timestamp,
@@ -351,6 +357,8 @@ def run_framework_comparison(
         min_cash_weight=float(cvxportfolio_config["min_cash_weight"]),
         min_invested_weight=float(cvxportfolio_config["min_invested_weight"]),
         max_weight=float(cvxportfolio_config["max_weight"]),
+        core_symbol=str(cvxportfolio_config["core_symbol"]) if cvxportfolio_config.get("core_symbol") else None,
+        core_weight=float(cvxportfolio_config.get("core_weight", 0.0)),
         mean_shrinkage=float(cvxportfolio_config["mean_shrinkage"]),
         momentum_window=int(cvxportfolio_config["momentum_window"]),
         linear_trade_cost=float(cvxportfolio_config["linear_trade_cost"]),
@@ -445,6 +453,8 @@ def run_cvxportfolio_sweep(
     top_n: int,
     linear_trade_cost: float = 0.0,
     planning_horizon: int = 1,
+    core_symbol: str | None = None,
+    core_weight: float = 0.0,
     use_cache: bool = False,
     refresh_cache: bool = False,
     offline: bool = False,
@@ -497,6 +507,8 @@ def run_cvxportfolio_sweep(
                 class_min_weights=model.class_min_weights,
                 class_max_weights=model.class_max_weights,
                 asset_classes=model.asset_classes,
+                core_symbol=core_symbol,
+                core_weight=core_weight,
                 planning_horizon=planning_horizon,
             )
             simulator = cvx.MarketSimulator(returns=returns_frame, prices=prices_frame, cash_key="USDOLLAR")
