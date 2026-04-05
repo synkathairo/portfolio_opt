@@ -8,7 +8,7 @@ from dataclasses import asdict
 import numpy as np
 
 from .alpaca import AlpacaClient, format_order_plans
-from .backtest import run_backtest, run_fixed_weight_benchmark
+from .backtest import rolling_window_comparison, run_backtest, run_dual_momentum_backtest, run_fixed_weight_benchmark
 from .config import AlpacaConfig, OptimizationConfig
 from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
 from .model import load_model_inputs
@@ -105,10 +105,23 @@ def parse_args() -> argparse.Namespace:
         help="How to estimate expected returns when using --estimate-from-history.",
     )
     parser.add_argument(
+        "--strategy",
+        choices=("mean-variance", "dual-momentum"),
+        default="mean-variance",
+        help="Backtest/live strategy path. Dual momentum is backtest-only.",
+    )
+    parser.add_argument(
         "--momentum-window",
         type=int,
         default=63,
         help="Trailing trading-day window used by the momentum return model.",
+    )
+    parser.add_argument("--top-k", type=int, default=3, help="Number of assets to hold in dual momentum mode.")
+    parser.add_argument(
+        "--absolute-momentum-threshold",
+        type=float,
+        default=0.0,
+        help="Minimum trailing return required for dual momentum if no cash proxy is present.",
     )
     parser.add_argument(
         "--backtest-days",
@@ -121,6 +134,18 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=21,
         help="Trading-day interval between rebalances in backtest mode.",
+    )
+    parser.add_argument(
+        "--rolling-window-days",
+        type=int,
+        default=0,
+        help="If set, compare the strategy to SPY over rolling windows of this many trading days.",
+    )
+    parser.add_argument(
+        "--rolling-step-days",
+        type=int,
+        default=21,
+        help="Trading-day step between rolling comparison windows.",
     )
     parser.add_argument(
         "--sweep",
@@ -165,13 +190,6 @@ def main() -> None:
     # The optimizer is intentionally decoupled from data acquisition so the
     # expected return and covariance model can be replaced later.
     alpaca = AlpacaClient(AlpacaConfig.from_env())
-    # Even in dry-run mode we fetch live account state, because the rebalance
-    # plan depends on current equity, holdings, and market prices.
-    account = alpaca.get_account(use_cache=args.use_cache, refresh_cache=args.refresh_cache, offline=args.offline)
-    positions = alpaca.get_positions(use_cache=args.use_cache, refresh_cache=args.refresh_cache, offline=args.offline)
-    existing_weights_map = current_weights(model.symbols, account, positions)
-    existing_weights = np.array([existing_weights_map[symbol] for symbol in model.symbols], dtype=float)
-    scaled_turnover_penalty = effective_turnover_penalty(opt_config, existing_weights)
     constrained_class_names = list(model.class_min_weights) + [
         name for name in model.class_max_weights if name not in model.class_min_weights
     ]
@@ -191,6 +209,8 @@ def main() -> None:
             offline=args.offline,
         )
         if args.sweep:
+            if args.strategy == "dual-momentum":
+                raise ValueError("Sweep mode is only implemented for the mean-variance path.")
             risk_grid = [1.0, 2.0, 4.0]
             cash_grid = [0.05, 0.10, 0.20]
             invested_grid = [0.20, 0.30, 0.40]
@@ -282,18 +302,48 @@ def main() -> None:
                 )
             )
             return
-        backtest = run_backtest(
-            symbols=model.symbols,
-            closes_by_symbol=closes_by_symbol,
-            lookback_days=args.lookback_days,
-            rebalance_every=args.rebalance_every,
-            return_model=args.return_model,
-            mean_shrinkage=args.mean_shrinkage,
-            momentum_window=args.momentum_window,
-            opt_config=opt_config,
-            asset_class_matrix=asset_class_matrix if constrained_class_names else None,
-        )
+        if args.strategy == "dual-momentum":
+            backtest = run_dual_momentum_backtest(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                asset_classes=model.asset_classes,
+                lookback_days=args.lookback_days,
+                rebalance_every=args.rebalance_every,
+                top_k=args.top_k,
+                absolute_threshold=args.absolute_momentum_threshold,
+            )
+        else:
+            backtest = run_backtest(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                lookback_days=args.lookback_days,
+                rebalance_every=args.rebalance_every,
+                return_model=args.return_model,
+                mean_shrinkage=args.mean_shrinkage,
+                momentum_window=args.momentum_window,
+                opt_config=opt_config,
+                asset_class_matrix=asset_class_matrix if constrained_class_names else None,
+            )
         latest_weights = clean_weights(backtest.latest_weights)
+        rolling_comparison = None
+        if args.rolling_window_days > 0:
+            rolling_comparison = rolling_window_comparison(
+                strategy=args.strategy,
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                asset_classes=model.asset_classes,
+                lookback_days=args.lookback_days,
+                window_days=args.rolling_window_days,
+                step_days=args.rolling_step_days,
+                rebalance_every=args.rebalance_every,
+                return_model=args.return_model,
+                mean_shrinkage=args.mean_shrinkage,
+                momentum_window=args.momentum_window,
+                opt_config=opt_config,
+                asset_class_matrix=asset_class_matrix if constrained_class_names else None,
+                top_k=args.top_k,
+                absolute_threshold=args.absolute_momentum_threshold,
+            )
         benchmark_results = {
             "spy": run_fixed_weight_benchmark(
                 symbols=model.symbols,
@@ -323,6 +373,7 @@ def main() -> None:
         result = {
             "symbols": model.symbols,
             "backtest": {
+                "strategy": args.strategy,
                 "days": args.backtest_days,
                 "rebalance_every": args.rebalance_every,
                 "final_value": round(float(backtest.final_value), 6),
@@ -345,8 +396,18 @@ def main() -> None:
             ),
             "benchmarks": benchmark_results,
         }
+        if rolling_comparison is not None:
+            result["rolling_vs_spy"] = rolling_comparison
         print(json.dumps(result, indent=2))
         return
+
+    # Even in dry-run mode we fetch live account state for the rebalance path,
+    # because the order plan depends on current equity, holdings, and prices.
+    account = alpaca.get_account(use_cache=args.use_cache, refresh_cache=args.refresh_cache, offline=args.offline)
+    positions = alpaca.get_positions(use_cache=args.use_cache, refresh_cache=args.refresh_cache, offline=args.offline)
+    existing_weights_map = current_weights(model.symbols, account, positions)
+    existing_weights = np.array([existing_weights_map[symbol] for symbol in model.symbols], dtype=float)
+    scaled_turnover_penalty = effective_turnover_penalty(opt_config, existing_weights)
 
     if args.estimate_from_history:
         closes_by_symbol = alpaca.get_daily_closes(

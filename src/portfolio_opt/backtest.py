@@ -24,6 +24,11 @@ class BacktestResult:
     latest_weights: np.ndarray
 
 
+def _find_symbol_indices(symbols: list[str], selected_symbols: list[str]) -> list[int]:
+    symbol_to_index = {symbol: index for index, symbol in enumerate(symbols)}
+    return [symbol_to_index[symbol] for symbol in selected_symbols if symbol in symbol_to_index]
+
+
 def summarize_return_series(returns: np.ndarray) -> tuple[float, float, float, float]:
     portfolio_value = 1.0
     peak_value = portfolio_value
@@ -143,4 +148,199 @@ def run_fixed_weight_benchmark(
         "annualized_return": round(float(annualized_return), 6),
         "annualized_volatility": round(float(annualized_volatility), 6),
         "max_drawdown": round(float(max_drawdown), 6),
+    }
+
+
+def run_dual_momentum_backtest(
+    symbols: list[str],
+    closes_by_symbol: dict[str, list[float]],
+    asset_classes: dict[str, str],
+    lookback_days: int,
+    rebalance_every: int,
+    top_k: int,
+    absolute_threshold: float,
+) -> BacktestResult:
+    price_matrix = np.array([closes_by_symbol[symbol] for symbol in symbols], dtype=float)
+    if price_matrix.ndim != 2 or price_matrix.shape[1] <= lookback_days + 1:
+        raise ValueError("Not enough price history to run the backtest.")
+
+    returns = price_matrix[:, 1:] / price_matrix[:, :-1] - 1.0
+    portfolio_value = 1.0
+    weights = np.zeros(len(symbols), dtype=float)
+    portfolio_returns: list[float] = []
+    turnovers: list[float] = []
+    rebalance_count = 0
+    peak_value = portfolio_value
+    max_drawdown = 0.0
+
+    risky_symbols = [
+        symbol for symbol in symbols
+        if not asset_classes.get(symbol, "").startswith("bond")
+        and asset_classes.get(symbol) != "cash_like"
+    ]
+    defensive_symbols = [
+        symbol for symbol in symbols
+        if asset_classes.get(symbol, "").startswith("bond")
+        or asset_classes.get(symbol) == "cash_like"
+    ]
+    risky_indices = _find_symbol_indices(symbols, risky_symbols)
+    defensive_indices = _find_symbol_indices(symbols, defensive_symbols)
+    if not risky_indices:
+        raise ValueError("Dual momentum requires at least one risky symbol.")
+
+    cash_like_index = next(
+        (index for index, symbol in enumerate(symbols) if asset_classes.get(symbol) == "cash_like"),
+        None,
+    )
+
+    for step in range(lookback_days, returns.shape[1]):
+        if (step - lookback_days) % rebalance_every == 0:
+            trailing_returns = price_matrix[:, step] / price_matrix[:, step - lookback_days] - 1.0
+            defensive_floor = (
+                float(trailing_returns[cash_like_index])
+                if cash_like_index is not None
+                else absolute_threshold
+            )
+            risky_ranked = sorted(
+                (
+                    (index, float(trailing_returns[index]))
+                    for index in risky_indices
+                    if float(trailing_returns[index]) > max(absolute_threshold, defensive_floor)
+                ),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+
+            target_weights = np.zeros(len(symbols), dtype=float)
+            if risky_ranked:
+                selected = [index for index, _score in risky_ranked[:top_k]]
+                weight = 1.0 / len(selected)
+                for index in selected:
+                    target_weights[index] = weight
+            elif defensive_indices:
+                weight = 1.0 / len(defensive_indices)
+                for index in defensive_indices:
+                    target_weights[index] = weight
+
+            turnovers.append(float(np.abs(target_weights - weights).sum()))
+            weights = target_weights
+            rebalance_count += 1
+
+        period_return = float(np.dot(weights, returns[:, step]))
+        portfolio_returns.append(period_return)
+        portfolio_value *= 1.0 + period_return
+        peak_value = max(peak_value, portfolio_value)
+        max_drawdown = max(max_drawdown, 1.0 - portfolio_value / peak_value)
+
+    returns_array = np.array(portfolio_returns, dtype=float)
+    _, _, annualized_return, annualized_volatility, _ = summarize_return_series(returns_array)
+    average_turnover = float(np.mean(turnovers)) if turnovers else 0.0
+
+    return BacktestResult(
+        final_value=portfolio_value,
+        total_return=portfolio_value - 1.0,
+        annualized_return=annualized_return,
+        annualized_volatility=annualized_volatility,
+        max_drawdown=max_drawdown,
+        rebalance_count=rebalance_count,
+        average_turnover=average_turnover,
+        latest_weights=weights,
+    )
+
+
+def rolling_window_comparison(
+    *,
+    strategy: str,
+    symbols: list[str],
+    closes_by_symbol: dict[str, list[float]],
+    asset_classes: dict[str, str],
+    lookback_days: int,
+    window_days: int,
+    step_days: int,
+    rebalance_every: int,
+    return_model: str,
+    mean_shrinkage: float,
+    momentum_window: int,
+    opt_config: OptimizationConfig,
+    asset_class_matrix: np.ndarray | None,
+    top_k: int,
+    absolute_threshold: float,
+) -> dict[str, float | int]:
+    if window_days <= 0 or step_days <= 0:
+        raise ValueError("window_days and step_days must be positive.")
+
+    total_periods = len(closes_by_symbol[symbols[0]]) - 1
+    if total_periods < lookback_days + window_days:
+        raise ValueError("Not enough price history to run the requested rolling-window comparison.")
+
+    window_results: list[dict[str, float | bool]] = []
+    last_start = total_periods - (lookback_days + window_days)
+    for start in range(0, last_start + 1, step_days):
+        end = start + lookback_days + window_days + 1
+        window_closes = {symbol: closes[start:end] for symbol, closes in closes_by_symbol.items()}
+
+        if strategy == "dual-momentum":
+            backtest = run_dual_momentum_backtest(
+                symbols=symbols,
+                closes_by_symbol=window_closes,
+                asset_classes=asset_classes,
+                lookback_days=lookback_days,
+                rebalance_every=rebalance_every,
+                top_k=top_k,
+                absolute_threshold=absolute_threshold,
+            )
+        else:
+            backtest = run_backtest(
+                symbols=symbols,
+                closes_by_symbol=window_closes,
+                lookback_days=lookback_days,
+                rebalance_every=rebalance_every,
+                return_model=return_model,
+                mean_shrinkage=mean_shrinkage,
+                momentum_window=momentum_window,
+                opt_config=opt_config,
+                asset_class_matrix=asset_class_matrix,
+            )
+
+        spy_benchmark = run_fixed_weight_benchmark(
+            symbols=symbols,
+            closes_by_symbol=window_closes,
+            weights_by_symbol={"SPY": 1.0},
+            start_day=lookback_days,
+        )
+        strategy_sharpe = (
+            backtest.annualized_return / backtest.annualized_volatility
+            if backtest.annualized_volatility > 0
+            else 0.0
+        )
+        spy_sharpe = (
+            float(spy_benchmark["annualized_return"]) / float(spy_benchmark["annualized_volatility"])
+            if float(spy_benchmark["annualized_volatility"]) > 0
+            else 0.0
+        )
+        window_results.append(
+            {
+                "beat_return": backtest.total_return > float(spy_benchmark["total_return"]),
+                "beat_sharpe": strategy_sharpe > spy_sharpe,
+                "lower_drawdown": backtest.max_drawdown < float(spy_benchmark["max_drawdown"]),
+                "excess_total_return": backtest.total_return - float(spy_benchmark["total_return"]),
+            }
+        )
+
+    total_windows = len(window_results)
+    beat_return_count = sum(1 for result in window_results if bool(result["beat_return"]))
+    beat_sharpe_count = sum(1 for result in window_results if bool(result["beat_sharpe"]))
+    lower_drawdown_count = sum(1 for result in window_results if bool(result["lower_drawdown"]))
+    average_excess_return = float(np.mean([float(result["excess_total_return"]) for result in window_results]))
+    return {
+        "window_days": window_days,
+        "step_days": step_days,
+        "windows": total_windows,
+        "beat_spy_return_windows": beat_return_count,
+        "beat_spy_return_rate": round(beat_return_count / total_windows, 6),
+        "beat_spy_sharpe_windows": beat_sharpe_count,
+        "beat_spy_sharpe_rate": round(beat_sharpe_count / total_windows, 6),
+        "lower_drawdown_than_spy_windows": lower_drawdown_count,
+        "lower_drawdown_than_spy_rate": round(lower_drawdown_count / total_windows, 6),
+        "average_excess_total_return_vs_spy": round(average_excess_return, 6),
     }

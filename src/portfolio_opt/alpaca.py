@@ -239,6 +239,20 @@ class AlpacaClient:
         path = cache_path(name, key_payload)
         if offline:
             if not path.exists():
+                if name == "daily_closes":
+                    fallback = self._find_offline_closes_fallback(
+                        key_payload["symbols"],
+                        int(key_payload["lookback_days"]),
+                    )
+                    if fallback is not None:
+                        return fallback
+                if name == "daily_bars":
+                    fallback = self._find_offline_bars_fallback(
+                        key_payload["symbols"],
+                        int(key_payload["lookback_days"]),
+                    )
+                    if fallback is not None:
+                        return fallback
                 raise RuntimeError(f"Offline mode requested but cache is missing: {path}")
             return read_cache(path)
         if use_cache and path.exists() and not refresh_cache:
@@ -247,6 +261,53 @@ class AlpacaClient:
         if use_cache or refresh_cache:
             write_cache(path, payload)
         return payload
+
+    def _find_offline_closes_fallback(
+        self,
+        symbols: list[str],
+        lookback_days: int,
+    ) -> dict[str, list[float]] | None:
+        for path in sorted(Path(".cache").glob("daily_closes_*.json")):
+            payload = read_cache(path)
+            if not isinstance(payload, dict) or list(payload.keys()) != symbols:
+                continue
+            lengths = [len(values) for values in payload.values()]
+            if min(lengths, default=0) >= lookback_days:
+                return {
+                    symbol: [float(value) for value in values[-lookback_days:]]
+                    for symbol, values in payload.items()
+                }
+        for path in sorted(Path(".cache").glob("daily_bars_*.json")):
+            payload = read_cache(path)
+            if not isinstance(payload, dict) or list(payload.keys()) != symbols:
+                continue
+            lengths = [len(values) for values in payload.values()]
+            if min(lengths, default=0) >= lookback_days:
+                return {
+                    symbol: [float(row["close"]) for row in values[-lookback_days:]]
+                    for symbol, values in payload.items()
+                }
+        return None
+
+    def _find_offline_bars_fallback(
+        self,
+        symbols: list[str],
+        lookback_days: int,
+    ) -> dict[str, list[dict[str, str | float]]] | None:
+        for path in sorted(Path(".cache").glob("daily_bars_*.json")):
+            payload = read_cache(path)
+            if not isinstance(payload, dict) or list(payload.keys()) != symbols:
+                continue
+            lengths = [len(values) for values in payload.values()]
+            if min(lengths, default=0) >= lookback_days:
+                return {
+                    symbol: [
+                        {"timestamp": str(row["timestamp"]), "close": float(row["close"])}
+                        for row in values[-lookback_days:]
+                    ]
+                    for symbol, values in payload.items()
+                }
+        return None
 
     def _request_json(
         self,
