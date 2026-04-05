@@ -42,6 +42,17 @@ This first version is intentionally narrow:
 - user-provided market data built from Alpaca closes
 - cash and asset-class policy bounds where possible
 
+Sweep mode is also available:
+
+```bash
+uv run cvxportfolio-backtest \
+  --model examples/sample_universe.json \
+  --lookback-days 126 \
+  --backtest-days 252 \
+  --sweep \
+  --top-n 5
+```
+
 ## Comparison Rule
 
 Do not replace `src/portfolio_opt/` yet. The point of this package is side-by-side evaluation, not migration by assumption.

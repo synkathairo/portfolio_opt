@@ -1,14 +1,37 @@
 from __future__ import annotations
 
+import itertools
 import json
 
 from portfolio_opt.alpaca import AlpacaClient
 from portfolio_opt.backtest import run_fixed_weight_benchmark, summarize_return_series
-from portfolio_opt.config import AlpacaConfig, OptimizationConfig
+from portfolio_opt.config import AlpacaConfig
 from portfolio_opt.model import load_model_inputs
 
 from .data import closes_to_market_data, momentum_forecast
 from .policy import build_policy
+
+
+def clean_value(value: float, tolerance: float = 1e-5) -> float:
+    return 0.0 if abs(value) < tolerance else value
+
+
+def clean_mapping(values: dict[str, float], tolerance: float = 1e-5) -> dict[str, float]:
+    return {key: round(clean_value(float(value), tolerance), 6) for key, value in values.items()}
+
+
+def prepare_cvxportfolio_context(
+    model_path: str,
+    lookback_days: int,
+    backtest_days: int,
+) -> tuple:
+    model = load_model_inputs(model_path)
+    alpaca = AlpacaClient(AlpacaConfig.from_env())
+    warmup_days = max(lookback_days, 252)
+    total_days = warmup_days + backtest_days + 1
+    closes_by_symbol = alpaca.get_daily_closes_for_period(model.symbols, total_days)
+    returns_frame, prices_frame = closes_to_market_data(closes_by_symbol)
+    return model, closes_by_symbol, returns_frame, prices_frame, warmup_days
 
 
 def run_cvxportfolio_backtest(
@@ -29,15 +52,11 @@ def run_cvxportfolio_backtest(
             "cvxportfolio is required for this path. Run `uv sync` after adding the dependency."
         ) from exc
 
-    model = load_model_inputs(model_path)
-    alpaca = AlpacaClient(AlpacaConfig.from_env())
-    # cvxportfolio's built-in covariance forecaster needs its own history
-    # window. Use an explicit warmup so the realized backtest horizon matches
-    # the requested backtest_days instead of silently consuming test periods.
-    warmup_days = max(lookback_days, 252)
-    total_days = warmup_days + backtest_days + 1
-    closes_by_symbol = alpaca.get_daily_closes_for_period(model.symbols, total_days)
-    returns_frame, prices_frame = closes_to_market_data(closes_by_symbol)
+    model, closes_by_symbol, returns_frame, prices_frame, warmup_days = prepare_cvxportfolio_context(
+        model_path=model_path,
+        lookback_days=lookback_days,
+        backtest_days=backtest_days,
+    )
     forecasts = momentum_forecast(
         returns_frame=returns_frame,
         momentum_window=momentum_window,
@@ -75,7 +94,7 @@ def run_cvxportfolio_backtest(
     first_timestamp = str(result.v.index[0])
     last_timestamp = str(result.v.index[-1])
     realized_periods = int(len(realized_returns))
-    latest_class_exposures = {
+    latest_class_exposures = clean_mapping({
         class_name: round(
             float(
                 sum(
@@ -87,7 +106,7 @@ def run_cvxportfolio_backtest(
             6,
         )
         for class_name in sorted(set(model.asset_classes.values()))
-    }
+    })
     benchmark_results = {
         "spy": run_fixed_weight_benchmark(
             symbols=model.symbols,
@@ -140,12 +159,115 @@ def run_cvxportfolio_backtest(
             "cvxportfolio_annualized_average_return": round(float(result.annualized_average_return), 6),
         },
         "latest_target_weights": {
-            symbol: round(max(0.0, float(latest_weights.get(symbol, 0.0))), 6)
+            symbol: round(clean_value(max(0.0, float(latest_weights.get(symbol, 0.0)))), 6)
             for symbol in model.symbols
         },
-        "latest_cash_weight": round(latest_cash_weight, 6),
+        "latest_cash_weight": round(clean_value(latest_cash_weight), 6),
         "latest_asset_class_exposures": latest_class_exposures,
         "benchmarks": benchmark_results,
+    }
+
+
+def run_cvxportfolio_sweep(
+    model_path: str,
+    lookback_days: int,
+    backtest_days: int,
+    top_n: int,
+) -> dict:
+    try:
+        import cvxportfolio as cvx
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError(
+            "cvxportfolio is required for this path. Run `uv sync` after adding the dependency."
+        ) from exc
+
+    model, _closes_by_symbol, returns_frame, prices_frame, warmup_days = prepare_cvxportfolio_context(
+        model_path=model_path,
+        lookback_days=lookback_days,
+        backtest_days=backtest_days,
+    )
+    risk_grid = [0.5, 1.0, 2.0]
+    shrinkage_grid = [0.5, 0.75, 0.9]
+    cash_grid = [0.05, 0.10, 0.20]
+    invested_grid = [0.20, 0.30, 0.40]
+    momentum_grid = [42, 63, 84]
+    results: list[dict[str, float | int]] = []
+    skipped: list[dict[str, float | int | str]] = []
+
+    for risk_aversion, mean_shrinkage, min_cash_weight, min_invested_weight, momentum_window in itertools.product(
+        risk_grid,
+        shrinkage_grid,
+        cash_grid,
+        invested_grid,
+        momentum_grid,
+    ):
+        forecasts = momentum_forecast(
+            returns_frame=returns_frame,
+            momentum_window=momentum_window,
+            mean_shrinkage=mean_shrinkage,
+        )
+        try:
+            policy = build_policy(
+                cvx=cvx,
+                symbols=model.symbols,
+                forecasts=forecasts,
+                risk_aversion=risk_aversion,
+                max_weight=0.35,
+                min_cash_weight=min_cash_weight,
+                min_invested_weight=min_invested_weight,
+                class_min_weights=model.class_min_weights,
+                class_max_weights=model.class_max_weights,
+                asset_classes=model.asset_classes,
+            )
+            simulator = cvx.MarketSimulator(returns=returns_frame, prices=prices_frame, cash_key="USDOLLAR")
+            result = simulator.backtest(policy, start_time=returns_frame.index[warmup_days])
+            realized_returns = result.v.pct_change().dropna().to_numpy()
+            _, _, annualized_return, annualized_volatility, max_drawdown = summarize_return_series(realized_returns)
+            sharpe_ratio = annualized_return / annualized_volatility if annualized_volatility > 0 else 0.0
+            results.append(
+                {
+                    "risk_aversion": risk_aversion,
+                    "mean_shrinkage": mean_shrinkage,
+                    "min_cash_weight": min_cash_weight,
+                    "min_invested_weight": min_invested_weight,
+                    "momentum_window": momentum_window,
+                    "annualized_return": round(float(annualized_return), 6),
+                    "annualized_volatility": round(float(annualized_volatility), 6),
+                    "max_drawdown": round(float(max_drawdown), 6),
+                    "average_turnover": round(float(result.turnover.mean()), 6),
+                    "sharpe_ratio": round(float(sharpe_ratio), 6),
+                }
+            )
+        except Exception as exc:  # pragma: no cover
+            skipped.append(
+                {
+                    "risk_aversion": risk_aversion,
+                    "mean_shrinkage": mean_shrinkage,
+                    "min_cash_weight": min_cash_weight,
+                    "min_invested_weight": min_invested_weight,
+                    "momentum_window": momentum_window,
+                    "reason": str(exc),
+                }
+            )
+
+    results.sort(
+        key=lambda item: (
+            float(item["sharpe_ratio"]),
+            float(item["annualized_return"]),
+        ),
+        reverse=True,
+    )
+    return {
+        "symbols": model.symbols,
+        "cvxportfolio_sweep": {
+            "days": backtest_days,
+            "warmup_days": warmup_days,
+            "top_n": top_n,
+            "tested": len(results),
+            "skipped": len(skipped),
+            "results": results[:top_n],
+            "skipped_examples": skipped[: min(5, len(skipped))],
+        },
     }
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from .backtest import format_backtest, run_cvxportfolio_backtest
+from .backtest import format_backtest, run_cvxportfolio_backtest, run_cvxportfolio_sweep
 
 
 def parse_args() -> argparse.Namespace:
@@ -16,11 +16,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-cash-weight", type=float, default=0.10)
     parser.add_argument("--min-invested-weight", type=float, default=0.30)
     parser.add_argument("--max-weight", type=float, default=0.35)
+    parser.add_argument("--sweep", action="store_true", help="Run a simple parameter sweep for the cvxportfolio path.")
+    parser.add_argument("--top-n", type=int, default=5)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.sweep:
+        result = run_cvxportfolio_sweep(
+            model_path=args.model,
+            lookback_days=args.lookback_days,
+            backtest_days=args.backtest_days,
+            top_n=args.top_n,
+        )
+        print(format_backtest(result))
+        return
     result = run_cvxportfolio_backtest(
         model_path=args.model,
         lookback_days=args.lookback_days,
