@@ -213,6 +213,7 @@ uv run cvxportfolio-backtest \
 For a less defensive broad-universe starting point, see `examples/cvxportfolio_broad_high_equity_preset.json`.
 For a benchmark-aware starting point that keeps `SPY` as a core holding, see `examples/cvxportfolio_spy_core_preset.json`.
 For a benchmark-relative starting point that measures active risk against `SPY`, see `examples/cvxportfolio_spy_benchmark_preset.json`.
+For a volatility-targeted broad-universe starting point, see `examples/cvxportfolio_vol_target_preset.json`.
 
 To compare that `cvxportfolio` configuration against the repo's best-known custom baseline on the same cached data and benchmarks:
 

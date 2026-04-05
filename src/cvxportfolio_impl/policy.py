@@ -16,6 +16,8 @@ def build_policy(
     asset_classes: dict[str, str],
     core_symbol: str | None = None,
     core_weight: float = 0.0,
+    target_volatility: float | None = None,
+    max_leverage: float | None = None,
     benchmark=None,
     planning_horizon: int = 1,
 ):
@@ -24,6 +26,10 @@ def build_policy(
         cvx.LongOnly(applies_to_cash=True),
         cvx.MaxWeights(max_weight),
     ]
+    if max_leverage is not None:
+        constraints.append(cvx.LeverageLimit(max_leverage))
+    if target_volatility is not None:
+        constraints.append(cvx.FullCovariance() <= cvx.AnnualizedVolatility(target_volatility))
 
     total_exposure = pd.Series(1.0, index=symbols)
     constraints.append(cvx.FactorMaxLimit(total_exposure, 1.0 - min_cash_weight))
