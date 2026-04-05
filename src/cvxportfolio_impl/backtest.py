@@ -16,8 +16,46 @@ def clean_value(value: float, tolerance: float = 1e-5) -> float:
     return 0.0 if abs(value) < tolerance else value
 
 
+def clamp_for_display(
+    value: float,
+    *,
+    lower_bound: float | None = None,
+    upper_bound: float | None = None,
+    tolerance: float = 1e-3,
+) -> float:
+    cleaned = clean_value(float(value))
+    if lower_bound is not None and abs(cleaned - lower_bound) < tolerance:
+        cleaned = lower_bound
+    if upper_bound is not None and abs(cleaned - upper_bound) < tolerance:
+        cleaned = upper_bound
+    return cleaned
+
+
 def clean_mapping(values: dict[str, float], tolerance: float = 1e-5) -> dict[str, float]:
     return {key: round(clean_value(float(value), tolerance), 6) for key, value in values.items()}
+
+
+def clean_constraint_mapping(
+    values: dict[str, float],
+    *,
+    lower_bounds: dict[str, float] | None = None,
+    upper_bounds: dict[str, float] | None = None,
+    tolerance: float = 1e-3,
+) -> dict[str, float]:
+    lower_bounds = lower_bounds or {}
+    upper_bounds = upper_bounds or {}
+    return {
+        key: round(
+            clamp_for_display(
+                float(value),
+                lower_bound=lower_bounds.get(key),
+                upper_bound=upper_bounds.get(key),
+                tolerance=tolerance,
+            ),
+            6,
+        )
+        for key, value in values.items()
+    }
 
 
 def prepare_cvxportfolio_context(
@@ -115,7 +153,7 @@ def run_cvxportfolio_backtest(
     first_timestamp = str(result.v.index[0])
     last_timestamp = str(result.v.index[-1])
     realized_periods = int(len(realized_returns))
-    latest_class_exposures = clean_mapping({
+    latest_class_exposures = clean_constraint_mapping({
         class_name: round(
             float(
                 sum(
@@ -127,7 +165,7 @@ def run_cvxportfolio_backtest(
             6,
         )
         for class_name in sorted(set(model.asset_classes.values()))
-    })
+    }, lower_bounds=model.class_min_weights, upper_bounds=model.class_max_weights)
     benchmark_results = {
         "spy": run_fixed_weight_benchmark(
             symbols=model.symbols,
@@ -182,10 +220,17 @@ def run_cvxportfolio_backtest(
             "cvxportfolio_annualized_average_return": round(float(result.annualized_average_return), 6),
         },
         "latest_target_weights": {
-            symbol: round(clean_value(max(0.0, float(latest_weights.get(symbol, 0.0)))), 6)
+            symbol: round(
+                clamp_for_display(
+                    max(0.0, float(latest_weights.get(symbol, 0.0))),
+                    lower_bound=0.0,
+                    upper_bound=max_weight,
+                ),
+                6,
+            )
             for symbol in model.symbols
         },
-        "latest_cash_weight": round(clean_value(latest_cash_weight), 6),
+        "latest_cash_weight": round(clamp_for_display(latest_cash_weight, lower_bound=min_cash_weight, upper_bound=1.0), 6),
         "latest_asset_class_exposures": latest_class_exposures,
         "benchmarks": benchmark_results,
     }

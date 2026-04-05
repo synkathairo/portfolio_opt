@@ -58,6 +58,21 @@ You can also experiment with:
 - `--linear-trade-cost` for a simple proportional transaction-cost term
 - `--planning-horizon` to switch from single-period to multi-period optimization
 
+The strongest current practical candidate is still the cost-aware single-period policy:
+
+```bash
+uv run cvxportfolio-backtest \
+  --model examples/sample_universe.json \
+  --lookback-days 126 \
+  --backtest-days 252 \
+  --risk-aversion 0.5 \
+  --mean-shrinkage 0.5 \
+  --momentum-window 84 \
+  --min-cash-weight 0.05 \
+  --min-invested-weight 0.4 \
+  --linear-trade-cost 0.001
+```
+
 ## Comparison Rule
 
 Do not replace `src/portfolio_opt/` yet. The point of this package is side-by-side evaluation, not migration by assumption.

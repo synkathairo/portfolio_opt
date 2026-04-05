@@ -195,6 +195,20 @@ uv run cvxportfolio-backtest \
 ```
 
 The current best-known preset is captured in `examples/cvxportfolio_best_preset.json`.
+It is the current cost-aware single-period candidate:
+
+```bash
+uv run cvxportfolio-backtest \
+  --model examples/sample_universe.json \
+  --lookback-days 126 \
+  --backtest-days 252 \
+  --risk-aversion 0.5 \
+  --mean-shrinkage 0.5 \
+  --momentum-window 84 \
+  --min-cash-weight 0.05 \
+  --min-invested-weight 0.4 \
+  --linear-trade-cost 0.001
+```
 
 ## Model File Format
 

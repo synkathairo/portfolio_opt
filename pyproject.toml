@@ -31,3 +31,8 @@ python = ".venv/bin/python"
 
 [tool.ty.src]
 include = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

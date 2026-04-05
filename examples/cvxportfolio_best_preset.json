@@ -8,6 +8,6 @@
   "min_cash_weight": 0.05,
   "min_invested_weight": 0.4,
   "max_weight": 0.35,
-  "linear_trade_cost": 0.0,
+  "linear_trade_cost": 0.001,
   "planning_horizon": 1
 }
