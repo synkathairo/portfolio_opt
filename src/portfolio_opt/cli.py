@@ -148,6 +148,18 @@ def parse_args() -> argparse.Namespace:
         help="Maximum weight for any single asset in the dual momentum basket.",
     )
     parser.add_argument(
+        "--basket-opt",
+        choices=("mean-variance",),
+        default=None,
+        help="How to size the momentum-selected basket (overrides --dual-momentum-weighting).",
+    )
+    parser.add_argument(
+        "--basket-risk-aversion",
+        type=float,
+        default=1.0,
+        help="Risk aversion for basket mean-variance optimization.",
+    )
+    parser.add_argument(
         "--backtest-days",
         type=int,
         default=0,
@@ -339,6 +351,8 @@ def main() -> None:
                 softmax_temperature=args.softmax_temperature,
                 target_vol=args.target_vol,
                 max_single_weight=args.max_single_weight,
+                basket_opt=args.basket_opt,
+                basket_risk_aversion=args.basket_risk_aversion,
             )
         else:
             backtest = run_backtest(
@@ -407,6 +421,8 @@ def main() -> None:
                 "dual_momentum_weighting": args.dual_momentum_weighting if args.strategy == "dual-momentum" else None,
                 "target_vol": args.target_vol,
                 "max_single_weight": args.max_single_weight,
+                "basket_opt": args.basket_opt,
+                "basket_risk_aversion": args.basket_risk_aversion if args.strategy == "dual-momentum" and args.basket_opt else None,
                 "days": args.backtest_days,
                 "rebalance_every": args.rebalance_every,
                 "final_value": round(float(backtest.final_value), 6),

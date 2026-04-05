@@ -86,3 +86,40 @@ def optimize_weights(
     # In partial-investment mode the leftover weight is explicit cash, so keep
     # the raw clipped solution instead of renormalizing it back to 100%.
     return clipped
+
+
+def optimize_basket_weights(
+    expected_returns: np.ndarray,
+    covariance: np.ndarray,
+    min_weight: float = 0.0,
+    max_weight: float = 1.0,
+    risk_aversion: float = 1.0,
+    force_full_investment: bool = True,
+) -> np.ndarray:
+    """Lightweight mean-variance optimization for a small pre-selected basket.
+
+    Unlike the full-asset optimizer this has no turnover penalty, no asset-class
+    constraints, and no partial-investment logic — just risk-aware sizing of
+    the assets the momentum signal already picked.
+    """
+    asset_count = expected_returns.shape[0]
+    weights = cp.Variable(asset_count)
+
+    objective = cp.Maximize(
+        expected_returns @ weights
+        - risk_aversion * cp.quad_form(weights, covariance)
+    )
+    constraints = [weights >= min_weight, weights <= max_weight]
+    if force_full_investment:
+        constraints.append(cp.sum(weights) == 1)
+    else:
+        constraints.append(cp.sum(weights) <= 1.0)
+
+    problem = cp.Problem(objective, constraints)
+    problem.solve()
+
+    if weights.value is None:
+        raise RuntimeError(f"Basket optimization failed with status {problem.status}.")
+
+    solution = np.array(weights.value, dtype=float)
+    return np.clip(solution, min_weight, max_weight)

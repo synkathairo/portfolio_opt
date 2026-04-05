@@ -6,7 +6,7 @@ import numpy as np
 
 from .config import OptimizationConfig
 from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
-from .optimizer import optimize_weights
+from .optimizer import optimize_basket_weights, optimize_weights
 
 
 TRADING_DAYS_PER_YEAR = 252
@@ -225,6 +225,8 @@ def run_dual_momentum_backtest(
     target_vol: float | None = None,
     max_single_weight: float | None = None,
     vol_window: int = 63,
+    basket_opt: str | None = None,
+    basket_risk_aversion: float = 1.0,
 ) -> BacktestResult:
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
@@ -282,14 +284,39 @@ def run_dual_momentum_backtest(
             target_weights = np.zeros(len(symbols), dtype=float)
             if risky_ranked:
                 selected = risky_ranked[:top_k]
-                for index, weight in _dual_momentum_selected_weights(
-                    selected=selected,
-                    trailing_returns=trailing_returns,
-                    trailing_volatility=trailing_volatility,
-                    weighting=weighting,
-                    softmax_temperature=softmax_temperature,
-                ).items():
-                    target_weights[index] = weight
+                selected_indices = [idx for idx, _ in selected]
+
+                # Momentum pre-selects the basket, then size via one of:
+                #  - weighting: equal / score / inverse-vol / softmax
+                #  - basket_opt: cvxpy mean-variance on the small basket
+                if basket_opt == "mean-variance":
+                    basket_returns = trailing_returns[selected_indices]
+                    basket_returns_history = returns[:, max(0, step - lookback_days) : step][selected_indices]
+                    if len(selected_indices) == 1:
+                        basket_cov = np.array([[np.var(basket_returns_history[0])]])
+                    else:
+                        basket_cov = np.cov(basket_returns_history)
+                    # Add diagonal ridge for stability
+                    basket_cov += 1e-8 * np.eye(len(selected_indices))
+                    basket_weights = optimize_basket_weights(
+                        expected_returns=basket_returns,
+                        covariance=basket_cov,
+                        min_weight=0.0,
+                        max_weight=1.0,
+                        risk_aversion=basket_risk_aversion,
+                        force_full_investment=True,
+                    )
+                    for i, idx in enumerate(selected_indices):
+                        target_weights[idx] = basket_weights[i]
+                else:
+                    for index, weight in _dual_momentum_selected_weights(
+                        selected=selected,
+                        trailing_returns=trailing_returns,
+                        trailing_volatility=trailing_volatility,
+                        weighting=weighting,
+                        softmax_temperature=softmax_temperature,
+                    ).items():
+                        target_weights[index] = weight
 
                 # Apply single-asset cap
                 if max_single_weight is not None:
@@ -302,15 +329,11 @@ def run_dual_momentum_backtest(
                         elif capped[i] < 0:
                             excess += abs(capped[i])
                             capped[i] = 0.0
-                    # Redistribute excess proportionally among uncapped positions
                     remaining = capped[capped > 0].sum()
                     if remaining > 0:
                         for i in range(len(symbols)):
                             if 0 < capped[i] < max_single_weight:
                                 capped[i] += excess * (capped[i] / remaining)
-                    capped_sum = capped.sum()
-                    if capped_sum > 0:
-                        capped = capped / capped_sum
                     target_weights = capped
 
                 # Scale risky basket to hit target portfolio volatility
