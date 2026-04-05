@@ -12,7 +12,7 @@ from portfolio_opt.backtest import run_backtest as run_custom_backtest
 from portfolio_opt.config import AlpacaConfig, OptimizationConfig
 from portfolio_opt.model import load_model_inputs
 
-from .data import closes_to_market_data, momentum_forecast
+from .data import bars_to_market_data, momentum_forecast
 from .policy import build_policy
 
 
@@ -160,14 +160,14 @@ def prepare_cvxportfolio_context(
     alpaca = AlpacaClient(AlpacaConfig.from_env())
     warmup_days = max(lookback_days, 252)
     total_days = warmup_days + backtest_days + 1
-    closes_by_symbol = alpaca.get_daily_closes_for_period(
+    bars_by_symbol = alpaca.get_daily_bars_for_period(
         model.symbols,
         total_days,
         use_cache=use_cache,
         refresh_cache=refresh_cache,
         offline=offline,
     )
-    returns_frame, prices_frame = closes_to_market_data(closes_by_symbol)
+    returns_frame, prices_frame, closes_by_symbol = bars_to_market_data(bars_by_symbol)
     return model, closes_by_symbol, returns_frame, prices_frame, warmup_days
 
 
@@ -338,8 +338,6 @@ def run_cvxportfolio_backtest(
             "average_turnover": round(float(result.turnover.mean()), 6),
             "sharpe_ratio": round(float(geometric_sharpe), 6),
             "cvxportfolio_annualized_average_return": round(float(result.annualized_average_return), 6),
-            "annualized_active_return": round(float(result.annualized_average_active_return), 6),
-            "annualized_active_volatility": round(float(result.annualized_active_volatility), 6),
         },
         "latest_target_weights": {
             symbol: round(
@@ -356,6 +354,13 @@ def run_cvxportfolio_backtest(
         "latest_asset_class_exposures": latest_class_exposures,
         "benchmarks": benchmark_results,
     }
+    if benchmark_symbol is not None:
+        result_payload["cvxportfolio_backtest"]["annualized_active_return"] = round(
+            float(result.annualized_average_active_return), 6
+        )
+        result_payload["cvxportfolio_backtest"]["annualized_active_volatility"] = round(
+            float(result.annualized_active_volatility), 6
+        )
     if rolling_comparison is not None:
         result_payload["rolling_vs_spy"] = rolling_comparison
     return result_payload

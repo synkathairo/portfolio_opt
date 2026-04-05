@@ -29,6 +29,34 @@ def closes_to_market_data(
     return returns_frame, prices_frame
 
 
+def bars_to_market_data(
+    bars_by_symbol: dict[str, list[dict[str, str | float]]],
+    cash_return: float = 0.0,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, list[float]]]:
+    symbols = list(bars_by_symbol)
+    closes_by_symbol = {
+        symbol: [float(row["close"]) for row in bars]
+        for symbol, bars in bars_by_symbol.items()
+    }
+    timestamp_series = pd.to_datetime(
+        [str(row["timestamp"]) for row in bars_by_symbol[symbols[0]][1:]],
+        utc=True,
+    )
+    price_frame = pd.DataFrame({symbol: closes_by_symbol[symbol] for symbol in symbols})
+    if price_frame.isna().any().any():
+        raise ValueError("Price history contains missing values.")
+
+    returns = price_frame.iloc[1:].to_numpy() / price_frame.iloc[:-1].to_numpy() - 1.0
+    returns_frame = pd.DataFrame(returns, index=timestamp_series, columns=symbols)
+    returns_frame["USDOLLAR"] = cash_return
+    prices_frame = pd.DataFrame(
+        price_frame.iloc[:-1].to_numpy(),
+        index=timestamp_series,
+        columns=symbols,
+    )
+    return returns_frame, prices_frame, closes_by_symbol
+
+
 def momentum_forecast(
     returns_frame: pd.DataFrame,
     momentum_window: int,

@@ -90,6 +90,62 @@ class AlpacaClient:
         )
         return {symbol: [float(value) for value in values] for symbol, values in cached.items()}
 
+    def get_daily_bars(
+        self,
+        symbols: list[str],
+        lookback_days: int,
+        use_cache: bool = False,
+        refresh_cache: bool = False,
+        offline: bool = False,
+    ) -> dict[str, list[dict[str, str | float]]]:
+        cached = self._cached_json(
+            "daily_bars",
+            {"kind": "daily_bars", "symbols": symbols, "lookback_days": lookback_days},
+            lambda: self._daily_bars_payload(symbols, lookback_days),
+            use_cache=use_cache,
+            refresh_cache=refresh_cache,
+            offline=offline,
+        )
+        return {
+            symbol: [
+                {"timestamp": str(row["timestamp"]), "close": float(row["close"])}
+                for row in values
+            ]
+            for symbol, values in cached.items()
+        }
+
+    def _daily_bars_payload(self, symbols: list[str], lookback_days: int) -> dict[str, list[dict[str, str | float]]]:
+        end = datetime.now(UTC)
+        start = end - timedelta(days=max(lookback_days * 3, 30))
+        bars_by_symbol: dict[str, list[dict[str, str | float]]] = {}
+        for symbol in symbols:
+            query = urlencode(
+                {
+                    "timeframe": "1Day",
+                    "start": start.isoformat().replace("+00:00", "Z"),
+                    "end": end.isoformat().replace("+00:00", "Z"),
+                    "limit": str(lookback_days + 5),
+                    "adjustment": "all",
+                    "feed": "iex",
+                }
+            )
+            payload = self._request_json("GET", f"/v2/stocks/{symbol}/bars?{query}", data_api=True)
+            series = payload.get("bars", [])
+            bars = [
+                {
+                    "timestamp": str(row["t"]),
+                    "close": float(row["c"]),
+                }
+                for row in series
+            ][-lookback_days:]
+            if len(bars) < 2:
+                raise RuntimeError(
+                    f"Not enough daily bars returned for {symbol}. "
+                    f"Requested {lookback_days} trading days, got {len(bars)}."
+                )
+            bars_by_symbol[symbol] = bars
+        return bars_by_symbol
+
     def _daily_closes_payload(self, symbols: list[str], lookback_days: int) -> dict[str, list[float]]:
         end = datetime.now(UTC)
         # Ask for more calendar days than the trading lookback to survive weekends
@@ -134,6 +190,22 @@ class AlpacaClient:
         offline: bool = False,
     ) -> dict[str, list[float]]:
         return self.get_daily_closes(
+            symbols,
+            total_days,
+            use_cache=use_cache,
+            refresh_cache=refresh_cache,
+            offline=offline,
+        )
+
+    def get_daily_bars_for_period(
+        self,
+        symbols: list[str],
+        total_days: int,
+        use_cache: bool = False,
+        refresh_cache: bool = False,
+        offline: bool = False,
+    ) -> dict[str, list[dict[str, str | float]]]:
+        return self.get_daily_bars(
             symbols,
             total_days,
             use_cache=use_cache,
