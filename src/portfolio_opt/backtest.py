@@ -24,9 +24,146 @@ class BacktestResult:
     latest_weights: np.ndarray
 
 
-def _find_symbol_indices(symbols: list[str], selected_symbols: list[str]) -> list[int]:
-    symbol_to_index = {symbol: index for index, symbol in enumerate(symbols)}
-    return [symbol_to_index[symbol] for symbol in selected_symbols if symbol in symbol_to_index]
+def _find_symbol_indices(
+    symbols: list[str],
+    subset: list[str],
+) -> list[int]:
+    symbol_index = {symbol: idx for idx, symbol in enumerate(symbols)}
+    result = [symbol_index[s] for s in subset if s in symbol_index]
+    return result
+
+
+def compute_dual_momentum_weights(
+    symbols: list[str],
+    closes_by_symbol: dict[str, list[float]],
+    asset_classes: dict[str, str],
+    lookback_days: int,
+    top_k: int,
+    weighting: str = "equal",
+    softmax_temperature: float = 0.05,
+    absolute_threshold: float = 0.0,
+    basket_opt: str | None = None,
+    basket_risk_aversion: float = 1.0,
+    target_vol: float | None = None,
+    max_single_weight: float | None = None,
+    vol_window: int = 63,
+) -> dict[str, float]:
+    """Compute dual-momentum target weights for a single point in time.
+
+    Used by the live rebalancing path to produce target weights from current
+    Alpaca data, identical to the backtest logic at a single rebalance step.
+    """
+    aligned_closes = align_close_history(symbols, closes_by_symbol)
+    price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
+    if price_matrix.ndim != 2 or price_matrix.shape[1] < 2:
+        raise ValueError("Not enough price history to compute dual momentum weights.")
+
+    returns = price_matrix[:, 1:] / price_matrix[:, :-1] - 1.0
+    trailing_returns = price_matrix[:, -1] / price_matrix[:, -lookback_days] - 1.0
+    trailing_volatility = returns.std(axis=1, ddof=0)
+
+    risky_symbols = [
+        s for s in symbols
+        if not asset_classes.get(s, "").startswith("bond") and asset_classes.get(s) != "cash_like"
+    ]
+    defensive_symbols = [
+        s for s in symbols
+        if asset_classes.get(s, "").startswith("bond") or asset_classes.get(s) == "cash_like"
+    ]
+    risky_indices = _find_symbol_indices(symbols, risky_symbols)
+    defensive_indices = _find_symbol_indices(symbols, defensive_symbols)
+    if not risky_indices:
+        raise ValueError("Dual momentum requires at least one risky symbol.")
+
+    cash_like_index = next(
+        (i for i, s in enumerate(symbols) if asset_classes.get(s) == "cash_like"),
+        None,
+    )
+    defensive_floor = (
+        float(trailing_returns[cash_like_index])
+        if cash_like_index is not None
+        else absolute_threshold
+    )
+    risky_ranked = sorted(
+        (
+            (idx, float(trailing_returns[idx]))
+            for idx in risky_indices
+            if float(trailing_returns[idx]) > max(absolute_threshold, defensive_floor)
+        ),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+
+    target_weights = np.zeros(len(symbols), dtype=float)
+    if risky_ranked:
+        selected = risky_ranked[:top_k]
+        selected_indices = [idx for idx, _ in selected]
+
+        if basket_opt == "mean-variance":
+            basket_returns = trailing_returns[selected_indices]
+            basket_returns_history = returns[:, max(0, returns.shape[1] - lookback_days) :][selected_indices]
+            if len(selected_indices) == 1:
+                basket_cov = np.array([[np.var(basket_returns_history[0])]])
+            else:
+                basket_cov = np.cov(basket_returns_history)
+            basket_cov += 1e-8 * np.eye(len(selected_indices))
+            basket_weights = optimize_basket_weights(
+                expected_returns=basket_returns,
+                covariance=basket_cov,
+                min_weight=0.0,
+                max_weight=1.0,
+                risk_aversion=basket_risk_aversion,
+                force_full_investment=True,
+            )
+            for i, idx in enumerate(selected_indices):
+                target_weights[idx] = basket_weights[i]
+        else:
+            for index, weight in _dual_momentum_selected_weights(
+                selected=selected,
+                trailing_returns=trailing_returns,
+                trailing_volatility=trailing_volatility,
+                weighting=weighting,
+                softmax_temperature=softmax_temperature,
+            ).items():
+                target_weights[index] = weight
+
+        if max_single_weight is not None:
+            capped = target_weights.copy()
+            excess = 0.0
+            for i in range(len(symbols)):
+                if capped[i] > max_single_weight:
+                    excess += capped[i] - max_single_weight
+                    capped[i] = max_single_weight
+                elif capped[i] < 0:
+                    excess += abs(capped[i])
+                    capped[i] = 0.0
+            remaining = capped[capped > 0].sum()
+            if remaining > 0:
+                for i in range(len(symbols)):
+                    if 0 < capped[i] < max_single_weight:
+                        capped[i] += excess * (capped[i] / remaining)
+            target_weights = capped
+
+        if target_vol is not None:
+            recent_returns_window = returns[:, max(0, returns.shape[1] - vol_window) :]
+            risky_indices_active = [i for i in range(len(symbols)) if target_weights[i] > 0]
+            if len(risky_indices_active) > 0:
+                w = target_weights[risky_indices_active]
+                recent_risky_returns = recent_returns_window[risky_indices_active]
+                portfolio_recent_returns = np.dot(w, recent_risky_returns)
+                portfolio_vol = float(np.std(portfolio_recent_returns, ddof=0)) * np.sqrt(TRADING_DAYS_PER_YEAR)
+            else:
+                portfolio_vol = 0.0
+
+            if portfolio_vol > 0 and portfolio_vol > target_vol:
+                scale = target_vol / portfolio_vol
+                target_weights = target_weights * scale
+    elif defensive_indices:
+        weight = 1.0 / len(defensive_indices)
+        for index in defensive_indices:
+            target_weights[index] = weight
+
+    return {s: float(target_weights[i]) for i, s in enumerate(symbols)}
 
 
 def _normalize_positive(values: np.ndarray) -> np.ndarray:
@@ -116,7 +253,7 @@ def run_backtest(
 ) -> BacktestResult:
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
-    if price_matrix.ndim != 2 or price_matrix.shape[1] <= lookback_days + 1:
+    if price_matrix.ndim != 2 or price_matrix.shape[1] < lookback_days + 1:
         raise ValueError("Not enough price history to run the backtest.")
 
     returns = price_matrix[:, 1:] / price_matrix[:, :-1] - 1.0
@@ -230,7 +367,7 @@ def run_dual_momentum_backtest(
 ) -> BacktestResult:
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
-    if price_matrix.ndim != 2 or price_matrix.shape[1] <= lookback_days + 1:
+    if price_matrix.ndim != 2 or price_matrix.shape[1] < lookback_days + 1:
         raise ValueError("Not enough price history to run the backtest.")
 
     returns = price_matrix[:, 1:] / price_matrix[:, :-1] - 1.0

@@ -8,7 +8,13 @@ from dataclasses import asdict
 import numpy as np
 
 from .alpaca import AlpacaClient, format_order_plans
-from .backtest import rolling_window_comparison, run_backtest, run_dual_momentum_backtest, run_fixed_weight_benchmark
+from .backtest import (
+    compute_dual_momentum_weights,
+    rolling_window_comparison,
+    run_backtest,
+    run_dual_momentum_backtest,
+    run_fixed_weight_benchmark,
+)
 from .config import AlpacaConfig, OptimizationConfig
 from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
 from .model import load_model_inputs
@@ -108,7 +114,7 @@ def parse_args() -> argparse.Namespace:
         "--strategy",
         choices=("mean-variance", "dual-momentum"),
         default="mean-variance",
-        help="Backtest/live strategy path. Dual momentum is backtest-only.",
+        help="Strategy for live or backtest rebalancing. Dual momentum uses live prices when --estimate-from-history is set.",
     )
     parser.add_argument(
         "--momentum-window",
@@ -466,32 +472,61 @@ def main() -> None:
             refresh_cache=args.refresh_cache,
             offline=args.offline,
         )
-        if args.return_model == "momentum":
+
+        if args.strategy == "dual-momentum":
+            dm_weights = compute_dual_momentum_weights(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                asset_classes=model.asset_classes,
+                lookback_days=args.lookback_days,
+                top_k=args.top_k,
+                weighting=args.dual_momentum_weighting,
+                softmax_temperature=args.softmax_temperature,
+                absolute_threshold=args.absolute_momentum_threshold,
+                basket_opt=args.basket_opt,
+                basket_risk_aversion=args.basket_risk_aversion,
+                target_vol=args.target_vol,
+                max_single_weight=args.max_single_weight,
+            )
+            target_weights = np.array([dm_weights[s] for s in model.symbols], dtype=float)
+            estimation_metadata = {
+                "method": "dual_momentum",
+                "lookback_days": args.lookback_days,
+                "top_k": args.top_k,
+                "weighting": args.dual_momentum_weighting,
+            }
+        elif args.return_model == "momentum":
             estimated = estimate_inputs_from_momentum(
                 symbols=model.symbols,
                 closes_by_symbol=closes_by_symbol,
                 mean_shrinkage=args.mean_shrinkage,
                 momentum_window=args.momentum_window,
             )
+            expected_returns = estimated.expected_returns
+            covariance = estimated.covariance
+            estimation_metadata = {
+                "method": "alpaca_daily_bars",
+                "return_model": args.return_model,
+                "lookback_days": args.lookback_days,
+                "mean_shrinkage": args.mean_shrinkage,
+                "observations": estimated.observations,
+                "momentum_window": min(args.momentum_window, args.lookback_days - 1),
+            }
         else:
             estimated = estimate_inputs_from_prices(
                 symbols=model.symbols,
                 closes_by_symbol=closes_by_symbol,
                 mean_shrinkage=args.mean_shrinkage,
             )
-        # Both return models reuse the same covariance estimate from recent
-        # daily returns; only the expected return signal changes.
-        expected_returns = estimated.expected_returns
-        covariance = estimated.covariance
-        estimation_metadata = {
-            "method": "alpaca_daily_bars",
-            "return_model": args.return_model,
-            "lookback_days": args.lookback_days,
-            "mean_shrinkage": args.mean_shrinkage,
-            "observations": estimated.observations,
-        }
-        if args.return_model == "momentum":
-            estimation_metadata["momentum_window"] = min(args.momentum_window, args.lookback_days - 1)
+            expected_returns = estimated.expected_returns
+            covariance = estimated.covariance
+            estimation_metadata = {
+                "method": "alpaca_daily_bars",
+                "return_model": args.return_model,
+                "lookback_days": args.lookback_days,
+                "mean_shrinkage": args.mean_shrinkage,
+                "observations": estimated.observations,
+            }
     else:
         if model.expected_returns is None or model.covariance is None:
             raise ValueError(
@@ -502,13 +537,14 @@ def main() -> None:
         covariance = model.covariance
         estimation_metadata = {"method": "model_file"}
 
-    target_weights = optimize_weights(
-        expected_returns=expected_returns,
-        covariance=covariance,
-        config=opt_config,
-        current_weights=existing_weights,
-        asset_class_matrix=asset_class_matrix if constrained_class_names else None,
-    )
+    if args.strategy != "dual-momentum":
+        target_weights = optimize_weights(
+            expected_returns=expected_returns,
+            covariance=covariance,
+            config=opt_config,
+            current_weights=existing_weights,
+            asset_class_matrix=asset_class_matrix if constrained_class_names else None,
+        )
     target_weights = clean_weights(target_weights)
     target_cash_weight = max(0.0, 1.0 - float(target_weights.sum()))
     current_cash_weight = max(0.0, 1.0 - float(existing_weights.sum()))
@@ -557,10 +593,14 @@ def main() -> None:
             symbol: round(float(weight), 6)
             for symbol, weight in zip(model.symbols, current_weights_clean, strict=True)
         },
-        "expected_returns": {
-            symbol: round(float(value), 6)
-            for symbol, value in zip(model.symbols, expected_returns, strict=True)
-        },
+        "expected_returns": (
+            {
+                symbol: round(float(value), 6)
+                for symbol, value in zip(model.symbols, expected_returns, strict=True)
+            }
+            if args.strategy != "dual-momentum"
+            else None
+        ),
         "cash": {
             "current_weight": round(current_cash_weight, 6),
             "target_weight": round(target_cash_weight, 6),
