@@ -1,0 +1,15 @@
+{
+  "model": "examples/broad_universe.json",
+  "lookback_days": 126,
+  "backtest_days": 252,
+  "risk_aversion": 0.5,
+  "mean_shrinkage": 0.5,
+  "momentum_window": 84,
+  "min_cash_weight": 0.0,
+  "min_invested_weight": 0.8,
+  "max_weight": 0.35,
+  "benchmark_symbol": "SPY",
+  "benchmark_weight": 1.0,
+  "linear_trade_cost": 0.001,
+  "planning_horizon": 1
+}

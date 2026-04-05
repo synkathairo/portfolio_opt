@@ -16,6 +16,7 @@ def build_policy(
     asset_classes: dict[str, str],
     core_symbol: str | None = None,
     core_weight: float = 0.0,
+    benchmark=None,
     planning_horizon: int = 1,
 ):
     objective = cvx.ReturnsForecast(r_hat=forecasts) - risk_aversion * cvx.FullCovariance()
@@ -67,5 +68,5 @@ def build_policy(
         constraints=constraints,
         include_cash_return=True,
         fallback_solver="SCS",
-        benchmark=cvx.AllCash,
+        benchmark=benchmark if benchmark is not None else cvx.AllCash,
     )

@@ -4,6 +4,7 @@ import itertools
 import json
 
 import numpy as np
+import pandas as pd
 
 from portfolio_opt.alpaca import AlpacaClient
 from portfolio_opt.backtest import run_fixed_weight_benchmark, summarize_return_series
@@ -74,6 +75,22 @@ def build_asset_class_matrix(
             continue
         matrix[class_index[class_name]][symbol_index] = 1.0
     return matrix
+
+
+def build_benchmark_weights(
+    index,
+    symbols: list[str],
+    benchmark_symbol: str | None,
+    benchmark_weight: float,
+):
+    if benchmark_symbol is None:
+        return None
+    if benchmark_symbol not in symbols:
+        raise ValueError(f"Benchmark symbol {benchmark_symbol} is not in the model universe.")
+    data = {symbol: np.zeros(len(index), dtype=float) for symbol in symbols}
+    data["USDOLLAR"] = np.full(len(index), max(0.0, 1.0 - benchmark_weight), dtype=float)
+    data[benchmark_symbol] = np.full(len(index), benchmark_weight, dtype=float)
+    return pd.DataFrame(data, index=index)
 
 
 def rolling_window_comparison(
@@ -166,6 +183,8 @@ def run_cvxportfolio_backtest(
     momentum_window: int,
     core_symbol: str | None = None,
     core_weight: float = 0.0,
+    benchmark_symbol: str | None = None,
+    benchmark_weight: float = 1.0,
     linear_trade_cost: float = 0.0,
     planning_horizon: int = 1,
     rolling_window_days: int = 0,
@@ -194,6 +213,12 @@ def run_cvxportfolio_backtest(
         momentum_window=momentum_window,
         mean_shrinkage=mean_shrinkage,
     )
+    benchmark = build_benchmark_weights(
+        returns_frame.index,
+        model.symbols,
+        benchmark_symbol=benchmark_symbol,
+        benchmark_weight=benchmark_weight,
+    )
 
     policy = build_policy(
         cvx=cvx,
@@ -208,6 +233,7 @@ def run_cvxportfolio_backtest(
         asset_classes=model.asset_classes,
         core_symbol=core_symbol,
         core_weight=core_weight,
+        benchmark=benchmark,
         planning_horizon=planning_horizon,
     )
     simulator = cvx.MarketSimulator(returns=returns_frame, prices=prices_frame, cash_key="USDOLLAR")
@@ -293,6 +319,8 @@ def run_cvxportfolio_backtest(
             "momentum_window": momentum_window,
             "core_symbol": core_symbol,
             "core_weight": core_weight,
+            "benchmark_symbol": benchmark_symbol,
+            "benchmark_weight": benchmark_weight,
             "linear_trade_cost": linear_trade_cost,
             "planning_horizon": planning_horizon,
             "first_timestamp": first_timestamp,
@@ -310,6 +338,8 @@ def run_cvxportfolio_backtest(
             "average_turnover": round(float(result.turnover.mean()), 6),
             "sharpe_ratio": round(float(geometric_sharpe), 6),
             "cvxportfolio_annualized_average_return": round(float(result.annualized_average_return), 6),
+            "annualized_active_return": round(float(result.annualized_average_active_return), 6),
+            "annualized_active_volatility": round(float(result.annualized_active_volatility), 6),
         },
         "latest_target_weights": {
             symbol: round(
@@ -359,6 +389,8 @@ def run_framework_comparison(
         max_weight=float(cvxportfolio_config["max_weight"]),
         core_symbol=str(cvxportfolio_config["core_symbol"]) if cvxportfolio_config.get("core_symbol") else None,
         core_weight=float(cvxportfolio_config.get("core_weight", 0.0)),
+        benchmark_symbol=str(cvxportfolio_config["benchmark_symbol"]) if cvxportfolio_config.get("benchmark_symbol") else None,
+        benchmark_weight=float(cvxportfolio_config.get("benchmark_weight", 1.0)),
         mean_shrinkage=float(cvxportfolio_config["mean_shrinkage"]),
         momentum_window=int(cvxportfolio_config["momentum_window"]),
         linear_trade_cost=float(cvxportfolio_config["linear_trade_cost"]),
@@ -455,6 +487,8 @@ def run_cvxportfolio_sweep(
     planning_horizon: int = 1,
     core_symbol: str | None = None,
     core_weight: float = 0.0,
+    benchmark_symbol: str | None = None,
+    benchmark_weight: float = 1.0,
     use_cache: bool = False,
     refresh_cache: bool = False,
     offline: bool = False,
@@ -509,6 +543,12 @@ def run_cvxportfolio_sweep(
                 asset_classes=model.asset_classes,
                 core_symbol=core_symbol,
                 core_weight=core_weight,
+                benchmark=build_benchmark_weights(
+                    returns_frame.index,
+                    model.symbols,
+                    benchmark_symbol=benchmark_symbol,
+                    benchmark_weight=benchmark_weight,
+                ),
                 planning_horizon=planning_horizon,
             )
             simulator = cvx.MarketSimulator(returns=returns_frame, prices=prices_frame, cash_key="USDOLLAR")
