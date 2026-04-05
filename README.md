@@ -160,6 +160,43 @@ uv run portfolio-opt \
   --top-n 5
 ```
 
+To run the custom dual-momentum research path instead of the mean-variance optimizer:
+
+```bash
+uv run portfolio-opt \
+  --model examples/broad_universe.json \
+  --strategy dual-momentum \
+  --lookback-days 252 \
+  --backtest-days 252 \
+  --rebalance-every 21 \
+  --top-k 1 \
+  --offline
+```
+
+To see whether a custom strategy beats `SPY` across rolling subwindows:
+
+```bash
+uv run portfolio-opt \
+  --model examples/broad_universe.json \
+  --strategy dual-momentum \
+  --lookback-days 252 \
+  --backtest-days 252 \
+  --rebalance-every 21 \
+  --top-k 1 \
+  --rolling-window-days 126 \
+  --rolling-step-days 21 \
+  --offline
+```
+
+For a wider ETF research universe with sector sleeves in addition to the broad asset-class sleeves, see `examples/sector_universe.json`. This is useful when you want to test:
+
+- broad-beta rotation: `SPY`, `QQQ`, `IWM`, `VEA`, `VWO`
+- sector rotation: `XLK`, `XLF`, `XLE`, `XLV`, `XLI`, `XLP`, `XLU`
+- defensive sleeves: `SGOV`, `IEF`, `TLT`, `TIP`
+- real assets: `GLD`, `DBC`, `VNQ`
+
+If you switch to that universe, prime the Alpaca cache once before offline runs because it uses a different symbol set.
+
 ## Submit Orders
 
 ```bash
