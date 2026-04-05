@@ -42,6 +42,8 @@ This first version is intentionally narrow:
 - user-provided market data built from Alpaca closes
 - cash and asset-class policy bounds where possible
 
+The default sample universe is intentionally small. For a broader allocation experiment, try `examples/broad_universe.json`.
+
 Sweep mode is also available:
 
 ```bash
@@ -71,6 +73,41 @@ uv run cvxportfolio-backtest \
   --min-cash-weight 0.05 \
   --min-invested-weight 0.4 \
   --linear-trade-cost 0.001
+```
+
+For an apples-to-apples framework comparison against the repo's custom baseline preset:
+
+```bash
+uv run cvxportfolio-backtest \
+  --model examples/sample_universe.json \
+  --lookback-days 126 \
+  --backtest-days 252 \
+  --risk-aversion 0.5 \
+  --mean-shrinkage 0.5 \
+  --momentum-window 84 \
+  --min-cash-weight 0.05 \
+  --min-invested-weight 0.4 \
+  --linear-trade-cost 0.001 \
+  --compare-custom \
+  --offline
+```
+
+Rolling-window comparison against `SPY` is also available:
+
+```bash
+uv run cvxportfolio-backtest \
+  --model examples/broad_universe.json \
+  --lookback-days 126 \
+  --backtest-days 252 \
+  --risk-aversion 0.5 \
+  --mean-shrinkage 0.5 \
+  --momentum-window 84 \
+  --min-cash-weight 0.0 \
+  --min-invested-weight 0.7 \
+  --linear-trade-cost 0.001 \
+  --rolling-window-days 63 \
+  --rolling-step-days 21 \
+  --offline
 ```
 
 ## Comparison Rule

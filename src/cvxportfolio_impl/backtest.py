@@ -3,9 +3,12 @@ from __future__ import annotations
 import itertools
 import json
 
+import numpy as np
+
 from portfolio_opt.alpaca import AlpacaClient
 from portfolio_opt.backtest import run_fixed_weight_benchmark, summarize_return_series
-from portfolio_opt.config import AlpacaConfig
+from portfolio_opt.backtest import run_backtest as run_custom_backtest
+from portfolio_opt.config import AlpacaConfig, OptimizationConfig
 from portfolio_opt.model import load_model_inputs
 
 from .data import closes_to_market_data, momentum_forecast
@@ -21,7 +24,7 @@ def clamp_for_display(
     *,
     lower_bound: float | None = None,
     upper_bound: float | None = None,
-    tolerance: float = 1e-3,
+    tolerance: float = 2e-3,
 ) -> float:
     cleaned = clean_value(float(value))
     if lower_bound is not None and abs(cleaned - lower_bound) < tolerance:
@@ -40,7 +43,7 @@ def clean_constraint_mapping(
     *,
     lower_bounds: dict[str, float] | None = None,
     upper_bounds: dict[str, float] | None = None,
-    tolerance: float = 1e-3,
+    tolerance: float = 2e-3,
 ) -> dict[str, float]:
     lower_bounds = lower_bounds or {}
     upper_bounds = upper_bounds or {}
@@ -55,6 +58,76 @@ def clean_constraint_mapping(
             6,
         )
         for key, value in values.items()
+    }
+
+
+def build_asset_class_matrix(
+    symbols: list[str],
+    asset_classes: dict[str, str],
+    class_names: list[str],
+) -> list[list[float]]:
+    matrix: list[list[float]] = [[0.0 for _ in symbols] for _ in class_names]
+    class_index = {class_name: idx for idx, class_name in enumerate(class_names)}
+    for symbol_index, symbol in enumerate(symbols):
+        class_name = asset_classes.get(symbol)
+        if class_name is None or class_name not in class_index:
+            continue
+        matrix[class_index[class_name]][symbol_index] = 1.0
+    return matrix
+
+
+def rolling_window_comparison(
+    strategy_returns: np.ndarray,
+    benchmark_returns: np.ndarray,
+    *,
+    window_days: int,
+    step_days: int,
+) -> dict[str, float | int]:
+    if len(strategy_returns) != len(benchmark_returns):
+        raise ValueError("Strategy and benchmark returns must have the same length.")
+    if window_days <= 0 or step_days <= 0:
+        raise ValueError("window_days and step_days must be positive.")
+    if len(strategy_returns) < window_days:
+        raise ValueError("Not enough realized periods for the requested rolling window.")
+
+    window_results: list[dict[str, float | bool]] = []
+    for start in range(0, len(strategy_returns) - window_days + 1, step_days):
+        end = start + window_days
+        strategy_slice = strategy_returns[start:end]
+        benchmark_slice = benchmark_returns[start:end]
+        _, strategy_total_return, strategy_annualized_return, strategy_volatility, strategy_drawdown = summarize_return_series(
+            strategy_slice
+        )
+        _, benchmark_total_return, benchmark_annualized_return, benchmark_volatility, benchmark_drawdown = summarize_return_series(
+            benchmark_slice
+        )
+        strategy_sharpe = strategy_annualized_return / strategy_volatility if strategy_volatility > 0 else 0.0
+        benchmark_sharpe = benchmark_annualized_return / benchmark_volatility if benchmark_volatility > 0 else 0.0
+        window_results.append(
+            {
+                "beat_return": strategy_total_return > benchmark_total_return,
+                "beat_sharpe": strategy_sharpe > benchmark_sharpe,
+                "lower_drawdown": strategy_drawdown < benchmark_drawdown,
+                "excess_total_return": strategy_total_return - benchmark_total_return,
+            }
+        )
+
+    total_windows = len(window_results)
+    beat_return_count = sum(1 for result in window_results if bool(result["beat_return"]))
+    beat_sharpe_count = sum(1 for result in window_results if bool(result["beat_sharpe"]))
+    lower_drawdown_count = sum(1 for result in window_results if bool(result["lower_drawdown"]))
+    average_excess_return = float(np.mean([float(result["excess_total_return"]) for result in window_results]))
+    return {
+        "window_days": window_days,
+        "step_days": step_days,
+        "windows": total_windows,
+        "beat_spy_return_windows": beat_return_count,
+        "beat_spy_return_rate": round(beat_return_count / total_windows, 6),
+        "beat_spy_sharpe_windows": beat_sharpe_count,
+        "beat_spy_sharpe_rate": round(beat_sharpe_count / total_windows, 6),
+        "lower_drawdown_than_spy_windows": lower_drawdown_count,
+        "lower_drawdown_than_spy_rate": round(lower_drawdown_count / total_windows, 6),
+        "average_excess_total_return_vs_spy": round(average_excess_return, 6),
     }
 
 
@@ -93,6 +166,8 @@ def run_cvxportfolio_backtest(
     momentum_window: int,
     linear_trade_cost: float = 0.0,
     planning_horizon: int = 1,
+    rolling_window_days: int = 0,
+    rolling_step_days: int = 21,
     use_cache: bool = False,
     refresh_cache: bool = False,
     offline: bool = False,
@@ -171,29 +246,40 @@ def run_cvxportfolio_backtest(
             symbols=model.symbols,
             closes_by_symbol=closes_by_symbol,
             weights_by_symbol={"SPY": 1.0},
-            start_day=lookback_days,
+            start_day=warmup_days,
         ),
         "sixty_forty_spy_tlt": run_fixed_weight_benchmark(
             symbols=model.symbols,
             closes_by_symbol=closes_by_symbol,
             weights_by_symbol={"SPY": 0.6, "TLT": 0.4},
-            start_day=lookback_days,
+            start_day=warmup_days,
         ),
         "equal_weight": run_fixed_weight_benchmark(
             symbols=model.symbols,
             closes_by_symbol=closes_by_symbol,
             weights_by_symbol={symbol: 1.0 / len(model.symbols) for symbol in model.symbols},
-            start_day=lookback_days,
+            start_day=warmup_days,
         ),
         "half_spy_half_cash": run_fixed_weight_benchmark(
             symbols=model.symbols,
             closes_by_symbol=closes_by_symbol,
             weights_by_symbol={"SPY": 0.5},
-            start_day=lookback_days,
+            start_day=warmup_days,
         ),
     }
+    rolling_comparison = None
+    if rolling_window_days > 0:
+        spy_prices = np.array(closes_by_symbol["SPY"], dtype=float)
+        spy_returns = spy_prices[1:] / spy_prices[:-1] - 1.0
+        benchmark_aligned_returns = spy_returns[warmup_days : warmup_days + realized_periods]
+        rolling_comparison = rolling_window_comparison(
+            net_realized_returns,
+            benchmark_aligned_returns,
+            window_days=rolling_window_days,
+            step_days=rolling_step_days,
+        )
 
-    return {
+    result_payload = {
         "symbols": model.symbols,
         "cvxportfolio_backtest": {
             "days": backtest_days,
@@ -232,6 +318,122 @@ def run_cvxportfolio_backtest(
         },
         "latest_cash_weight": round(clamp_for_display(latest_cash_weight, lower_bound=min_cash_weight, upper_bound=1.0), 6),
         "latest_asset_class_exposures": latest_class_exposures,
+        "benchmarks": benchmark_results,
+    }
+    if rolling_comparison is not None:
+        result_payload["rolling_vs_spy"] = rolling_comparison
+    return result_payload
+
+
+def run_framework_comparison(
+    model_path: str,
+    lookback_days: int,
+    backtest_days: int,
+    cvxportfolio_config: dict[str, float | int],
+    custom_config: dict[str, float | int],
+    use_cache: bool = False,
+    refresh_cache: bool = False,
+    offline: bool = False,
+) -> dict:
+    model, closes_by_symbol, _returns_frame, _prices_frame, _warmup_days = prepare_cvxportfolio_context(
+        model_path=model_path,
+        lookback_days=lookback_days,
+        backtest_days=backtest_days,
+        use_cache=use_cache,
+        refresh_cache=refresh_cache,
+        offline=offline,
+    )
+    cvxportfolio_result = run_cvxportfolio_backtest(
+        model_path=model_path,
+        lookback_days=lookback_days,
+        backtest_days=backtest_days,
+        risk_aversion=float(cvxportfolio_config["risk_aversion"]),
+        min_cash_weight=float(cvxportfolio_config["min_cash_weight"]),
+        min_invested_weight=float(cvxportfolio_config["min_invested_weight"]),
+        max_weight=float(cvxportfolio_config["max_weight"]),
+        mean_shrinkage=float(cvxportfolio_config["mean_shrinkage"]),
+        momentum_window=int(cvxportfolio_config["momentum_window"]),
+        linear_trade_cost=float(cvxportfolio_config["linear_trade_cost"]),
+        planning_horizon=int(cvxportfolio_config["planning_horizon"]),
+        use_cache=use_cache,
+        refresh_cache=refresh_cache,
+        offline=offline,
+    )
+
+    constrained_class_names = list(model.class_min_weights) + [
+        name for name in model.class_max_weights if name not in model.class_min_weights
+    ]
+    asset_class_matrix = build_asset_class_matrix(model.symbols, model.asset_classes, constrained_class_names)
+    custom_opt_config = OptimizationConfig(
+        risk_aversion=float(custom_config["risk_aversion"]),
+        min_weight=0.0,
+        max_weight=float(custom_config["max_weight"]),
+        rebalance_threshold=0.02,
+        turnover_penalty=float(custom_config["turnover_penalty"]),
+        force_full_investment=not bool(custom_config["allow_cash"]),
+        min_cash_weight=float(custom_config["min_cash_weight"]),
+        max_turnover=float(custom_config["max_turnover"]),
+        min_invested_weight=float(custom_config["min_invested_weight"]),
+        class_min_weights=model.class_min_weights,
+        class_max_weights=model.class_max_weights,
+    )
+    custom_closes_by_symbol = {
+        symbol: closes[-(lookback_days + backtest_days + 1) :]
+        for symbol, closes in closes_by_symbol.items()
+    }
+    custom_backtest = run_custom_backtest(
+        symbols=model.symbols,
+        closes_by_symbol=custom_closes_by_symbol,
+        lookback_days=lookback_days,
+        rebalance_every=int(custom_config["rebalance_every"]),
+        return_model=str(custom_config["return_model"]),
+        mean_shrinkage=float(custom_config["mean_shrinkage"]),
+        momentum_window=int(custom_config["momentum_window"]),
+        opt_config=custom_opt_config,
+        asset_class_matrix=np.array(asset_class_matrix, dtype=float) if constrained_class_names else None,
+    )
+    custom_latest_weights = clean_constraint_mapping(
+        {
+            symbol: float(weight)
+            for symbol, weight in zip(model.symbols, custom_backtest.latest_weights, strict=True)
+        },
+        upper_bounds={symbol: float(custom_config["max_weight"]) for symbol in model.symbols},
+    )
+    custom_cash_weight = round(
+        clamp_for_display(
+            max(0.0, 1.0 - float(sum(custom_backtest.latest_weights))),
+            lower_bound=float(custom_config["min_cash_weight"]),
+            upper_bound=1.0,
+        ),
+        6,
+    )
+    benchmark_results = cvxportfolio_result["benchmarks"]
+    return {
+        "symbols": model.symbols,
+        "comparison": {
+            "lookback_days": lookback_days,
+            "backtest_days": backtest_days,
+        },
+        "custom_baseline": {
+            "config": custom_config,
+            "metrics": {
+                "annualized_return": round(float(custom_backtest.annualized_return), 6),
+                "annualized_volatility": round(float(custom_backtest.annualized_volatility), 6),
+                "max_drawdown": round(float(custom_backtest.max_drawdown), 6),
+                "average_turnover": round(float(custom_backtest.average_turnover), 6),
+                "rebalance_count": int(custom_backtest.rebalance_count),
+                "total_return": round(float(custom_backtest.total_return), 6),
+            },
+            "latest_target_weights": custom_latest_weights,
+            "latest_cash_weight": custom_cash_weight,
+        },
+        "cvxportfolio": {
+            "config": cvxportfolio_config,
+            "metrics": cvxportfolio_result["cvxportfolio_backtest"],
+            "latest_target_weights": cvxportfolio_result["latest_target_weights"],
+            "latest_cash_weight": cvxportfolio_result["latest_cash_weight"],
+            "latest_asset_class_exposures": cvxportfolio_result["latest_asset_class_exposures"],
+        },
         "benchmarks": benchmark_results,
     }
 
@@ -342,25 +544,25 @@ def run_cvxportfolio_sweep(
             symbols=model.symbols,
             closes_by_symbol=closes_by_symbol,
             weights_by_symbol={"SPY": 1.0},
-            start_day=lookback_days,
+            start_day=warmup_days,
         ),
         "sixty_forty_spy_tlt": run_fixed_weight_benchmark(
             symbols=model.symbols,
             closes_by_symbol=closes_by_symbol,
             weights_by_symbol={"SPY": 0.6, "TLT": 0.4},
-            start_day=lookback_days,
+            start_day=warmup_days,
         ),
         "equal_weight": run_fixed_weight_benchmark(
             symbols=model.symbols,
             closes_by_symbol=closes_by_symbol,
             weights_by_symbol={symbol: 1.0 / len(model.symbols) for symbol in model.symbols},
-            start_day=lookback_days,
+            start_day=warmup_days,
         ),
         "half_spy_half_cash": run_fixed_weight_benchmark(
             symbols=model.symbols,
             closes_by_symbol=closes_by_symbol,
             weights_by_symbol={"SPY": 0.5},
-            start_day=lookback_days,
+            start_day=warmup_days,
         ),
     }
     return {

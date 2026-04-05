@@ -1,0 +1,49 @@
+{
+  "symbols": [
+    "SPY",
+    "QQQ",
+    "IWM",
+    "VEA",
+    "VWO",
+    "SGOV",
+    "IEF",
+    "TLT",
+    "TIP",
+    "GLD",
+    "DBC",
+    "VNQ"
+  ],
+  "asset_classes": {
+    "SPY": "equity_us_large",
+    "QQQ": "equity_us_growth",
+    "IWM": "equity_us_small",
+    "VEA": "equity_developed_ex_us",
+    "VWO": "equity_emerging",
+    "SGOV": "cash_like",
+    "IEF": "bond_intermediate",
+    "TLT": "bond_long",
+    "TIP": "bond_inflation",
+    "GLD": "commodity_gold",
+    "DBC": "commodity_broad",
+    "VNQ": "real_estate"
+  },
+  "class_min_weights": {
+    "equity_us_large": 0.1,
+    "equity_us_growth": 0.05,
+    "bond_intermediate": 0.05
+  },
+  "class_max_weights": {
+    "equity_us_large": 0.35,
+    "equity_us_growth": 0.25,
+    "equity_us_small": 0.2,
+    "equity_developed_ex_us": 0.2,
+    "equity_emerging": 0.15,
+    "cash_like": 0.4,
+    "bond_intermediate": 0.3,
+    "bond_long": 0.25,
+    "bond_inflation": 0.2,
+    "commodity_gold": 0.2,
+    "commodity_broad": 0.15,
+    "real_estate": 0.15
+  }
+}

@@ -210,6 +210,43 @@ uv run cvxportfolio-backtest \
   --linear-trade-cost 0.001
 ```
 
+For a less defensive broad-universe starting point, see `examples/cvxportfolio_broad_high_equity_preset.json`.
+
+To compare that `cvxportfolio` configuration against the repo's best-known custom baseline on the same cached data and benchmarks:
+
+```bash
+uv run cvxportfolio-backtest \
+  --model examples/sample_universe.json \
+  --lookback-days 126 \
+  --backtest-days 252 \
+  --risk-aversion 0.5 \
+  --mean-shrinkage 0.5 \
+  --momentum-window 84 \
+  --min-cash-weight 0.05 \
+  --min-invested-weight 0.4 \
+  --linear-trade-cost 0.001 \
+  --compare-custom \
+  --offline
+```
+
+To see how often a broad-universe policy beats `SPY` across rolling subwindows of the aligned backtest period:
+
+```bash
+uv run cvxportfolio-backtest \
+  --model examples/broad_universe.json \
+  --lookback-days 126 \
+  --backtest-days 252 \
+  --risk-aversion 0.5 \
+  --mean-shrinkage 0.5 \
+  --momentum-window 84 \
+  --min-cash-weight 0.0 \
+  --min-invested-weight 0.7 \
+  --linear-trade-cost 0.001 \
+  --rolling-window-days 63 \
+  --rolling-step-days 21 \
+  --offline
+```
+
 ## Model File Format
 
 ```json
@@ -253,6 +290,10 @@ For universe-only files, you can also provide asset-class metadata and policy bo
   }
 }
 ```
+
+There is also a broader starting universe in `examples/broad_universe.json` with US equities, international equities, short/intermediate/long Treasuries, TIPS, gold, broad commodities, and REITs. Use that file if you want the optimizer to express more than just `SPY` versus `QQQ` plus two hedges.
+
+The built-in benchmark block is still anchored to `SPY`, `TLT`, and equal-weight logic. That keeps comparisons stable, but on broader universes you should treat those benchmarks as reference points, not a full policy match.
 
 ## Notes
 

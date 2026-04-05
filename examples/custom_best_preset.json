@@ -1,0 +1,13 @@
+{
+  "return_model": "momentum",
+  "rebalance_every": 21,
+  "risk_aversion": 1.0,
+  "mean_shrinkage": 0.75,
+  "momentum_window": 63,
+  "min_cash_weight": 0.1,
+  "min_invested_weight": 0.3,
+  "max_weight": 0.35,
+  "turnover_penalty": 0.05,
+  "max_turnover": 0.3,
+  "allow_cash": true
+}
