@@ -136,6 +136,18 @@ def parse_args() -> argparse.Namespace:
         help="Minimum trailing return required for dual momentum if no cash proxy is present.",
     )
     parser.add_argument(
+        "--target-vol",
+        type=float,
+        default=None,
+        help="Target annualized portfolio volatility for the risky basket (vol targeting).",
+    )
+    parser.add_argument(
+        "--max-single-weight",
+        type=float,
+        default=None,
+        help="Maximum weight for any single asset in the dual momentum basket.",
+    )
+    parser.add_argument(
         "--backtest-days",
         type=int,
         default=0,
@@ -325,6 +337,8 @@ def main() -> None:
                 absolute_threshold=args.absolute_momentum_threshold,
                 weighting=args.dual_momentum_weighting,
                 softmax_temperature=args.softmax_temperature,
+                target_vol=args.target_vol,
+                max_single_weight=args.max_single_weight,
             )
         else:
             backtest = run_backtest(
@@ -391,6 +405,8 @@ def main() -> None:
             "backtest": {
                 "strategy": args.strategy,
                 "dual_momentum_weighting": args.dual_momentum_weighting if args.strategy == "dual-momentum" else None,
+                "target_vol": args.target_vol,
+                "max_single_weight": args.max_single_weight,
                 "days": args.backtest_days,
                 "rebalance_every": args.rebalance_every,
                 "final_value": round(float(backtest.final_value), 6),

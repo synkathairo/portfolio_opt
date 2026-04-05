@@ -222,6 +222,9 @@ def run_dual_momentum_backtest(
     absolute_threshold: float,
     weighting: str = "equal",
     softmax_temperature: float = 0.05,
+    target_vol: float | None = None,
+    max_single_weight: float | None = None,
+    vol_window: int = 63,
 ) -> BacktestResult:
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
@@ -287,6 +290,45 @@ def run_dual_momentum_backtest(
                     softmax_temperature=softmax_temperature,
                 ).items():
                     target_weights[index] = weight
+
+                # Apply single-asset cap
+                if max_single_weight is not None:
+                    capped = target_weights.copy()
+                    excess = 0.0
+                    for i in range(len(symbols)):
+                        if capped[i] > max_single_weight:
+                            excess += capped[i] - max_single_weight
+                            capped[i] = max_single_weight
+                        elif capped[i] < 0:
+                            excess += abs(capped[i])
+                            capped[i] = 0.0
+                    # Redistribute excess proportionally among uncapped positions
+                    remaining = capped[capped > 0].sum()
+                    if remaining > 0:
+                        for i in range(len(symbols)):
+                            if 0 < capped[i] < max_single_weight:
+                                capped[i] += excess * (capped[i] / remaining)
+                    capped_sum = capped.sum()
+                    if capped_sum > 0:
+                        capped = capped / capped_sum
+                    target_weights = capped
+
+                # Scale risky basket to hit target portfolio volatility
+                if target_vol is not None:
+                    recent_returns_window = returns[:, max(0, step - vol_window) : step]
+                    risky_indices_active = [i for i in range(len(symbols)) if target_weights[i] > 0]
+                    if len(risky_indices_active) > 0:
+                        w = target_weights[risky_indices_active]
+                        recent_risky_returns = recent_returns_window[risky_indices_active]
+                        # Portfolio returns over the lookback window
+                        portfolio_recent_returns = np.dot(w, recent_risky_returns)
+                        portfolio_vol = float(np.std(portfolio_recent_returns, ddof=0)) * np.sqrt(TRADING_DAYS_PER_YEAR)
+                    else:
+                        portfolio_vol = 0.0
+
+                    if portfolio_vol > 0 and portfolio_vol > target_vol:
+                        scale = target_vol / portfolio_vol
+                        target_weights = target_weights * scale
             elif defensive_indices:
                 weight = 1.0 / len(defensive_indices)
                 for index in defensive_indices:
