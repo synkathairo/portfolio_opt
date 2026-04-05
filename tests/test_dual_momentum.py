@@ -86,8 +86,66 @@ def test_rolling_window_comparison_counts_windows_against_spy() -> None:
         asset_class_matrix=None,
         top_k=1,
         absolute_threshold=0.0,
+        weighting="equal",
+        softmax_temperature=0.05,
     )
 
     assert comparison["windows"] == 2
     assert comparison["beat_spy_return_windows"] == 2
     assert comparison["beat_spy_sharpe_windows"] == 2
+
+
+def test_dual_momentum_score_weighting_tilts_toward_stronger_asset() -> None:
+    closes_by_symbol = {
+        "SPY": [100.0, 102.0, 106.0, 112.0, 120.0],
+        "QQQ": [100.0, 101.0, 103.0, 106.0, 110.0],
+        "SGOV": [100.0, 100.1, 100.2, 100.3, 100.4],
+    }
+    asset_classes = {
+        "SPY": "equity_us_large",
+        "QQQ": "equity_us_growth",
+        "SGOV": "cash_like",
+    }
+
+    result = run_dual_momentum_backtest(
+        symbols=["SPY", "QQQ", "SGOV"],
+        closes_by_symbol=closes_by_symbol,
+        asset_classes=asset_classes,
+        lookback_days=2,
+        rebalance_every=1,
+        top_k=2,
+        absolute_threshold=0.0,
+        weighting="score",
+    )
+
+    assert result.latest_weights[0] > result.latest_weights[1]
+    assert result.latest_weights[2] == 0.0
+    assert round(float(result.latest_weights.sum()), 6) == 1.0
+
+
+def test_dual_momentum_inverse_vol_weighting_tilts_toward_lower_vol_asset() -> None:
+    closes_by_symbol = {
+        "SPY": [100.0, 110.0, 90.0, 120.0, 95.0],
+        "QQQ": [100.0, 102.0, 104.0, 106.0, 108.0],
+        "SGOV": [100.0, 100.1, 100.2, 100.3, 100.4],
+    }
+    asset_classes = {
+        "SPY": "equity_us_large",
+        "QQQ": "equity_us_growth",
+        "SGOV": "cash_like",
+    }
+
+    result = run_dual_momentum_backtest(
+        symbols=["SPY", "QQQ", "SGOV"],
+        closes_by_symbol=closes_by_symbol,
+        asset_classes=asset_classes,
+        lookback_days=2,
+        rebalance_every=1,
+        top_k=2,
+        absolute_threshold=0.0,
+        weighting="inverse-vol",
+    )
+
+    assert result.latest_weights[1] > result.latest_weights[0]
+    assert result.latest_weights[2] == 0.0
+    assert round(float(result.latest_weights.sum()), 6) == 1.0

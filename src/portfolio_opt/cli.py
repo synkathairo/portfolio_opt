@@ -118,6 +118,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--top-k", type=int, default=3, help="Number of assets to hold in dual momentum mode.")
     parser.add_argument(
+        "--dual-momentum-weighting",
+        choices=("equal", "score", "inverse-vol", "softmax"),
+        default="equal",
+        help="How to weight the selected basket in dual momentum mode.",
+    )
+    parser.add_argument(
+        "--softmax-temperature",
+        type=float,
+        default=0.05,
+        help="Temperature for softmax weighting in dual momentum mode.",
+    )
+    parser.add_argument(
         "--absolute-momentum-threshold",
         type=float,
         default=0.0,
@@ -311,6 +323,8 @@ def main() -> None:
                 rebalance_every=args.rebalance_every,
                 top_k=args.top_k,
                 absolute_threshold=args.absolute_momentum_threshold,
+                weighting=args.dual_momentum_weighting,
+                softmax_temperature=args.softmax_temperature,
             )
         else:
             backtest = run_backtest(
@@ -343,6 +357,8 @@ def main() -> None:
                 asset_class_matrix=asset_class_matrix if constrained_class_names else None,
                 top_k=args.top_k,
                 absolute_threshold=args.absolute_momentum_threshold,
+                weighting=args.dual_momentum_weighting,
+                softmax_temperature=args.softmax_temperature,
             )
         benchmark_results = {
             "spy": run_fixed_weight_benchmark(
@@ -374,6 +390,7 @@ def main() -> None:
             "symbols": model.symbols,
             "backtest": {
                 "strategy": args.strategy,
+                "dual_momentum_weighting": args.dual_momentum_weighting if args.strategy == "dual-momentum" else None,
                 "days": args.backtest_days,
                 "rebalance_every": args.rebalance_every,
                 "final_value": round(float(backtest.final_value), 6),

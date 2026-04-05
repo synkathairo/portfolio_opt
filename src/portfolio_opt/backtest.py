@@ -29,6 +29,49 @@ def _find_symbol_indices(symbols: list[str], selected_symbols: list[str]) -> lis
     return [symbol_to_index[symbol] for symbol in selected_symbols if symbol in symbol_to_index]
 
 
+def _normalize_positive(values: np.ndarray) -> np.ndarray:
+    total = float(values.sum())
+    if total <= 0.0:
+        return np.full(len(values), 1.0 / len(values), dtype=float)
+    return values / total
+
+
+def _dual_momentum_selected_weights(
+    *,
+    selected: list[tuple[int, float]],
+    trailing_returns: np.ndarray,
+    trailing_volatility: np.ndarray,
+    weighting: str,
+    softmax_temperature: float,
+) -> dict[int, float]:
+    selected_indices = [index for index, _ in selected]
+    if not selected_indices:
+        return {}
+
+    if weighting == "equal":
+        weight_vector = np.full(len(selected_indices), 1.0 / len(selected_indices), dtype=float)
+    elif weighting == "score":
+        scores = np.array([max(score, 0.0) for _index, score in selected], dtype=float)
+        weight_vector = _normalize_positive(scores)
+    elif weighting == "inverse-vol":
+        vol_values = np.array([max(float(trailing_volatility[index]), 1e-8) for index in selected_indices], dtype=float)
+        weight_vector = _normalize_positive(1.0 / vol_values)
+    elif weighting == "softmax":
+        scaled_scores = np.array(
+            [float(trailing_returns[index]) / max(softmax_temperature, 1e-6) for index in selected_indices],
+            dtype=float,
+        )
+        shifted = scaled_scores - float(np.max(scaled_scores))
+        weight_vector = _normalize_positive(np.exp(shifted))
+    else:
+        raise ValueError(f"Unknown dual momentum weighting mode: {weighting}")
+
+    return {
+        index: float(weight)
+        for index, weight in zip(selected_indices, weight_vector, strict=True)
+    }
+
+
 def summarize_return_series(returns: np.ndarray) -> tuple[float, float, float, float]:
     portfolio_value = 1.0
     peak_value = portfolio_value
@@ -44,6 +87,22 @@ def summarize_return_series(returns: np.ndarray) -> tuple[float, float, float, f
     return portfolio_value, portfolio_value - 1.0, annualized_return, annualized_volatility, max_drawdown
 
 
+def align_close_history(
+    symbols: list[str],
+    closes_by_symbol: dict[str, list[float]],
+) -> dict[str, list[float]]:
+    lengths = [len(closes_by_symbol[symbol]) for symbol in symbols]
+    common_length = min(lengths, default=0)
+    if common_length < 2:
+        raise ValueError("Not enough aligned price history to run the backtest.")
+    if len(set(lengths)) == 1:
+        return closes_by_symbol
+    return {
+        symbol: closes_by_symbol[symbol][-common_length:]
+        for symbol in symbols
+    }
+
+
 def run_backtest(
     symbols: list[str],
     closes_by_symbol: dict[str, list[float]],
@@ -55,7 +114,8 @@ def run_backtest(
     opt_config: OptimizationConfig,
     asset_class_matrix: np.ndarray | None,
 ) -> BacktestResult:
-    price_matrix = np.array([closes_by_symbol[symbol] for symbol in symbols], dtype=float)
+    aligned_closes = align_close_history(symbols, closes_by_symbol)
+    price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
     if price_matrix.ndim != 2 or price_matrix.shape[1] <= lookback_days + 1:
         raise ValueError("Not enough price history to run the backtest.")
 
@@ -129,7 +189,8 @@ def run_fixed_weight_benchmark(
     weights_by_symbol: dict[str, float],
     start_day: int,
 ) -> dict[str, float]:
-    price_matrix = np.array([closes_by_symbol[symbol] for symbol in symbols], dtype=float)
+    aligned_closes = align_close_history(symbols, closes_by_symbol)
+    price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
     returns = price_matrix[:, 1:] / price_matrix[:, :-1] - 1.0
     benchmark_weights = np.array([weights_by_symbol.get(symbol, 0.0) for symbol in symbols], dtype=float)
     benchmark_returns = np.array(
@@ -159,8 +220,11 @@ def run_dual_momentum_backtest(
     rebalance_every: int,
     top_k: int,
     absolute_threshold: float,
+    weighting: str = "equal",
+    softmax_temperature: float = 0.05,
 ) -> BacktestResult:
-    price_matrix = np.array([closes_by_symbol[symbol] for symbol in symbols], dtype=float)
+    aligned_closes = align_close_history(symbols, closes_by_symbol)
+    price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
     if price_matrix.ndim != 2 or price_matrix.shape[1] <= lookback_days + 1:
         raise ValueError("Not enough price history to run the backtest.")
 
@@ -196,6 +260,7 @@ def run_dual_momentum_backtest(
     for step in range(lookback_days, returns.shape[1]):
         if (step - lookback_days) % rebalance_every == 0:
             trailing_returns = price_matrix[:, step] / price_matrix[:, step - lookback_days] - 1.0
+            trailing_volatility = returns[:, step - lookback_days : step].std(axis=1, ddof=0)
             defensive_floor = (
                 float(trailing_returns[cash_like_index])
                 if cash_like_index is not None
@@ -213,9 +278,14 @@ def run_dual_momentum_backtest(
 
             target_weights = np.zeros(len(symbols), dtype=float)
             if risky_ranked:
-                selected = [index for index, _score in risky_ranked[:top_k]]
-                weight = 1.0 / len(selected)
-                for index in selected:
+                selected = risky_ranked[:top_k]
+                for index, weight in _dual_momentum_selected_weights(
+                    selected=selected,
+                    trailing_returns=trailing_returns,
+                    trailing_volatility=trailing_volatility,
+                    weighting=weighting,
+                    softmax_temperature=softmax_temperature,
+                ).items():
                     target_weights[index] = weight
             elif defensive_indices:
                 weight = 1.0 / len(defensive_indices)
@@ -265,11 +335,14 @@ def rolling_window_comparison(
     asset_class_matrix: np.ndarray | None,
     top_k: int,
     absolute_threshold: float,
+    weighting: str,
+    softmax_temperature: float,
 ) -> dict[str, float | int]:
     if window_days <= 0 or step_days <= 0:
         raise ValueError("window_days and step_days must be positive.")
 
-    total_periods = len(closes_by_symbol[symbols[0]]) - 1
+    aligned_closes = align_close_history(symbols, closes_by_symbol)
+    total_periods = len(aligned_closes[symbols[0]]) - 1
     if total_periods < lookback_days + window_days:
         raise ValueError("Not enough price history to run the requested rolling-window comparison.")
 
@@ -277,7 +350,7 @@ def rolling_window_comparison(
     last_start = total_periods - (lookback_days + window_days)
     for start in range(0, last_start + 1, step_days):
         end = start + lookback_days + window_days + 1
-        window_closes = {symbol: closes[start:end] for symbol, closes in closes_by_symbol.items()}
+        window_closes = {symbol: closes[start:end] for symbol, closes in aligned_closes.items()}
 
         if strategy == "dual-momentum":
             backtest = run_dual_momentum_backtest(
@@ -288,6 +361,8 @@ def rolling_window_comparison(
                 rebalance_every=rebalance_every,
                 top_k=top_k,
                 absolute_threshold=absolute_threshold,
+                weighting=weighting,
+                softmax_temperature=softmax_temperature,
             )
         else:
             backtest = run_backtest(
