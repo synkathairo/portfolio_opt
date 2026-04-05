@@ -143,6 +143,8 @@ uv run portfolio-opt \
   --offline
 ```
 
+The CLIs now default `XDG_CACHE_HOME` and `MPLCONFIGDIR` into the repo-local `.cache/` directory so offline runs do not try to write user-level Matplotlib or Fontconfig caches outside the workspace.
+
 To run a simple parameter sweep in backtest mode:
 
 ```bash
@@ -173,6 +175,23 @@ uv run cvxportfolio-backtest \
   --model examples/sample_universe.json \
   --lookback-days 126 \
   --backtest-days 252
+```
+
+For repeatable offline comparison runs:
+
+```bash
+uv run cvxportfolio-backtest \
+  --model examples/sample_universe.json \
+  --lookback-days 126 \
+  --backtest-days 252 \
+  --use-cache \
+  --refresh-cache
+
+uv run cvxportfolio-backtest \
+  --model examples/sample_universe.json \
+  --lookback-days 126 \
+  --backtest-days 252 \
+  --offline
 ```
 
 The current best-known preset is captured in `examples/cvxportfolio_best_preset.json`.

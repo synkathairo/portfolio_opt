@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import argparse
 
+from portfolio_opt.runtime import configure_local_cache_dirs
+
+configure_local_cache_dirs()
+
 from .backtest import format_backtest, run_cvxportfolio_backtest, run_cvxportfolio_sweep
 
 
@@ -20,9 +24,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--planning-horizon", type=int, default=1)
     parser.add_argument("--sweep", action="store_true", help="Run a simple parameter sweep for the cvxportfolio path.")
     parser.add_argument("--top-n", type=int, default=5)
-    parser.add_argument("--use-cache", action="store_true")
-    parser.add_argument("--refresh-cache", action="store_true")
-    parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--use-cache", action="store_true", help="Use cached Alpaca data when available.")
+    parser.add_argument("--refresh-cache", action="store_true", help="Refresh cached Alpaca data from the API.")
+    parser.add_argument("--offline", action="store_true", help="Use cached data only and never call Alpaca.")
     return parser.parse_args()
 
 

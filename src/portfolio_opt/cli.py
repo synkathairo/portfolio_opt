@@ -14,6 +14,9 @@ from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_pric
 from .model import load_model_inputs
 from .optimizer import effective_turnover_penalty, optimize_weights
 from .rebalance import build_order_plan, current_weights
+from .runtime import configure_local_cache_dirs
+
+configure_local_cache_dirs()
 
 
 def build_asset_class_matrix(
