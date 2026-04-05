@@ -135,6 +135,9 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Submit market orders to Alpaca. Default behavior is dry-run output only.",
     )
+    parser.add_argument("--use-cache", action="store_true", help="Use cached Alpaca data when available.")
+    parser.add_argument("--refresh-cache", action="store_true", help="Refresh cached Alpaca data from the API.")
+    parser.add_argument("--offline", action="store_true", help="Use cached data only and never call Alpaca.")
     parser.add_argument("--dry-run", action="store_true", help="Explicit dry-run mode.")
     return parser.parse_args()
 
@@ -161,8 +164,8 @@ def main() -> None:
     alpaca = AlpacaClient(AlpacaConfig.from_env())
     # Even in dry-run mode we fetch live account state, because the rebalance
     # plan depends on current equity, holdings, and market prices.
-    account = alpaca.get_account()
-    positions = alpaca.get_positions()
+    account = alpaca.get_account(use_cache=args.use_cache, refresh_cache=args.refresh_cache, offline=args.offline)
+    positions = alpaca.get_positions(use_cache=args.use_cache, refresh_cache=args.refresh_cache, offline=args.offline)
     existing_weights_map = current_weights(model.symbols, account, positions)
     existing_weights = np.array([existing_weights_map[symbol] for symbol in model.symbols], dtype=float)
     scaled_turnover_penalty = effective_turnover_penalty(opt_config, existing_weights)
@@ -177,7 +180,13 @@ def main() -> None:
 
     if args.backtest_days > 0:
         total_days = args.lookback_days + args.backtest_days + 1
-        closes_by_symbol = alpaca.get_daily_closes_for_period(model.symbols, total_days)
+        closes_by_symbol = alpaca.get_daily_closes_for_period(
+            model.symbols,
+            total_days,
+            use_cache=args.use_cache,
+            refresh_cache=args.refresh_cache,
+            offline=args.offline,
+        )
         if args.sweep:
             risk_grid = [1.0, 2.0, 4.0]
             cash_grid = [0.05, 0.10, 0.20]
@@ -337,7 +346,13 @@ def main() -> None:
         return
 
     if args.estimate_from_history:
-        closes_by_symbol = alpaca.get_daily_closes(model.symbols, args.lookback_days)
+        closes_by_symbol = alpaca.get_daily_closes(
+            model.symbols,
+            args.lookback_days,
+            use_cache=args.use_cache,
+            refresh_cache=args.refresh_cache,
+            offline=args.offline,
+        )
         if args.return_model == "momentum":
             estimated = estimate_inputs_from_momentum(
                 symbols=model.symbols,
@@ -389,7 +404,12 @@ def main() -> None:
 
     # Convert target weights into dollar notional orders using the latest
     # available prices and a minimum rebalance threshold.
-    latest_prices = alpaca.get_latest_prices(model.symbols)
+    latest_prices = alpaca.get_latest_prices(
+        model.symbols,
+        use_cache=args.use_cache,
+        refresh_cache=args.refresh_cache,
+        offline=args.offline,
+    )
     plan = build_order_plan(
         symbols=model.symbols,
         target_weights=target_weights.tolist(),

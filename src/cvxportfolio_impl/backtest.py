@@ -24,12 +24,21 @@ def prepare_cvxportfolio_context(
     model_path: str,
     lookback_days: int,
     backtest_days: int,
+    use_cache: bool = False,
+    refresh_cache: bool = False,
+    offline: bool = False,
 ) -> tuple:
     model = load_model_inputs(model_path)
     alpaca = AlpacaClient(AlpacaConfig.from_env())
     warmup_days = max(lookback_days, 252)
     total_days = warmup_days + backtest_days + 1
-    closes_by_symbol = alpaca.get_daily_closes_for_period(model.symbols, total_days)
+    closes_by_symbol = alpaca.get_daily_closes_for_period(
+        model.symbols,
+        total_days,
+        use_cache=use_cache,
+        refresh_cache=refresh_cache,
+        offline=offline,
+    )
     returns_frame, prices_frame = closes_to_market_data(closes_by_symbol)
     return model, closes_by_symbol, returns_frame, prices_frame, warmup_days
 
@@ -46,6 +55,9 @@ def run_cvxportfolio_backtest(
     momentum_window: int,
     linear_trade_cost: float = 0.0,
     planning_horizon: int = 1,
+    use_cache: bool = False,
+    refresh_cache: bool = False,
+    offline: bool = False,
 ) -> dict:
     try:
         import cvxportfolio as cvx
@@ -58,6 +70,9 @@ def run_cvxportfolio_backtest(
         model_path=model_path,
         lookback_days=lookback_days,
         backtest_days=backtest_days,
+        use_cache=use_cache,
+        refresh_cache=refresh_cache,
+        offline=offline,
     )
     forecasts = momentum_forecast(
         returns_frame=returns_frame,
@@ -183,6 +198,9 @@ def run_cvxportfolio_sweep(
     top_n: int,
     linear_trade_cost: float = 0.0,
     planning_horizon: int = 1,
+    use_cache: bool = False,
+    refresh_cache: bool = False,
+    offline: bool = False,
 ) -> dict:
     try:
         import cvxportfolio as cvx
@@ -195,6 +213,9 @@ def run_cvxportfolio_sweep(
         model_path=model_path,
         lookback_days=lookback_days,
         backtest_days=backtest_days,
+        use_cache=use_cache,
+        refresh_cache=refresh_cache,
+        offline=offline,
     )
     closes_by_symbol = _closes_by_symbol
     risk_grid = [0.5, 1.0, 2.0]

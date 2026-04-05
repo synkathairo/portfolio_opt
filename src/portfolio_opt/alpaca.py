@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from .cache import cache_path, read_cache, write_cache
 from .config import AlpacaConfig
 from .types import AccountSnapshot, OrderPlan, Position
 
@@ -15,12 +17,31 @@ class AlpacaClient:
     def __init__(self, config: AlpacaConfig) -> None:
         self._config = config
 
-    def get_account(self) -> AccountSnapshot:
-        payload = self._request_json("GET", "/v2/account")
+    def get_account(self, use_cache: bool = False, refresh_cache: bool = False, offline: bool = False) -> AccountSnapshot:
+        payload = self._cached_json(
+            "account",
+            {"kind": "account"},
+            lambda: self._request_json("GET", "/v2/account"),
+            use_cache=use_cache,
+            refresh_cache=refresh_cache,
+            offline=offline,
+        )
         return AccountSnapshot(equity=float(payload["equity"]))
 
-    def get_positions(self) -> list[Position]:
-        payload = self._request_json("GET", "/v2/positions")
+    def get_positions(
+        self,
+        use_cache: bool = False,
+        refresh_cache: bool = False,
+        offline: bool = False,
+    ) -> list[Position]:
+        payload = self._cached_json(
+            "positions",
+            {"kind": "positions"},
+            lambda: self._request_json("GET", "/v2/positions"),
+            use_cache=use_cache,
+            refresh_cache=refresh_cache,
+            offline=offline,
+        )
         return [
             Position(
                 symbol=row["symbol"],
@@ -30,16 +51,46 @@ class AlpacaClient:
             for row in payload
         ]
 
-    def get_latest_prices(self, symbols: list[str]) -> dict[str, float]:
-        query = urlencode({"symbols": ",".join(symbols), "feed": "iex"})
-        payload = self._request_json("GET", f"/v2/stocks/trades/latest?{query}", data_api=True)
+    def get_latest_prices(
+        self,
+        symbols: list[str],
+        use_cache: bool = False,
+        refresh_cache: bool = False,
+        offline: bool = False,
+    ) -> dict[str, float]:
+        payload = self._cached_json(
+            "latest_prices",
+            {"kind": "latest_prices", "symbols": symbols},
+            lambda: self._latest_prices_payload(symbols),
+            use_cache=use_cache,
+            refresh_cache=refresh_cache,
+            offline=offline,
+        )
         trades = payload.get("trades", {})
         return {
             symbol: float(trade["p"])
             for symbol, trade in trades.items()
         }
 
-    def get_daily_closes(self, symbols: list[str], lookback_days: int) -> dict[str, list[float]]:
+    def get_daily_closes(
+        self,
+        symbols: list[str],
+        lookback_days: int,
+        use_cache: bool = False,
+        refresh_cache: bool = False,
+        offline: bool = False,
+    ) -> dict[str, list[float]]:
+        cached = self._cached_json(
+            "daily_closes",
+            {"kind": "daily_closes", "symbols": symbols, "lookback_days": lookback_days},
+            lambda: self._daily_closes_payload(symbols, lookback_days),
+            use_cache=use_cache,
+            refresh_cache=refresh_cache,
+            offline=offline,
+        )
+        return {symbol: [float(value) for value in values] for symbol, values in cached.items()}
+
+    def _daily_closes_payload(self, symbols: list[str], lookback_days: int) -> dict[str, list[float]]:
         end = datetime.now(UTC)
         # Ask for more calendar days than the trading lookback to survive weekends
         # and holidays while still ending up with enough bars.
@@ -70,8 +121,25 @@ class AlpacaClient:
             closes_by_symbol[symbol] = closes
         return closes_by_symbol
 
-    def get_daily_closes_for_period(self, symbols: list[str], total_days: int) -> dict[str, list[float]]:
-        return self.get_daily_closes(symbols, total_days)
+    def _latest_prices_payload(self, symbols: list[str]) -> dict:
+        query = urlencode({"symbols": ",".join(symbols), "feed": "iex"})
+        return self._request_json("GET", f"/v2/stocks/trades/latest?{query}", data_api=True)
+
+    def get_daily_closes_for_period(
+        self,
+        symbols: list[str],
+        total_days: int,
+        use_cache: bool = False,
+        refresh_cache: bool = False,
+        offline: bool = False,
+    ) -> dict[str, list[float]]:
+        return self.get_daily_closes(
+            symbols,
+            total_days,
+            use_cache=use_cache,
+            refresh_cache=refresh_cache,
+            offline=offline,
+        )
 
     def submit_order_plan(self, plans: list[OrderPlan]) -> None:
         for plan in plans:
@@ -85,6 +153,28 @@ class AlpacaClient:
                 "time_in_force": "day",
             }
             self._request_json("POST", "/v2/orders", payload=order)
+
+    def _cached_json(
+        self,
+        name: str,
+        key_payload: dict,
+        fetcher,
+        *,
+        use_cache: bool,
+        refresh_cache: bool,
+        offline: bool,
+    ) -> dict | list:
+        path = cache_path(name, key_payload)
+        if offline:
+            if not path.exists():
+                raise RuntimeError(f"Offline mode requested but cache is missing: {path}")
+            return read_cache(path)
+        if use_cache and path.exists() and not refresh_cache:
+            return read_cache(path)
+        payload = fetcher()
+        if use_cache or refresh_cache:
+            write_cache(path, payload)
+        return payload
 
     def _request_json(
         self,

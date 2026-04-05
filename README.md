@@ -122,6 +122,27 @@ uv run portfolio-opt \
   --min-invested-weight 0.30
 ```
 
+To cache Alpaca data locally for repeatable testing:
+
+```bash
+uv run portfolio-opt \
+  --model examples/sample_universe.json \
+  --backtest-days 252 \
+  --estimate-from-history \
+  --use-cache \
+  --refresh-cache
+```
+
+Then rerun without hitting Alpaca:
+
+```bash
+uv run portfolio-opt \
+  --model examples/sample_universe.json \
+  --backtest-days 252 \
+  --estimate-from-history \
+  --offline
+```
+
 To run a simple parameter sweep in backtest mode:
 
 ```bash

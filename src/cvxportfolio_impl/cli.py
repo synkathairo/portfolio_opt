@@ -20,6 +20,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--planning-horizon", type=int, default=1)
     parser.add_argument("--sweep", action="store_true", help="Run a simple parameter sweep for the cvxportfolio path.")
     parser.add_argument("--top-n", type=int, default=5)
+    parser.add_argument("--use-cache", action="store_true")
+    parser.add_argument("--refresh-cache", action="store_true")
+    parser.add_argument("--offline", action="store_true")
     return parser.parse_args()
 
 
@@ -33,6 +36,9 @@ def main() -> None:
             top_n=args.top_n,
             linear_trade_cost=args.linear_trade_cost,
             planning_horizon=args.planning_horizon,
+            use_cache=args.use_cache,
+            refresh_cache=args.refresh_cache,
+            offline=args.offline,
         )
         print(format_backtest(result))
         return
@@ -48,6 +54,9 @@ def main() -> None:
         momentum_window=args.momentum_window,
         linear_trade_cost=args.linear_trade_cost,
         planning_horizon=args.planning_horizon,
+        use_cache=args.use_cache,
+        refresh_cache=args.refresh_cache,
+        offline=args.offline,
     )
     print(format_backtest(result))
 
