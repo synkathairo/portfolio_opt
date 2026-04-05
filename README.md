@@ -197,6 +197,14 @@ For a wider ETF research universe with sector sleeves in addition to the broad a
 
 If you switch to that universe, prime the Alpaca cache once before offline runs because it uses a different symbol set.
 
+For a more global macro-style research universe with explicit Japan and international-bond sleeves, see `examples/global_universe.json`. This adds:
+
+- country-specific developed exposure: `EWJ`
+- international developed sovereign bonds: `BWX`
+- emerging market bonds: `EMB`
+
+Those sleeves are optional research tools rather than defaults. They help if you want to test whether international equity and bond rotation improves the signal, but they also add FX and country-risk noise, so they should be compared against the simpler broad and sector universes before becoming a default path.
+
 ## Submit Orders
 
 ```bash
