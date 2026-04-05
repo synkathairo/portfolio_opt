@@ -44,6 +44,8 @@ def run_cvxportfolio_backtest(
     max_weight: float,
     mean_shrinkage: float,
     momentum_window: int,
+    linear_trade_cost: float = 0.0,
+    planning_horizon: int = 1,
 ) -> dict:
     try:
         import cvxportfolio as cvx
@@ -74,6 +76,7 @@ def run_cvxportfolio_backtest(
         class_min_weights=model.class_min_weights,
         class_max_weights=model.class_max_weights,
         asset_classes=model.asset_classes,
+        planning_horizon=planning_horizon,
     )
     simulator = cvx.MarketSimulator(returns=returns_frame, prices=prices_frame, cash_key="USDOLLAR")
     result = simulator.backtest(policy, start_time=returns_frame.index[warmup_days])
@@ -83,8 +86,11 @@ def run_cvxportfolio_backtest(
     final_value = float(result.v.iloc[-1])
     normalized_final_value = final_value / initial_value if initial_value else final_value
     realized_returns = result.v.pct_change().dropna().to_numpy()
+    turnover_series = result.turnover.reindex(result.v.index).fillna(0.0).to_numpy()
+    # Apply a simple proportional transaction cost ex-post using reported turnover.
+    net_realized_returns = realized_returns - linear_trade_cost * turnover_series[1:]
     realized_final_value, realized_total_return, geometric_annualized_return, realized_annualized_volatility, realized_max_drawdown = (
-        summarize_return_series(realized_returns)
+        summarize_return_series(net_realized_returns)
     )
     geometric_sharpe = (
         geometric_annualized_return / realized_annualized_volatility
@@ -142,6 +148,8 @@ def run_cvxportfolio_backtest(
             "risk_aversion": risk_aversion,
             "mean_shrinkage": mean_shrinkage,
             "momentum_window": momentum_window,
+            "linear_trade_cost": linear_trade_cost,
+            "planning_horizon": planning_horizon,
             "first_timestamp": first_timestamp,
             "last_timestamp": last_timestamp,
             "realized_periods": realized_periods,
@@ -173,6 +181,8 @@ def run_cvxportfolio_sweep(
     lookback_days: int,
     backtest_days: int,
     top_n: int,
+    linear_trade_cost: float = 0.0,
+    planning_horizon: int = 1,
 ) -> dict:
     try:
         import cvxportfolio as cvx
@@ -186,6 +196,7 @@ def run_cvxportfolio_sweep(
         lookback_days=lookback_days,
         backtest_days=backtest_days,
     )
+    closes_by_symbol = _closes_by_symbol
     risk_grid = [0.5, 1.0, 2.0]
     shrinkage_grid = [0.5, 0.75, 0.9]
     cash_grid = [0.05, 0.10, 0.20]
@@ -218,11 +229,14 @@ def run_cvxportfolio_sweep(
                 class_min_weights=model.class_min_weights,
                 class_max_weights=model.class_max_weights,
                 asset_classes=model.asset_classes,
+                planning_horizon=planning_horizon,
             )
             simulator = cvx.MarketSimulator(returns=returns_frame, prices=prices_frame, cash_key="USDOLLAR")
             result = simulator.backtest(policy, start_time=returns_frame.index[warmup_days])
             realized_returns = result.v.pct_change().dropna().to_numpy()
-            _, _, annualized_return, annualized_volatility, max_drawdown = summarize_return_series(realized_returns)
+            turnover_series = result.turnover.reindex(result.v.index).fillna(0.0).to_numpy()
+            net_realized_returns = realized_returns - linear_trade_cost * turnover_series[1:]
+            _, _, annualized_return, annualized_volatility, max_drawdown = summarize_return_series(net_realized_returns)
             sharpe_ratio = annualized_return / annualized_volatility if annualized_volatility > 0 else 0.0
             results.append(
                 {
@@ -257,17 +271,46 @@ def run_cvxportfolio_sweep(
         ),
         reverse=True,
     )
+    benchmark_results = {
+        "spy": run_fixed_weight_benchmark(
+            symbols=model.symbols,
+            closes_by_symbol=closes_by_symbol,
+            weights_by_symbol={"SPY": 1.0},
+            start_day=lookback_days,
+        ),
+        "sixty_forty_spy_tlt": run_fixed_weight_benchmark(
+            symbols=model.symbols,
+            closes_by_symbol=closes_by_symbol,
+            weights_by_symbol={"SPY": 0.6, "TLT": 0.4},
+            start_day=lookback_days,
+        ),
+        "equal_weight": run_fixed_weight_benchmark(
+            symbols=model.symbols,
+            closes_by_symbol=closes_by_symbol,
+            weights_by_symbol={symbol: 1.0 / len(model.symbols) for symbol in model.symbols},
+            start_day=lookback_days,
+        ),
+        "half_spy_half_cash": run_fixed_weight_benchmark(
+            symbols=model.symbols,
+            closes_by_symbol=closes_by_symbol,
+            weights_by_symbol={"SPY": 0.5},
+            start_day=lookback_days,
+        ),
+    }
     return {
         "symbols": model.symbols,
         "cvxportfolio_sweep": {
             "days": backtest_days,
             "warmup_days": warmup_days,
+            "linear_trade_cost": linear_trade_cost,
+            "planning_horizon": planning_horizon,
             "top_n": top_n,
             "tested": len(results),
             "skipped": len(skipped),
             "results": results[:top_n],
             "skipped_examples": skipped[: min(5, len(skipped))],
         },
+        "benchmarks": benchmark_results,
     }
 
 

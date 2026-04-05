@@ -14,6 +14,7 @@ def build_policy(
     class_min_weights: dict[str, float],
     class_max_weights: dict[str, float],
     asset_classes: dict[str, str],
+    planning_horizon: int = 1,
 ):
     objective = cvx.ReturnsForecast(r_hat=forecasts) - risk_aversion * cvx.FullCovariance()
     constraints = [
@@ -39,6 +40,13 @@ def build_policy(
             index=symbols,
         )
         constraints.append(cvx.FactorMaxLimit(exposure, upper_bound))
+
+    if planning_horizon > 1:
+        return cvx.MultiPeriodOptimization(
+            objective,
+            constraints,
+            planning_horizon=planning_horizon,
+        )
 
     return cvx.SinglePeriodOptimization(
         objective=objective,

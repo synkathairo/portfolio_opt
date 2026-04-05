@@ -16,6 +16,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-cash-weight", type=float, default=0.10)
     parser.add_argument("--min-invested-weight", type=float, default=0.30)
     parser.add_argument("--max-weight", type=float, default=0.35)
+    parser.add_argument("--linear-trade-cost", type=float, default=0.0)
+    parser.add_argument("--planning-horizon", type=int, default=1)
     parser.add_argument("--sweep", action="store_true", help="Run a simple parameter sweep for the cvxportfolio path.")
     parser.add_argument("--top-n", type=int, default=5)
     return parser.parse_args()
@@ -29,6 +31,8 @@ def main() -> None:
             lookback_days=args.lookback_days,
             backtest_days=args.backtest_days,
             top_n=args.top_n,
+            linear_trade_cost=args.linear_trade_cost,
+            planning_horizon=args.planning_horizon,
         )
         print(format_backtest(result))
         return
@@ -42,6 +46,8 @@ def main() -> None:
         max_weight=args.max_weight,
         mean_shrinkage=args.mean_shrinkage,
         momentum_window=args.momentum_window,
+        linear_trade_cost=args.linear_trade_cost,
+        planning_horizon=args.planning_horizon,
     )
     print(format_backtest(result))
 

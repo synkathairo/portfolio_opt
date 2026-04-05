@@ -53,6 +53,11 @@ uv run cvxportfolio-backtest \
   --top-n 5
 ```
 
+You can also experiment with:
+
+- `--linear-trade-cost` for a simple proportional transaction-cost term
+- `--planning-horizon` to switch from single-period to multi-period optimization
+
 ## Comparison Rule
 
 Do not replace `src/portfolio_opt/` yet. The point of this package is side-by-side evaluation, not migration by assumption.

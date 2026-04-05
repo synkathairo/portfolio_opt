@@ -1,0 +1,13 @@
+{
+  "model": "examples/sample_universe.json",
+  "lookback_days": 126,
+  "backtest_days": 252,
+  "risk_aversion": 0.5,
+  "mean_shrinkage": 0.5,
+  "momentum_window": 84,
+  "min_cash_weight": 0.05,
+  "min_invested_weight": 0.4,
+  "max_weight": 0.35,
+  "linear_trade_cost": 0.0,
+  "planning_horizon": 1
+}

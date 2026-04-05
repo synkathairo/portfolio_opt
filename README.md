@@ -154,6 +154,8 @@ uv run cvxportfolio-backtest \
   --backtest-days 252
 ```
 
+The current best-known preset is captured in `examples/cvxportfolio_best_preset.json`.
+
 ## Model File Format
 
 ```json
