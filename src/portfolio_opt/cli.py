@@ -21,6 +21,7 @@ from .model import load_model_inputs
 from .optimizer import effective_turnover_penalty, optimize_weights
 from .rebalance import build_order_plan, current_weights
 from .runtime import configure_local_cache_dirs
+from .yfinance_data import fetch_closes as yf_fetch_closes
 
 configure_local_cache_dirs()
 
@@ -172,6 +173,12 @@ def parse_args() -> argparse.Namespace:
         help="Risk aversion for basket mean-variance optimization.",
     )
     parser.add_argument(
+        "--data-source",
+        choices=("alpaca", "yfinance"),
+        default="alpaca",
+        help="Source for historical price data in backtest mode.",
+    )
+    parser.add_argument(
         "--backtest-days",
         type=int,
         default=0,
@@ -249,13 +256,19 @@ def main() -> None:
 
     if args.backtest_days > 0:
         total_days = args.lookback_days + args.backtest_days + 1
-        closes_by_symbol = alpaca.get_daily_closes_for_period(
-            model.symbols,
-            total_days,
-            use_cache=args.use_cache,
-            refresh_cache=args.refresh_cache,
-            offline=args.offline,
-        )
+        if args.data_source == "yfinance":
+            closes_by_symbol = yf_fetch_closes(model.symbols, period="max")
+            # Trim to the requested total_days from the most recent
+            for s in closes_by_symbol:
+                closes_by_symbol[s] = closes_by_symbol[s][-total_days:]
+        else:
+            closes_by_symbol = alpaca.get_daily_closes_for_period(
+                model.symbols,
+                total_days,
+                use_cache=args.use_cache,
+                refresh_cache=args.refresh_cache,
+                offline=args.offline,
+            )
         if args.sweep:
             if args.strategy == "dual-momentum":
                 raise ValueError("Sweep mode is only implemented for the mean-variance path.")

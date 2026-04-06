@@ -145,6 +145,23 @@ uv run portfolio-opt \
 
 The CLIs now default `XDG_CACHE_HOME` and `MPLCONFIGDIR` into the repo-local `.cache/` directory so offline runs do not try to write user-level Matplotlib or Fontconfig caches outside the workspace.
 
+To backtest with full historical data from Yahoo Finance (going back to each ETF's inception):
+
+```bash
+uv run portfolio-opt \
+  --model examples/sector_universe_pre2020.json \
+  --strategy dual-momentum \
+  --lookback-days 252 \
+  --backtest-days 4500 \
+  --rebalance-every 5 \
+  --top-k 2 \
+  --data-source yfinance
+```
+
+This reaches back to mid-2007 when all symbols in the universe are available,
+covering the 2008 financial crisis, the 2020 pandemic crash, and everything since.
+Alpaca data is capped at ~7 years; yfinance provides the full history.
+
 To run a simple parameter sweep in backtest mode:
 
 ```bash
@@ -197,14 +214,26 @@ For a wider ETF research universe with sector sleeves in addition to the broad a
 
 ### Dual-Momentum Strategy (Best Known Configuration)
 
-Backtested on `examples/sector_universe_pre2020.json` over 1,600 trading days (~6 years):
+Backtested on `examples/sector_universe_pre2020.json` using yfinance data (mid-2007 to April 2026 — ~18 years, through the 2008 crisis):
+
+| Configuration | Annualized Return | Volatility | Max Drawdown | Final Value |
+|---|---|---|---|---|
+| **Top-2 weekly + 15% trailing stop** | **13.53%** | 18.20% | 29.40% | 9.39x |
+| Top-2 weekly | 13.39% | 18.59% | 30.95% | 9.19x |
+| SPY benchmark | 11.87% | 19.87% | 47.17% | 7.25x |
+
+The strategy survived the 2008 financial crisis with a 29% drawdown vs SPY's 47%,
+delivering 1.7% more annualized return over the full 18-year period.
+
+Earlier results on the 2020–2026 window only (Alpaca data):
 
 | Configuration | Annualized Return | Volatility | Max Drawdown |
 |---|---|---|---|
-| **Top-2 weekly + 15% trailing stop** | **29.29%** | 19.95% | 20.64% |
-| Top-2 weekly | 28.40% | 20.34% | 23.25% |
-| Top-2 daily + 15% trailing stop | 28.19% | 20.15% | 19.46% |
-| SPY benchmark | 10.22% | 17.21% | 24.51% |
+| Top-2 weekly (2020–2026) | 28.40% | 20.34% | 23.25% |
+| Top-2 weekly + 15% stop (2020–2026) | 29.29% | 19.95% | 20.64% |
+
+The longer yfinance window includes the 2008 crash and early-market conditions,
+bringing returns closer to long-run historical averages.
 
 **Recommended deployment:**
 
