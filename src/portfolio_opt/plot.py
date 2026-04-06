@@ -7,16 +7,18 @@ Usage:
     # Or pass a saved JSON file:
     uv run python -m portfolio_opt.plot backtest_result.json
 
-    # Or a backtest log file (JSON lines from --log-file):
-    uv run python -m portfolio_opt.py --log-file mylog.jsonl
+    # Or fetch live portfolio history from Alpaca:
+    uv run python -m portfolio_opt.plot --alpaca-history
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlencode
 
 import matplotlib
 import matplotlib.dates as mdates
@@ -24,6 +26,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import yfinance as yf
+
+from .alpaca import AlpacaClient
+from .config import AlpacaConfig
 
 matplotlib.use("Agg")
 
@@ -81,22 +86,51 @@ def _plot_from_result(result: dict, save_path: str, benchmark: str = "SPY") -> N
     print(f"Saved chart to {save_path}")
 
 
-def _plot_from_log(log_path: str, save_path: str, benchmark: str = "SPY") -> None:
-    # For a log file, we just plot the equity values recorded over time
-    equities = []
-    for line in Path(log_path).read_text().splitlines():
-        entry = json.loads(line)
-        if "equity" in entry:
-            equities.append(entry["equity"])
-    if not equities:
-        print("No equity data found in log file.", file=sys.stderr)
+def _plot_from_alpaca_history(
+    save_path: str,
+    benchmark: str = "SPY",
+    period: str = "1M",
+    timeframe: str = "1D",
+) -> None:
+    """Fetch portfolio history from Alpaca and plot against benchmark."""
+    alpaca = AlpacaClient(AlpacaConfig.from_env())
+    query = urlencode({"period": period, "timeframe": timeframe})
+    payload = alpaca._request_json("GET", f"/v2/account/portfolio/history?{query}")
+
+    timestamps = payload.get("timestamp", [])
+    equity_curve = payload.get("equity", [])
+    if not timestamps or not equity_curve:
+        print("No portfolio history found. Is your account funded?", file=sys.stderr)
         return
 
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(equities, marker="o", markersize=3, linewidth=1.5)
-    ax.set_title("Portfolio Equity Over Time")
-    ax.set_ylabel("Account Equity ($)")
+    # Convert millisecond timestamps to datetime
+    dates = pd.to_datetime([t / 1000 for t in timestamps], unit="s")
+    # Normalize to start at 1.0
+    equity_values = [e / equity_curve[0] if equity_curve[0] > 0 else 1.0 for e in equity_curve]
+
+    # Fetch benchmark for the same date range
+    ticker = yf.Ticker(benchmark)
+    start = dates.min() - timedelta(days=5)
+    end = dates.max() + timedelta(days=1)
+    hist = ticker.history(start=start, end=end)
+    if hist.empty:
+        print(f"Could not fetch {benchmark} data from yfinance.", file=sys.stderr)
+        return
+
+    hist = hist.copy()
+    hist.index = hist.index.tz_localize(None)
+    bench_series = hist["Close"].reindex(dates.normalize()).ffill().bfill()
+    bench_values = bench_series.values / bench_series.values[0]
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(dates, equity_values, label="Portfolio", linewidth=2)
+    ax.plot(dates, bench_values, label=benchmark, linestyle="--", alpha=0.7)
+    ax.set_title("Live Portfolio vs Benchmark")
+    ax.legend()
     ax.grid(True, alpha=0.3)
+    ax.set_ylabel("Growth of $1")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+    fig.autofmt_xdate()
     fig.tight_layout()
     fig.savefig(save_path, dpi=150)
     print(f"Saved chart to {save_path}")
@@ -106,13 +140,19 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Plot portfolio performance")
-    parser.add_argument("input", nargs="?", help="JSON result file or .jsonl log file")
+    parser.add_argument("input", nargs="?", help="JSON result file from backtest")
     parser.add_argument("--output", default="performance.png", help="Output image path")
     parser.add_argument("--benchmark", default="SPY", help="Benchmark ticker")
+    parser.add_argument(
+        "--alpaca-history",
+        action="store_true",
+        help="Fetch live portfolio history from Alpaca API and plot it.",
+    )
+    parser.add_argument("--period", default="1M", help="Alpaca history period (e.g. 1M, 3M, 1Y).")
     args = parser.parse_args()
 
-    if args.input and args.input.endswith(".jsonl"):
-        _plot_from_log(args.input, args.output)
+    if args.alpaca_history:
+        _plot_from_alpaca_history(args.output, args.benchmark, args.period)
         return
 
     if args.input:
