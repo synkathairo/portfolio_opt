@@ -66,9 +66,9 @@ APCA_API_DATA_URL=https://data.alpaca.markets
 This project implements two complementary approaches to portfolio construction:
 
 **Dual momentum** draws from the time-series and cross-sectional momentum literature:
-- Jegadeesh & Titman (1993): "Returns to Buying Winners and Selling Losers"
-- Moskowitz, Ooi, Pedersen (2012): "Time Series Momentum"
-- Antonacci (2014): "Optimal Asset Allocation Using Momentum"
+- Jegadeesh & Titman (1993): "Returns to Buying Winners and Selling Losers" — *Journal of Finance*
+- Moskowitz, Ooi, Pedersen (2012): "Time Series Momentum" — *Journal of Financial Economics*
+- Antonacci (2014): *Dual Momentum Investing* — McGraw-Hill (book)
 
 The dual-momentum approach in this repo — rank assets by trailing return, hold the top-k, use a trailing stop for drawdown protection — is intentionally simpler than full optimization. It avoids the estimation error that DeMiguel, Garlappi, and Uppal (2009) showed makes mean-variance underperform naive diversification out-of-sample.
 
