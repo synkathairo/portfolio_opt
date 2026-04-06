@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -216,6 +217,14 @@ class AlpacaClient:
             offline=offline,
         )
 
+    def get_open_orders(self) -> list[dict[str, Any]]:
+        """Fetch currently active orders to avoid double-submitting."""
+        try:
+            payload = self._request_json("GET", "/v2/orders?status=open")
+            return payload if isinstance(payload, list) else []
+        except Exception:
+            return []
+
     def submit_order_plan(self, plans: list[OrderPlan]) -> None:
         for plan in plans:
             # Notional market orders keep the rebalance layer independent from
@@ -227,7 +236,12 @@ class AlpacaClient:
                 "type": "market",
                 "time_in_force": "day",
             }
-            self._request_json("POST", "/v2/orders", payload=order)
+            try:
+                self._request_json("POST", "/v2/orders", payload=order)
+            except Exception as exc:
+                # Log failure but continue with other orders to avoid
+                # leaving the portfolio in a partially filled state.
+                print(f"Failed to submit order for {plan.symbol}: {exc}", file=sys.stderr)
 
     def _cached_json(
         self,

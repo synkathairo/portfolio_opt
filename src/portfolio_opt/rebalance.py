@@ -28,8 +28,26 @@ def build_order_plan(
     positions: list[Position],
     latest_prices: dict[str, float],
     config: OptimizationConfig,
+    open_orders: list[dict] | None = None,
 ) -> list[OrderPlan]:
     weights_now = current_weights(symbols, account, positions)
+
+    # Adjust current weights for any pending orders so we don't
+    # double-submit or submit conflicting trades.
+    if open_orders:
+        for order in open_orders:
+            symbol = order.get("symbol")
+            if symbol in symbols:
+                # Calculate notional value of the open order
+                qty = float(order.get("qty", 0) or 0)
+                if order.get("side") == "sell":
+                    qty = -qty  # Sell reduces position
+                price = latest_prices.get(symbol, 0.0)
+                notional = qty * price
+                # Adjust weight
+                if account.equity > 0:
+                    weights_now[symbol] += notional / account.equity
+
     plans: list[OrderPlan] = []
     for symbol, target_weight in zip(symbols, target_weights, strict=True):
         current_weight = weights_now.get(symbol, 0.0)

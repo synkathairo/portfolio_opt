@@ -614,6 +614,10 @@ def main() -> None:
         refresh_cache=args.refresh_cache,
         offline=args.offline,
     )
+    
+    # Fetch open orders to prevent double-submission
+    open_orders = alpaca.get_open_orders()
+    
     plan = build_order_plan(
         symbols=model.symbols,
         target_weights=target_weights.tolist(),
@@ -621,6 +625,7 @@ def main() -> None:
         positions=positions,
         latest_prices=latest_prices,
         config=opt_config,
+        open_orders=open_orders,
     )
 
     result = {

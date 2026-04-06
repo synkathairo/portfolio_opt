@@ -58,11 +58,13 @@ Quick syntax verification:
 python3 -m compileall src
 ```
 
-Lightweight static type checking:
+Static type checking:
 
 ```bash
 uvx ty check
 ```
+
+**Before committing any code changes, always run `uvx ty check` and verify the plotter works by piping a test backtest into it.**
 
 If tests are added later, prefer `pytest`.
 The current lightweight test suite uses `pytest` under `tests/` for deterministic helper behavior and cache setup.

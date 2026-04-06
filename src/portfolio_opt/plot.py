@@ -41,7 +41,7 @@ def _plot_from_result(result: dict, save_path: str, benchmark: str = "SPY") -> N
 
     n = len(daily_values)
     # Generate a business day range ending today so the x-axis shows dates
-    end_date = pd.Timestamp(datetime.now()).normalize()
+    end_date = pd.Timestamp(datetime.now()).replace(hour=0, minute=0, second=0, microsecond=0)
     dates = pd.bdate_range(end=end_date, periods=n)
 
     # Fetch benchmark for the same date range
