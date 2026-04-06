@@ -29,6 +29,7 @@ def optimize_weights(
     covariance: np.ndarray,
     config: OptimizationConfig,
     current_weights: np.ndarray | None = None,
+    asset_class_matrix: np.ndarray | None = None,
 ) -> np.ndarray:
     asset_count = expected_returns.shape[0]
     weights = cp.Variable(asset_count)
@@ -55,9 +56,16 @@ def optimize_weights(
     else:
         # Allowing partial investment leaves the remainder in cash.
         constraints.append(cp.sum(weights) <= 1.0 - config.min_cash_weight)
+        constraints.append(cp.sum(weights) >= config.min_invested_weight)
     if config.max_turnover is not None:
         # Hard turnover cap for operational control on top of the soft penalty.
         constraints.append(cp.norm1(weights - baseline_weights) <= config.max_turnover)
+    if asset_class_matrix is not None:
+        class_exposures = asset_class_matrix @ weights
+        for class_index, min_weight in enumerate(config.class_min_weights.values()):
+            constraints.append(class_exposures[class_index] >= min_weight)
+        for class_index, max_weight in enumerate(config.class_max_weights.values()):
+            constraints.append(class_exposures[class_index] <= max_weight)
     problem = cp.Problem(objective, constraints)
     problem.solve()
 

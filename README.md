@@ -94,6 +94,7 @@ uv run portfolio-opt \
   --mean-shrinkage 0.75 \
   --allow-cash \
   --min-cash-weight 0.10 \
+  --min-invested-weight 0.30 \
   --max-turnover 0.30 \
   --turnover-penalty 0.05 \
   --dry-run
@@ -127,6 +128,28 @@ uv run portfolio-opt --model examples/sample_model.json --submit
 
 Returns and covariance should be on the same annualized basis.
 
+For universe-only files, you can also provide asset-class metadata and policy bounds:
+
+```json
+{
+  "symbols": ["SPY", "QQQ", "TLT", "GLD"],
+  "asset_classes": {
+    "SPY": "equity",
+    "QQQ": "equity",
+    "TLT": "bond",
+    "GLD": "commodity"
+  },
+  "class_min_weights": {
+    "equity": 0.2
+  },
+  "class_max_weights": {
+    "equity": 0.6,
+    "bond": 0.4,
+    "commodity": 0.3
+  }
+}
+```
+
 ## Notes
 
 - Fractional quantity handling is intentionally conservative and uses notional order sizing logic derived from current prices.
@@ -135,4 +158,5 @@ Returns and covariance should be on the same annualized basis.
 - The optimizer can optionally hold cash instead of forcing every dollar into risky assets.
 - A hard `max_turnover` constraint can be used alongside the soft turnover penalty.
 - The soft turnover penalty is scaled down automatically when the account is mostly in cash.
+- Asset-class bounds can be defined in the model file to keep allocations within a portfolio policy.
 - The project is managed with `uv`; keep `pyproject.toml` and `uv.lock` in sync.

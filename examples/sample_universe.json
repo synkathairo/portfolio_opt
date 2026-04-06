@@ -1,3 +1,17 @@
 {
-  "symbols": ["SPY", "QQQ", "TLT", "GLD"]
+  "symbols": ["SPY", "QQQ", "TLT", "GLD"],
+  "asset_classes": {
+    "SPY": "equity",
+    "QQQ": "equity",
+    "TLT": "bond",
+    "GLD": "commodity"
+  },
+  "class_min_weights": {
+    "equity": 0.2
+  },
+  "class_max_weights": {
+    "equity": 0.6,
+    "bond": 0.4,
+    "commodity": 0.3
+  }
 }

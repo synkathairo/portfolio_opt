@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from os import getenv
 
 from dotenv import load_dotenv
@@ -38,3 +38,6 @@ class OptimizationConfig:
     force_full_investment: bool = True
     min_cash_weight: float = 0.0
     max_turnover: float | None = None
+    min_invested_weight: float = 0.0
+    class_min_weights: dict[str, float] = field(default_factory=dict)
+    class_max_weights: dict[str, float] = field(default_factory=dict)

@@ -25,6 +25,7 @@ Subject to:
 
 - `min_weight <= w_i <= max_weight`
 - `sum(w) = 1` by default
+- optional cash, minimum invested weight, and asset-class exposure constraints
 
 Interpretation:
 
@@ -33,6 +34,7 @@ Interpretation:
 - `risk_aversion` penalizes volatility
 - `turnover_penalty` discourages large changes from current holdings
 - `effective_turnover_penalty` scales that penalty by current invested weight, so an all-cash account is not discouraged from entering its first positions
+- asset-class constraints keep the allocation within portfolio-policy bounds such as equity or commodity caps
 
 This is still a single-step rebalance model. It is not a multi-period planner.
 
