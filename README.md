@@ -34,6 +34,12 @@ source .venv/bin/activate
 
 `uv.lock` is checked in and should be updated with `uv lock` whenever dependencies change.
 
+For lightweight static type checking:
+
+```bash
+uvx ty check
+```
+
 ## Configure Alpaca
 
 Set environment variables directly, or place them in a local `.env` file:
@@ -205,4 +211,5 @@ For universe-only files, you can also provide asset-class metadata and policy bo
 - Backtest output includes simple fixed-weight benchmarks for comparison.
 - Sweep mode runs a small backtest grid over core policy parameters and returns the top results.
 - `src/cvxportfolio_impl/` is reserved for a side-by-side `cvxportfolio` experiment.
+- `uvx ty check` is the intended static type-checking entrypoint for this repo.
 - The project is managed with `uv`; keep `pyproject.toml` and `uv.lock` in sync.

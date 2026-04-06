@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from portfolio_opt.alpaca import AlpacaClient
-from portfolio_opt.backtest import run_fixed_weight_benchmark
+from portfolio_opt.backtest import run_fixed_weight_benchmark, summarize_return_series
 from portfolio_opt.config import AlpacaConfig, OptimizationConfig
 from portfolio_opt.model import load_model_inputs
 
@@ -31,7 +31,11 @@ def run_cvxportfolio_backtest(
 
     model = load_model_inputs(model_path)
     alpaca = AlpacaClient(AlpacaConfig.from_env())
-    total_days = lookback_days + backtest_days + 1
+    # cvxportfolio's built-in covariance forecaster needs its own history
+    # window. Use an explicit warmup so the realized backtest horizon matches
+    # the requested backtest_days instead of silently consuming test periods.
+    warmup_days = max(lookback_days, 252)
+    total_days = warmup_days + backtest_days + 1
     closes_by_symbol = alpaca.get_daily_closes_for_period(model.symbols, total_days)
     returns_frame, prices_frame = closes_to_market_data(closes_by_symbol)
     forecasts = momentum_forecast(
@@ -53,12 +57,24 @@ def run_cvxportfolio_backtest(
         asset_classes=model.asset_classes,
     )
     simulator = cvx.MarketSimulator(returns=returns_frame, prices=prices_frame, cash_key="USDOLLAR")
-    result = simulator.backtest(policy, start_time=returns_frame.index[lookback_days])
+    result = simulator.backtest(policy, start_time=returns_frame.index[warmup_days])
     latest_weights = result.w.iloc[-1].drop(labels=["USDOLLAR"], errors="ignore")
     latest_cash_weight = float(result.w.iloc[-1].get("USDOLLAR", 0.0))
     initial_value = float(result.v.iloc[0])
     final_value = float(result.v.iloc[-1])
     normalized_final_value = final_value / initial_value if initial_value else final_value
+    realized_returns = result.v.pct_change().dropna().to_numpy()
+    realized_final_value, realized_total_return, geometric_annualized_return, realized_annualized_volatility, realized_max_drawdown = (
+        summarize_return_series(realized_returns)
+    )
+    geometric_sharpe = (
+        geometric_annualized_return / realized_annualized_volatility
+        if realized_annualized_volatility > 0
+        else 0.0
+    )
+    first_timestamp = str(result.v.index[0])
+    last_timestamp = str(result.v.index[-1])
+    realized_periods = int(len(realized_returns))
     latest_class_exposures = {
         class_name: round(
             float(
@@ -103,18 +119,25 @@ def run_cvxportfolio_backtest(
         "symbols": model.symbols,
         "cvxportfolio_backtest": {
             "days": backtest_days,
+            "warmup_days": warmup_days,
             "risk_aversion": risk_aversion,
             "mean_shrinkage": mean_shrinkage,
             "momentum_window": momentum_window,
+            "first_timestamp": first_timestamp,
+            "last_timestamp": last_timestamp,
+            "realized_periods": realized_periods,
             "initial_value": round(initial_value, 6),
             "final_value": round(final_value, 6),
             "normalized_final_value": round(normalized_final_value, 6),
-            "total_return": round(normalized_final_value - 1.0, 6),
-            "annualized_return": round(float(result.annualized_average_return), 6),
-            "annualized_volatility": round(float(result.annualized_volatility), 6),
-            "max_drawdown": round(abs(float(result.drawdown.min())), 6),
+            "total_return": round(realized_total_return, 6),
+            "value_ratio_total_return": round(normalized_final_value - 1.0, 6),
+            "realized_return_series_final_value": round(realized_final_value, 6),
+            "annualized_return": round(float(geometric_annualized_return), 6),
+            "annualized_volatility": round(float(realized_annualized_volatility), 6),
+            "max_drawdown": round(float(realized_max_drawdown), 6),
             "average_turnover": round(float(result.turnover.mean()), 6),
-            "sharpe_ratio": round(float(result.sharpe_ratio), 6),
+            "sharpe_ratio": round(float(geometric_sharpe), 6),
+            "cvxportfolio_annualized_average_return": round(float(result.annualized_average_return), 6),
         },
         "latest_target_weights": {
             symbol: round(max(0.0, float(latest_weights.get(symbol, 0.0))), 6)

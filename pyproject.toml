@@ -25,3 +25,9 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ty.environment]
+python = ".venv/bin/python"
+
+[tool.ty.src]
+include = ["src"]
