@@ -1,0 +1,39 @@
+from __future__ import annotations
+
+import argparse
+
+from .backtest import format_backtest, run_cvxportfolio_backtest
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run a minimal cvxportfolio backtest on the repo universe.")
+    parser.add_argument("--model", required=True, help="Path to the model or universe JSON file.")
+    parser.add_argument("--lookback-days", type=int, default=126)
+    parser.add_argument("--backtest-days", type=int, default=252)
+    parser.add_argument("--risk-aversion", type=float, default=1.0)
+    parser.add_argument("--mean-shrinkage", type=float, default=0.75)
+    parser.add_argument("--momentum-window", type=int, default=63)
+    parser.add_argument("--min-cash-weight", type=float, default=0.10)
+    parser.add_argument("--min-invested-weight", type=float, default=0.30)
+    parser.add_argument("--max-weight", type=float, default=0.35)
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    result = run_cvxportfolio_backtest(
+        model_path=args.model,
+        lookback_days=args.lookback_days,
+        backtest_days=args.backtest_days,
+        risk_aversion=args.risk_aversion,
+        min_cash_weight=args.min_cash_weight,
+        min_invested_weight=args.min_invested_weight,
+        max_weight=args.max_weight,
+        mean_shrinkage=args.mean_shrinkage,
+        momentum_window=args.momentum_window,
+    )
+    print(format_backtest(result))
+
+
+if __name__ == "__main__":
+    main()

@@ -9,13 +9,16 @@ description = "Minimal cvxpy-based portfolio optimizer with Alpaca integration"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+  "cvxportfolio>=1.5.0",
   "cvxpy>=1.4",
   "numpy>=1.26",
+  "pandas>=2.2",
   "python-dotenv>=1.0",
 ]
 
 [project.scripts]
 portfolio-opt = "portfolio_opt.cli:main"
+cvxportfolio-backtest = "cvxportfolio_impl.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

@@ -23,6 +23,8 @@ Keep the first experiment narrow:
 4. Use similar cash and exposure constraints where possible
 5. Compare results directly against the custom implementation
 
+The first scaffold now exists as a minimal backtest-only path exposed through `cvxportfolio-backtest`.
+
 ## Success Criteria
 
 The `cvxportfolio` path is worth continuing if it clearly improves one or more of:

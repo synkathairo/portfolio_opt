@@ -137,6 +137,17 @@ uv run portfolio-opt \
 uv run portfolio-opt --model examples/sample_model.json --submit
 ```
 
+## cvxportfolio Experiment
+
+There is now a separate comparison path under `src/cvxportfolio_impl/`.
+
+```bash
+uv run cvxportfolio-backtest \
+  --model examples/sample_universe.json \
+  --lookback-days 126 \
+  --backtest-days 252
+```
+
 ## Model File Format
 
 ```json
