@@ -65,22 +65,40 @@ APCA_API_DATA_URL=https://data.alpaca.markets
 
 This project implements two complementary approaches to portfolio construction:
 
-**Dual momentum** draws from the time-series and cross-sectional momentum literature:
-- Jegadeesh & Titman (1993): "Returns to Buying Winners and Selling Losers" — *Journal of Finance*
-- Moskowitz, Ooi, Pedersen (2012): "Time Series Momentum" — *Journal of Financial Economics*
-- Antonacci (2014): *Dual Momentum Investing* — McGraw-Hill (book)
+**Dual momentum** [3] draws from the time-series and cross-sectional momentum literature [1, 2]:
+- Rank all risky assets by trailing return
+- Keep only those that beat the cash-like asset's return (absolute momentum filter)
+- Hold the top-k, equal-weighted
+- Exit any position that drops more than the trailing stop threshold from its peak
+- Otherwise fall back to defensive assets (bonds, cash)
 
-The dual-momentum approach in this repo — rank assets by trailing return, hold the top-k, use a trailing stop for drawdown protection — is intentionally simpler than full optimization. It avoids the estimation error that DeMiguel, Garlappi, and Uppal (2009) showed makes mean-variance underperform naive diversification out-of-sample.
+This approach avoids the estimation error that DeMiguel, Garlappi, and Uppal (2009) [4] showed makes mean-variance underperform naive diversification out-of-sample.
 
-**Mean-variance optimization** uses [`cvxpy`](https://www.cvxpy.org/) directly — a convex optimization library. The optimizer solves a single-period problem: maximize expected return penalized by risk (covariance) and turnover costs. This is the classical Markowitz framework with modern constraints. Four return-estimation methods are available:
+**Mean-variance optimization** uses [`cvxpy`](https://www.cvxpy.org/) directly — a convex optimization library solving a single-period problem: maximize expected return penalized by risk (covariance) and turnover costs. Four return-estimation methods are available:
 - `sample-mean` — historical average returns (shrunken toward zero)
 - `momentum` — trailing return as the expected-return signal
-- `black-litterman` — market equilibrium returns blended with momentum views (Black & Litterman 1992)
-- `risk-parity` — equal risk-contribution weights via covariance only (Maillard, Roncalli, Teïletche 2010)
+- `black-litterman` — market equilibrium returns blended with momentum views [5]
+- `risk-parity` — equal risk-contribution weights via covariance only [6]
 
 In our tests across 20 years of data, mean-variance underperforms dual momentum regardless of the return model (6-8% vs 13.5% annualized) because the covariance matrix pushes the optimizer toward minimum-variance positions.
 
-**`cvxportfolio`** (Boyd et al., "Multi-Period Trading via Convex Optimization", [arXiv:1705.00109](https://arxiv.org/abs/1705.00109)) provides a broader framework that models transaction costs, holding costs, and multi-period planning. The `src/cvxportfolio_impl/` directory contains a side-by-side implementation using this library. In our tests it was significantly more conservative than dual momentum (3-4% annualized vs 13-28%) because the optimizer's covariance structure pushes toward minimum-variance positions even with low risk aversion.
+**`cvxportfolio`** (Boyd et al. [7]) provides a broader multi-period framework that models transaction costs, holding costs, and planning across future steps. The `src/cvxportfolio_impl/` directory contains a side-by-side implementation. In our tests it was significantly more conservative than dual momentum (3-4% annualized vs 13-28%) because the optimizer's covariance structure pushes toward minimum-variance positions even with low risk aversion.
+
+### References
+
+[1] Jegadeesh, N., and S. Titman. 1993. "Returns to Buying Winners and Selling Losers: Implications for Stock Market Efficiency." *Journal of Finance* 48 (1): 65-91. https://doi.org/10.1111/j.1540-6261.1993.tb04702.x
+
+[2] Moskowitz, T. J., Y. H. Ooi, and L. H. Pedersen. 2012. "Time Series Momentum." *Journal of Financial Economics* 104 (2): 228-250. https://doi.org/10.1016/j.jfineco.2011.03.023
+
+[3] Antonacci, G. 2014. *Dual Momentum Investing: An Innovative Strategy for Higher Returns with Lower Risk*. New York: McGraw-Hill. ISBN 978-0071835893.
+
+[4] DeMiguel, V., L. Garlappi, and R. Uppal. 2009. "Optimal Versus Naive Diversification: How Inefficient Is the 1/N Portfolio Strategy?" *Review of Financial Studies* 22 (5): 1915-1953. https://doi.org/10.1093/rfs/hhm075
+
+[5] Black, F., and R. Litterman. 1992. "Global Portfolio Optimization." *Financial Analysts Journal* 48 (5): 28-43. https://doi.org/10.2469/faj.v48.n5.28
+
+[6] Maillard, S., T. Roncalli, and J. Teïletche. 2010. "The Properties of Equally Weighted Risk Contribution Portfolios." *Journal of Portfolio Management* 36 (4): 60-70. https://doi.org/10.3905/jpm.2010.36.4.060
+
+[7] Boyd, S., E. Busseti, S. Diamond, R. Kahn, K. Koh, P. Lundgren, et al. 2017. "Multi-Period Trading via Convex Optimization." arXiv:1705.00109. https://arxiv.org/abs/1705.00109
 
 ## Run A Dry Rebalance
 
