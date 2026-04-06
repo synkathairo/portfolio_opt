@@ -17,6 +17,7 @@ from .backtest import (
 )
 from .config import AlpacaConfig, OptimizationConfig
 from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
+from .black_litterman import estimate_inputs_from_black_litterman
 from .model import load_model_inputs
 from .optimizer import effective_turnover_penalty, optimize_weights
 from .rebalance import build_order_plan, current_weights
@@ -107,7 +108,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--return-model",
-        choices=("sample-mean", "momentum"),
+        choices=("sample-mean", "momentum", "black-litterman"),
         default="sample-mean",
         help="How to estimate expected returns when using --estimate-from-history.",
     )
@@ -528,6 +529,22 @@ def main() -> None:
             estimation_metadata = {
                 "method": "alpaca_daily_bars",
                 "return_model": args.return_model,
+                "lookback_days": args.lookback_days,
+                "mean_shrinkage": args.mean_shrinkage,
+                "observations": estimated.observations,
+                "momentum_window": min(args.momentum_window, args.lookback_days - 1),
+            }
+        elif args.return_model == "black-litterman":
+            estimated = estimate_inputs_from_black_litterman(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                momentum_window=args.momentum_window,
+                mean_shrinkage=args.mean_shrinkage,
+            )
+            expected_returns = estimated.expected_returns
+            covariance = estimated.covariance
+            estimation_metadata = {
+                "method": "black_litterman",
                 "lookback_days": args.lookback_days,
                 "mean_shrinkage": args.mean_shrinkage,
                 "observations": estimated.observations,
