@@ -5,6 +5,8 @@ A tactical portfolio optimizer with two strategy paths that can rebalance an Alp
 1. **Dual momentum** — ranks assets by trailing return, holds the top-k, exits positions that fall more than a trailing stop threshold.
 2. **Mean-variance** — `cvxpy` optimization of expected return vs. covariance with asset-class constraints and turnover penalties.
 
+(notes: much of this repo was generated using vibe-coding e.g. Codex and Qwen Coder)
+
 ## Strategy
 
 **Dual momentum** uses a simple but empirically strong approach:
