@@ -61,6 +61,21 @@ APCA_API_DATA_URL=https://data.alpaca.markets
 
 `.env` is gitignored in this repository. Paper trading is the default safe target.
 
+## Background & Research
+
+This project implements two complementary approaches to portfolio construction:
+
+**Mean-variance optimization** uses [`cvxpy`](https://www.cvxpy.org/) directly — a convex optimization library. The optimizer solves a single-period problem: maximize expected return penalized by risk (covariance) and turnover costs. This is the classical Markowitz framework with modern constraints.
+
+**Dual momentum** draws from the time-series and cross-sectional momentum literature:
+- Jegadeesh & Titman (1993): "Returns to Buying Winners and Selling Losers"
+- Moskowitz, Ooi, Pedersen (2012): "Time Series Momentum"
+- Antonacci (2014): "Optimal Asset Allocation Using Momentum"
+
+The dual-momentum approach in this repo — rank assets by trailing return, hold the top-k, use a trailing stop for drawdown protection — is intentionally simpler than full optimization. It avoids the estimation error that DeMiguel, Garlappi, and Uppal (2009) showed makes mean-variance underperform naive diversification out-of-sample.
+
+**`cvxportfolio`** (Boyd et al., "Multi-Period Trading via Convex Optimization", [arXiv:1705.00109](https://arxiv.org/abs/1705.00109)) provides a broader framework that models transaction costs, holding costs, and multi-period planning. The `src/cvxportfolio_impl/` directory contains a side-by-side implementation using this library. In our tests it was significantly more conservative than dual momentum (3-4% annualized vs 13-28%) because the optimizer's covariance structure pushes toward minimum-variance positions even with low risk aversion.
+
 ## Run A Dry Rebalance
 
 ```bash
