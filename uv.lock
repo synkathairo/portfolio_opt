@@ -590,6 +590,7 @@ source = { editable = "." }
 dependencies = [
     { name = "cvxportfolio" },
     { name = "cvxpy" },
+    { name = "matplotlib" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "python-dotenv" },
@@ -605,6 +606,7 @@ dev = [
 requires-dist = [
     { name = "cvxportfolio", specifier = ">=1.5.0" },
     { name = "cvxpy", specifier = ">=1.4" },
+    { name = "matplotlib", specifier = ">=3.7" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pandas", specifier = ">=2.2" },
     { name = "python-dotenv", specifier = ">=1.0" },

@@ -460,6 +460,7 @@ def main() -> None:
                 "max_drawdown": round(float(backtest.max_drawdown), 6),
                 "rebalance_count": backtest.rebalance_count,
                 "average_turnover": round(float(backtest.average_turnover), 6),
+                "daily_values": [round(v, 6) for v in backtest.daily_values],
             },
             "latest_target_weights": {
                 symbol: round(float(weight), 6)

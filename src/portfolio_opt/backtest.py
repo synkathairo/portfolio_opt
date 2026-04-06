@@ -22,6 +22,7 @@ class BacktestResult:
     rebalance_count: int
     average_turnover: float
     latest_weights: np.ndarray
+    daily_values: tuple[float, ...]
 
 
 def _find_symbol_indices(
@@ -261,6 +262,7 @@ def run_backtest(
     portfolio_value = 1.0
     weights = np.zeros(len(symbols), dtype=float)
     portfolio_returns: list[float] = []
+    daily_values: list[float] = [1.0]
     turnovers: list[float] = []
     rebalance_count = 0
     peak_value = portfolio_value
@@ -318,6 +320,7 @@ def run_backtest(
         rebalance_count=rebalance_count,
         average_turnover=average_turnover,
         latest_weights=weights,
+        daily_values=tuple(daily_values),
     )
 
 
@@ -376,7 +379,18 @@ def run_dual_momentum_backtest(
     portfolio_value = 1.0
     weights = np.zeros(len(symbols), dtype=float)
     portfolio_returns: list[float] = []
+    daily_values: list[float] = [1.0]
     turnovers: list[float] = []
+
+    # Compute SPY benchmark curve if available
+    spy_values: list[float] = []
+    if "SPY" in symbols:
+        spy_idx = symbols.index("SPY")
+        # SPY returns start from day 1 relative to lookback start
+        spy_prices = price_matrix[spy_idx, 1:]
+        start_price = price_matrix[spy_idx, 0]
+        spy_values = [(p / start_price) for p in spy_prices]
+
     rebalance_count = 0
     peak_value = portfolio_value
     max_drawdown = 0.0
@@ -522,6 +536,7 @@ def run_dual_momentum_backtest(
         period_return = float(np.dot(weights, returns[:, step]))
         portfolio_returns.append(period_return)
         portfolio_value *= 1.0 + period_return
+        daily_values.append(portfolio_value)
         peak_value = max(peak_value, portfolio_value)
         max_drawdown = max(max_drawdown, 1.0 - portfolio_value / peak_value)
 
@@ -538,6 +553,7 @@ def run_dual_momentum_backtest(
         rebalance_count=rebalance_count,
         average_turnover=average_turnover,
         latest_weights=weights,
+        daily_values=tuple(daily_values),
     )
 
 
