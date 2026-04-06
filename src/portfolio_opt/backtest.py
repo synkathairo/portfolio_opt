@@ -47,6 +47,7 @@ def compute_dual_momentum_weights(
     target_vol: float | None = None,
     max_single_weight: float | None = None,
     vol_window: int = 63,
+    trailing_stop: float | None = None,
 ) -> dict[str, float]:
     """Compute dual-momentum target weights for a single point in time.
 
