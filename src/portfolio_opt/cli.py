@@ -18,6 +18,7 @@ from .backtest import (
 from .config import AlpacaConfig, OptimizationConfig
 from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
 from .black_litterman import estimate_inputs_from_black_litterman
+from .risk_parity import estimate_inputs_risk_parity
 from .model import load_model_inputs
 from .optimizer import effective_turnover_penalty, optimize_weights
 from .rebalance import build_order_plan, current_weights
@@ -108,7 +109,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--return-model",
-        choices=("sample-mean", "momentum", "black-litterman"),
+        choices=("sample-mean", "momentum", "black-litterman", "risk-parity"),
         default="sample-mean",
         help="How to estimate expected returns when using --estimate-from-history.",
     )
@@ -549,6 +550,21 @@ def main() -> None:
                 "mean_shrinkage": args.mean_shrinkage,
                 "observations": estimated.observations,
                 "momentum_window": min(args.momentum_window, args.lookback_days - 1),
+            }
+        elif args.return_model == "risk-parity":
+            estimated = estimate_inputs_risk_parity(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                lookback_days=args.lookback_days,
+            )
+            # Risk parity has no expected returns; use small positive values
+            # so the optimizer can still apply constraints.
+            expected_returns = np.full(len(model.symbols), 0.01, dtype=float)
+            covariance = estimated.covariance
+            estimation_metadata = {
+                "method": "risk_parity",
+                "lookback_days": args.lookback_days,
+                "observations": estimated.observations,
             }
         else:
             estimated = estimate_inputs_from_prices(
