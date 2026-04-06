@@ -192,8 +192,35 @@ For a wider ETF research universe with sector sleeves in addition to the broad a
 
 - broad-beta rotation: `SPY`, `QQQ`, `IWM`, `VEA`, `VWO`
 - sector rotation: `XLK`, `XLF`, `XLE`, `XLV`, `XLI`, `XLP`, `XLU`
-- defensive sleeves: `SGOV`, `IEF`, `TLT`, `TIP`
+- defensive sleeves: `BIL`, `IEF`, `TLT`, `TIP`
 - real assets: `GLD`, `DBC`, `VNQ`
+
+### Dual-Momentum Strategy (Best Known Configuration)
+
+Backtested on `examples/sector_universe_pre2020.json` over 1,600 trading days (~6 years):
+
+| Configuration | Annualized Return | Volatility | Max Drawdown |
+|---|---|---|---|
+| **Top-2 weekly + 15% trailing stop** | **29.29%** | 19.95% | 20.64% |
+| Top-2 weekly | 28.40% | 20.34% | 23.25% |
+| Top-2 daily + 15% trailing stop | 28.19% | 20.15% | 19.46% |
+| SPY benchmark | 10.22% | 17.21% | 24.51% |
+
+**Recommended deployment:**
+
+```bash
+# Daily Mon-Fri 3:30pm ET (stop-loss checks fire daily)
+uv run portfolio-opt \
+  --model examples/sector_universe.json \
+  --strategy dual-momentum \
+  --lookback-days 252 \
+  --estimate-from-history \
+  --top-k 2 \
+  --trailing-stop 0.15 \
+  --submit
+```
+
+**Alpaca native stop-loss alternative:** Instead of running daily, you can use Alpaca's OCO (one-cancels-other) or trailing stop orders on each position. Submit a `trailing_stop` order with `trail_percent=15` alongside each entry order, so Alpaca handles the stop execution server-side. This lets you run the strategy weekly while still having daily stop protection.
 
 If you switch to that universe, prime the Alpaca cache once before offline runs because it uses a different symbol set.
 

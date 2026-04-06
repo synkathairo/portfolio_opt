@@ -364,6 +364,7 @@ def run_dual_momentum_backtest(
     vol_window: int = 63,
     basket_opt: str | None = None,
     basket_risk_aversion: float = 1.0,
+    trailing_stop: float | None = None,
 ) -> BacktestResult:
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
@@ -378,6 +379,9 @@ def run_dual_momentum_backtest(
     rebalance_count = 0
     peak_value = portfolio_value
     max_drawdown = 0.0
+
+    # Per-asset peak prices since entry, for trailing stop-loss
+    asset_peak_price: np.ndarray | None = None
 
     risky_symbols = [
         symbol for symbol in symbols
@@ -497,6 +501,22 @@ def run_dual_momentum_backtest(
             turnovers.append(float(np.abs(target_weights - weights).sum()))
             weights = target_weights
             rebalance_count += 1
+
+        # Trailing stop-loss: track peak prices since entry per asset
+        if trailing_stop is not None:
+            if asset_peak_price is None:
+                asset_peak_price = price_matrix[:, step - 1].copy()
+            # Update peaks for held positions
+            for i in range(len(symbols)):
+                if weights[i] > 0:
+                    asset_peak_price[i] = max(asset_peak_price[i], price_matrix[i, step])
+            # Check for stop breaches and flatten
+            for i in range(len(symbols)):
+                if weights[i] > 0 and asset_peak_price[i] > 0:
+                    drawdown_from_peak = (asset_peak_price[i] - price_matrix[i, step]) / asset_peak_price[i]
+                    if drawdown_from_peak > trailing_stop:
+                        weights[i] = 0.0
+                        asset_peak_price[i] = 0.0  # reset until re-entered
 
         period_return = float(np.dot(weights, returns[:, step]))
         portfolio_returns.append(period_return)

@@ -154,6 +154,12 @@ def parse_args() -> argparse.Namespace:
         help="Maximum weight for any single asset in the dual momentum basket.",
     )
     parser.add_argument(
+        "--trailing-stop",
+        type=float,
+        default=None,
+        help="Trailing stop-loss threshold per asset (e.g. 0.08 to exit an 8%% drawdown from peak).",
+    )
+    parser.add_argument(
         "--basket-opt",
         choices=("mean-variance",),
         default=None,
@@ -357,6 +363,7 @@ def main() -> None:
                 softmax_temperature=args.softmax_temperature,
                 target_vol=args.target_vol,
                 max_single_weight=args.max_single_weight,
+                trailing_stop=args.trailing_stop,
                 basket_opt=args.basket_opt,
                 basket_risk_aversion=args.basket_risk_aversion,
             )
@@ -487,6 +494,7 @@ def main() -> None:
                 basket_risk_aversion=args.basket_risk_aversion,
                 target_vol=args.target_vol,
                 max_single_weight=args.max_single_weight,
+                trailing_stop=args.trailing_stop,
             )
             target_weights = np.array([dm_weights[s] for s in model.symbols], dtype=float)
             estimation_metadata = {
