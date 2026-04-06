@@ -6,7 +6,7 @@ use std::fs;
 use crate::portfolio_opt::config::OptimizationConfig;
 use crate::portfolio_opt::alpaca::PortfolioClients;
 use crate::portfolio_opt::rebalance::{current_weights, build_order_plan};
-use crate::portfolio_opt::backtest::{run_dual_momentum_backtest, calculate_benchmark_stats};
+use crate::portfolio_opt::backtest::{run_dual_momentum_backtest, calculate_benchmark_stats, compute_dual_momentum_targets};
 
 #[derive(Parser)]
 #[command(name = "rust-portfolio")]
@@ -34,6 +34,18 @@ struct Args {
 
     #[arg(long)]
     submit: bool,
+
+    #[arg(long, default_value_t = 0.02)]
+    rebalance_threshold: f64,
+
+    #[arg(long, default_value_t = 4.0)]
+    risk_aversion: f64,
+
+    #[arg(long, default_value_t = 0.35)]
+    max_weight: f64,
+
+    #[arg(long, default_value_t = 0.0)]
+    min_weight: f64,
 }
 
 #[derive(serde::Deserialize)]
@@ -138,15 +150,39 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let positions = clients.get_positions().await?;
         let open_orders: Vec<Order> = clients.get_open_orders().await.unwrap_or_default();
 
-        // Fetch latest prices from Yahoo for the last 2 days
-        let latest_prices = clients.fetch_yahoo_closes(&model.symbols, 2).await?
-            .into_iter()
-            .filter_map(|(s, mut v)| v.pop().map(|price| (s, price)))
+        // Fetch history for the signal (lookback + buffer)
+        let history_days = args.lookback_days + 50;
+        let closes = clients.fetch_yahoo_closes(&model.symbols, history_days).await?;
+        
+        // Check for missing data
+        let missing: Vec<_> = model.symbols.iter().filter(|s| !closes.contains_key(*s)).collect();
+        if !missing.is_empty() {
+            eprintln!("Warning: Missing history for: {:?}", missing);
+            return Err("Incomplete history".into());
+        }
+
+        // Get latest prices for order sizing
+        let latest_prices: std::collections::HashMap<String, f64> = closes.iter()
+            .filter_map(|(s, v)| v.last().map(|p| (s.clone(), *p)))
             .collect();
+
+        // Compute actual Dual Momentum targets
+        let target_weights = compute_dual_momentum_targets(
+            &model.symbols,
+            &closes,
+            &model.asset_classes,
+            args.lookback_days,
+            args.top_k,
+            0.0,
+        )?;
         
-        let target_weights: Vec<f64> = vec![1.0 / model.symbols.len() as f64; model.symbols.len()];
-        
-        let config = OptimizationConfig::default();
+        let config = OptimizationConfig {
+            risk_aversion: args.risk_aversion,
+            min_weight: args.min_weight,
+            max_weight: args.max_weight,
+            rebalance_threshold: args.rebalance_threshold,
+            ..Default::default()
+        };
         let plan = build_order_plan(
             &model.symbols,
             &target_weights,

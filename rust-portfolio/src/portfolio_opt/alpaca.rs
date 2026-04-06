@@ -81,7 +81,15 @@ impl PortfolioClients {
 
     pub async fn fetch_yahoo_closes(&self, symbols: &[String], period_days: usize) -> Result<HashMap<String, Vec<f64>>, Box<dyn std::error::Error>> {
         let mut closes = HashMap::new();
-        let range = if period_days > 600 { Range::Max } else { Range::M6 };
+        
+        // Map days to Yahoo Range
+        let range = if period_days > 600 { 
+            Range::Max 
+        } else if period_days > 252 { 
+            Range::Y2 
+        } else { 
+            Range::Y1 
+        };
         
         for symbol in symbols {
             let ticker = Ticker::new(&self.yf, symbol);

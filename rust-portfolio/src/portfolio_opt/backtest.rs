@@ -12,6 +12,91 @@ pub struct BacktestResult {
     pub daily_values: Vec<f64>,
 }
 
+pub fn compute_dual_momentum_targets(
+    symbols: &[String],
+    closes_by_symbol: &HashMap<String, Vec<f64>>,
+    asset_classes: &HashMap<String, String>,
+    lookback_days: usize,
+    top_k: usize,
+    absolute_threshold: f64,
+) -> Result<Vec<f64>, Box<dyn std::error::Error>> {
+    // Build price matrix
+    let mut price_data = Vec::new();
+    let mut num_days = 0;
+
+    for symbol in symbols {
+        let closes = closes_by_symbol.get(symbol)
+            .ok_or_else(|| format!("Missing data for {}", symbol))?;
+        if num_days == 0 {
+            num_days = closes.len();
+        } else if closes.len() != num_days {
+            return Err(format!("Inconsistent history length for {}", symbol).into());
+        }
+        price_data.extend_from_slice(closes);
+    }
+
+    if num_days < lookback_days + 1 {
+        return Err(format!("Not enough history: have {}, need {}", num_days, lookback_days + 1).into());
+    }
+
+    let price_matrix = Array2::from_shape_vec((symbols.len(), num_days), price_data)?;
+
+    // Identify risky/defensive symbols
+    let risky_indices: Vec<usize> = symbols.iter().enumerate().filter(|(_, s)| {
+        let class = asset_classes.get(s.as_str()).map(|s| s.as_str()).unwrap_or("");
+        !class.starts_with("bond") && class != "cash_like"
+    }).map(|(i, _)| i).collect();
+
+    let defensive_indices: Vec<usize> = symbols.iter().enumerate().filter(|(_, s)| {
+        let class = asset_classes.get(s.as_str()).map(|s| s.as_str()).unwrap_or("");
+        class.starts_with("bond") || class == "cash_like"
+    }).map(|(i, _)| i).collect();
+
+    let cash_like_index = symbols.iter().position(|s| asset_classes.get(s.as_str()).map(|s| s.as_str()) == Some("cash_like"));
+
+    // Calculate trailing returns
+    let trailing_returns: Vec<(usize, f64)> = risky_indices.iter().filter_map(|&idx| {
+        let current_price = price_matrix[[idx, num_days - 1]];
+        let past_price = price_matrix[[idx, num_days - 1 - lookback_days]];
+        let ret = current_price / past_price - 1.0;
+        
+        let floor = cash_like_index.map(|i| {
+            price_matrix[[i, num_days - 1]] / price_matrix[[i, num_days - 1 - lookback_days]] - 1.0
+        }).unwrap_or(absolute_threshold);
+
+        if ret > absolute_threshold.max(floor) {
+            Some((idx, ret))
+        } else {
+            None
+        }
+    }).collect();
+
+    // Rank and select
+    let mut ranked = trailing_returns;
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    let selected: Vec<_> = ranked.into_iter().take(top_k).collect();
+
+    let mut target_weights = Array1::<f64>::zeros(symbols.len());
+
+    if selected.is_empty() {
+        // Fall back to defensive assets
+        if !defensive_indices.is_empty() {
+            let w = 1.0 / defensive_indices.len() as f64;
+            for &idx in &defensive_indices {
+                target_weights[idx] = w;
+            }
+        }
+    } else {
+        // Equal weight selected assets
+        let w = 1.0 / selected.len() as f64;
+        for &(idx, _) in &selected {
+            target_weights[idx] = w;
+        }
+    }
+
+    Ok(target_weights.to_vec())
+}
+
 pub fn run_dual_momentum_backtest(
     symbols: &[String],
     closes_by_symbol: &HashMap<String, Vec<f64>>,
