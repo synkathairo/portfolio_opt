@@ -69,7 +69,7 @@ def fetch_closes(
     min_len = min(lengths.values())
     if min_len < 2:
         raise ValueError(
-            f"Not enough common history. Shortest: {min(lengths, key=lengths.get)} "
+            f"Not enough common history. Shortest: {min(lengths, key=lambda s: lengths[s])} "
             f"with {min_len} bars."
         )
 

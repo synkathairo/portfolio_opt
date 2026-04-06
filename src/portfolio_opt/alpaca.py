@@ -4,6 +4,7 @@ import json
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -42,13 +43,15 @@ class AlpacaClient:
             refresh_cache=refresh_cache,
             offline=offline,
         )
+        # Positions are always a list; cast away the dict[str, Any] annotation.
+        rows: list[dict[str, Any]] = cast(list, payload)
         return [
             Position(
                 symbol=row["symbol"],
                 qty=float(row["qty"]),
                 market_value=float(row["market_value"]),
             )
-            for row in payload
+            for row in rows
         ]
 
     def get_latest_prices(
@@ -177,7 +180,7 @@ class AlpacaClient:
             closes_by_symbol[symbol] = closes
         return closes_by_symbol
 
-    def _latest_prices_payload(self, symbols: list[str]) -> dict:
+    def _latest_prices_payload(self, symbols: list[str]) -> dict[str, Any]:
         query = urlencode({"symbols": ",".join(symbols), "feed": "iex"})
         return self._request_json("GET", f"/v2/stocks/trades/latest?{query}", data_api=True)
 
@@ -235,7 +238,7 @@ class AlpacaClient:
         use_cache: bool,
         refresh_cache: bool,
         offline: bool,
-    ) -> dict | list:
+    ) -> dict[str, Any]:
         path = cache_path(name, key_payload)
         if offline:
             if not path.exists():
@@ -315,7 +318,7 @@ class AlpacaClient:
         path: str,
         payload: dict | None = None,
         data_api: bool = False,
-    ) -> dict | list:
+    ) -> dict[str, Any]:
         base_url = self._config.data_url if data_api else self._config.base_url
         headers = {
             "APCA-API-KEY-ID": self._config.api_key,

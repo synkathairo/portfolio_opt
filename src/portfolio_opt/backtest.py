@@ -210,7 +210,7 @@ def _dual_momentum_selected_weights(
     }
 
 
-def summarize_return_series(returns: np.ndarray) -> tuple[float, float, float, float]:
+def summarize_return_series(returns: np.ndarray) -> tuple[float, float, float, float, float]:
     portfolio_value = 1.0
     peak_value = portfolio_value
     max_drawdown = 0.0
