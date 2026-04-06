@@ -1,29 +1,37 @@
-# Portfolio Optimizer Starter
+# Portfolio Optimizer
 
-This is a minimal Python starter for a long-only mean-variance portfolio optimizer that can rebalance an Alpaca account.
+A tactical portfolio optimizer with two strategy paths that can rebalance an Alpaca account:
+
+1. **Dual momentum** — ranks assets by trailing return, holds the top-k, exits positions that fall more than a trailing stop threshold.
+2. **Mean-variance** — `cvxpy` optimization of expected return vs. covariance with asset-class constraints and turnover penalties.
 
 ## Strategy
 
-The optimizer solves:
+**Dual momentum** uses a simple but empirically strong approach:
+- Rank all risky assets by trailing N-day return
+- Keep only those that beat the cash-like asset's return (absolute momentum filter)
+- Hold the top-k, equal-weighted
+- Exit any position that drops more than the trailing stop threshold from its peak
+- Otherwise fall back to defensive assets (bonds, cash)
+
+**Mean-variance** solves:
 
 ```text
-maximize    mu^T w - risk_aversion * w^T Sigma w
+maximize    mu^T w - risk_aversion * w^T Sigma w - turnover_penalty * ||w - w_prev||_1
 subject to  sum(w) = 1
             min_weight <= w <= max_weight
+            asset-class bounds from model file
 ```
 
 Baseline assumptions:
 
 - Fixed asset universe
 - Long-only portfolio
-- Fully invested
 - Maximum per-asset weight cap
 - Minimum rebalance threshold to avoid tiny orders
+- Optional trailing stop-loss for drawdown protection
 
-This is an allocation engine, not a signal-generation system. The strategy quality depends on how you estimate expected returns and covariance.
-
-For a walkthrough of the current implementation and model assumptions, see `docs/IMPLEMENTATION.md`.
-For the planned parallel `cvxportfolio` experiment, see `docs/CVXPORTFOLIO_PLAN.md`.
+For a walkthrough of the original mean-variance implementation, see `docs/IMPLEMENTATION.md`.
 
 ## Install
 
@@ -52,20 +60,6 @@ APCA_API_DATA_URL=https://data.alpaca.markets
 ```
 
 `.env` is gitignored in this repository. Paper trading is the default safe target.
-
-## Why This Is Not `cvxportfolio`
-
-The linked paper, "Multi-Period Trading via Convex Optimization" (Boyd et al., arXiv:1705.00109), describes a broader framework that balances expected return, risk, transaction cost, and holding cost across multiple periods, executing only the first trade in a planned sequence.
-
-This starter does not implement that framework. It uses a simpler single-period mean-variance optimization with basic weight constraints, then translates the resulting target weights into Alpaca orders. It uses `cvxpy` directly, not `cvxportfolio`.
-
-That means the current code does not yet model:
-
-- Multi-period planning
-- Transaction cost penalties in the objective
-- Holding or borrow costs
-- Forecast evolution across future steps
-- Model predictive control style replanning
 
 ## Run A Dry Rebalance
 
@@ -419,16 +413,13 @@ The built-in benchmark block is still anchored to `SPY`, `TLT`, and equal-weight
 
 ## Notes
 
-- Fractional quantity handling is intentionally conservative and uses notional order sizing logic derived from current prices.
-- The current code pulls latest trade prices from Alpaca for order sizing.
-- Historical estimation can use either annualized sample mean returns or a simpler trailing momentum signal.
-- The optimizer can optionally hold cash instead of forcing every dollar into risky assets.
-- A hard `max_turnover` constraint can be used alongside the soft turnover penalty.
-- The soft turnover penalty is scaled down automatically when the account is mostly in cash.
+- Fractional quantity handling uses notional order sizing — Alpaca supports fractional shares for all ETFs.
+- Historical data can come from **Alpaca** (~7 year limit) or **yfinance** (full ETF history, `--data-source yfinance`).
+- Dual-momentum backtests survive the 2008 crisis with a 29% drawdown vs SPY's 47% (~18 year history).
+- The `--trailing-stop 0.15` parameter adds per-asset stop-loss protection (15% from peak).
 - Asset-class bounds can be defined in the model file to keep allocations within a portfolio policy.
-- Backtest mode reuses the same optimizer with rolling historical estimates and periodic rebalancing.
-- Backtest output includes simple fixed-weight benchmarks for comparison.
-- Sweep mode runs a small backtest grid over core policy parameters and returns the top results.
-- `src/cvxportfolio_impl/` is reserved for a side-by-side `cvxportfolio` experiment.
+- Backtest mode supports `mean-variance`, `dual-momentum`, and `dual-momentum` with rolling-window comparison vs SPY.
+- Sweep mode runs a backtest grid over core policy parameters and returns the top results.
+- `src/cvxportfolio_impl/` contains a parallel `cvxportfolio` experiment for comparison.
 - `uvx ty check` is the intended static type-checking entrypoint for this repo.
 - The project is managed with `uv`; keep `pyproject.toml` and `uv.lock` in sync.
