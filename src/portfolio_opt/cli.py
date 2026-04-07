@@ -57,7 +57,13 @@ def asset_class_exposures(
 ) -> dict[str, float]:
     return {
         class_name: round(
-            float(sum(weights[index] for index, symbol in enumerate(symbols) if asset_classes.get(symbol) == class_name)),
+            float(
+                sum(
+                    weights[index]
+                    for index, symbol in enumerate(symbols)
+                    if asset_classes.get(symbol) == class_name
+                )
+            ),
             6,
         )
         for class_name in sorted(set(asset_classes.values()))
@@ -65,7 +71,9 @@ def asset_class_exposures(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a mean-variance rebalance against Alpaca.")
+    parser = argparse.ArgumentParser(
+        description="Run a mean-variance rebalance against Alpaca."
+    )
     parser.add_argument("--model", required=True, help="Path to model input JSON file.")
     parser.add_argument("--risk-aversion", type=float, default=4.0)
     parser.add_argument("--min-weight", type=float, default=0.0)
@@ -125,7 +133,12 @@ def parse_args() -> argparse.Namespace:
         default=63,
         help="Trailing trading-day window used by the momentum return model.",
     )
-    parser.add_argument("--top-k", type=int, default=3, help="Number of assets to hold in dual momentum mode.")
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=3,
+        help="Number of assets to hold in dual momentum mode.",
+    )
     parser.add_argument(
         "--dual-momentum-weighting",
         choices=("equal", "score", "inverse-vol", "softmax"),
@@ -220,9 +233,21 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Submit market orders to Alpaca. Default behavior is dry-run output only.",
     )
-    parser.add_argument("--use-cache", action="store_true", help="Use cached Alpaca data when available.")
-    parser.add_argument("--refresh-cache", action="store_true", help="Refresh cached Alpaca data from the API.")
-    parser.add_argument("--offline", action="store_true", help="Use cached data only and never call Alpaca.")
+    parser.add_argument(
+        "--use-cache",
+        action="store_true",
+        help="Use cached Alpaca data when available.",
+    )
+    parser.add_argument(
+        "--refresh-cache",
+        action="store_true",
+        help="Refresh cached Alpaca data from the API.",
+    )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Use cached data only and never call Alpaca.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Explicit dry-run mode.")
     return parser.parse_args()
 
@@ -273,7 +298,9 @@ def main() -> None:
             )
         if args.sweep:
             if args.strategy == "dual-momentum":
-                raise ValueError("Sweep mode is only implemented for the mean-variance path.")
+                raise ValueError(
+                    "Sweep mode is only implemented for the mean-variance path."
+                )
             risk_grid = [1.0, 2.0, 4.0]
             cash_grid = [0.05, 0.10, 0.20]
             invested_grid = [0.20, 0.30, 0.40]
@@ -282,7 +309,13 @@ def main() -> None:
             results: list[dict[str, float | int | dict[str, float]]] = []
             skipped: list[dict[str, float | int | str]] = []
 
-            for risk_aversion, min_cash_weight, min_invested_weight, turnover_penalty, momentum_window in itertools.product(
+            for (
+                risk_aversion,
+                min_cash_weight,
+                min_invested_weight,
+                turnover_penalty,
+                momentum_window,
+            ) in itertools.product(
                 risk_grid,
                 cash_grid,
                 invested_grid,
@@ -312,7 +345,9 @@ def main() -> None:
                         mean_shrinkage=args.mean_shrinkage,
                         momentum_window=momentum_window,
                         opt_config=sweep_config,
-                        asset_class_matrix=asset_class_matrix if constrained_class_names else None,
+                        asset_class_matrix=(
+                            asset_class_matrix if constrained_class_names else None
+                        ),
                     )
                 except RuntimeError as exc:
                     skipped.append(
@@ -333,10 +368,16 @@ def main() -> None:
                         "min_invested_weight": min_invested_weight,
                         "turnover_penalty": turnover_penalty,
                         "momentum_window": momentum_window,
-                        "annualized_return": round(float(sweep_backtest.annualized_return), 6),
-                        "annualized_volatility": round(float(sweep_backtest.annualized_volatility), 6),
+                        "annualized_return": round(
+                            float(sweep_backtest.annualized_return), 6
+                        ),
+                        "annualized_volatility": round(
+                            float(sweep_backtest.annualized_volatility), 6
+                        ),
                         "max_drawdown": round(float(sweep_backtest.max_drawdown), 6),
-                        "average_turnover": round(float(sweep_backtest.average_turnover), 6),
+                        "average_turnover": round(
+                            float(sweep_backtest.average_turnover), 6
+                        ),
                     }
                 )
 
@@ -392,7 +433,9 @@ def main() -> None:
                 mean_shrinkage=args.mean_shrinkage,
                 momentum_window=args.momentum_window,
                 opt_config=opt_config,
-                asset_class_matrix=asset_class_matrix if constrained_class_names else None,
+                asset_class_matrix=(
+                    asset_class_matrix if constrained_class_names else None
+                ),
             )
         latest_weights = clean_weights(backtest.latest_weights)
         rolling_comparison = None
@@ -410,7 +453,9 @@ def main() -> None:
                 mean_shrinkage=args.mean_shrinkage,
                 momentum_window=args.momentum_window,
                 opt_config=opt_config,
-                asset_class_matrix=asset_class_matrix if constrained_class_names else None,
+                asset_class_matrix=(
+                    asset_class_matrix if constrained_class_names else None
+                ),
                 top_k=args.top_k,
                 absolute_threshold=args.absolute_momentum_threshold,
                 weighting=args.dual_momentum_weighting,
@@ -438,7 +483,9 @@ def main() -> None:
             "equal_weight": run_fixed_weight_benchmark(
                 symbols=model.symbols,
                 closes_by_symbol=closes_by_symbol,
-                weights_by_symbol={symbol: 1.0 / len(model.symbols) for symbol in model.symbols},
+                weights_by_symbol={
+                    symbol: 1.0 / len(model.symbols) for symbol in model.symbols
+                },
                 start_day=args.lookback_days,
             ),
             "half_spy_half_cash": run_fixed_weight_benchmark(
@@ -452,17 +499,27 @@ def main() -> None:
             "symbols": model.symbols,
             "backtest": {
                 "strategy": args.strategy,
-                "dual_momentum_weighting": args.dual_momentum_weighting if args.strategy == "dual-momentum" else None,
+                "dual_momentum_weighting": (
+                    args.dual_momentum_weighting
+                    if args.strategy == "dual-momentum"
+                    else None
+                ),
                 "target_vol": args.target_vol,
                 "max_single_weight": args.max_single_weight,
                 "basket_opt": args.basket_opt,
-                "basket_risk_aversion": args.basket_risk_aversion if args.strategy == "dual-momentum" and args.basket_opt else None,
+                "basket_risk_aversion": (
+                    args.basket_risk_aversion
+                    if args.strategy == "dual-momentum" and args.basket_opt
+                    else None
+                ),
                 "days": args.backtest_days,
                 "rebalance_every": args.rebalance_every,
                 "final_value": round(float(backtest.final_value), 6),
                 "total_return": round(float(backtest.total_return), 6),
                 "annualized_return": round(float(backtest.annualized_return), 6),
-                "annualized_volatility": round(float(backtest.annualized_volatility), 6),
+                "annualized_volatility": round(
+                    float(backtest.annualized_volatility), 6
+                ),
                 "max_drawdown": round(float(backtest.max_drawdown), 6),
                 "rebalance_count": backtest.rebalance_count,
                 "average_turnover": round(float(backtest.average_turnover), 6),
@@ -487,10 +544,16 @@ def main() -> None:
 
     # Even in dry-run mode we fetch live account state for the rebalance path,
     # because the order plan depends on current equity, holdings, and prices.
-    account = alpaca.get_account(use_cache=args.use_cache, refresh_cache=args.refresh_cache, offline=args.offline)
-    positions = alpaca.get_positions(use_cache=args.use_cache, refresh_cache=args.refresh_cache, offline=args.offline)
+    account = alpaca.get_account(
+        use_cache=args.use_cache, refresh_cache=args.refresh_cache, offline=args.offline
+    )
+    positions = alpaca.get_positions(
+        use_cache=args.use_cache, refresh_cache=args.refresh_cache, offline=args.offline
+    )
     existing_weights_map = current_weights(model.symbols, account, positions)
-    existing_weights = np.array([existing_weights_map[symbol] for symbol in model.symbols], dtype=float)
+    existing_weights = np.array(
+        [existing_weights_map[symbol] for symbol in model.symbols], dtype=float
+    )
     scaled_turnover_penalty = effective_turnover_penalty(opt_config, existing_weights)
 
     if args.estimate_from_history:
@@ -518,7 +581,9 @@ def main() -> None:
                 max_single_weight=args.max_single_weight,
                 trailing_stop=args.trailing_stop,
             )
-            target_weights = np.array([dm_weights[s] for s in model.symbols], dtype=float)
+            target_weights = np.array(
+                [dm_weights[s] for s in model.symbols], dtype=float
+            )
             estimation_metadata = {
                 "method": "dual_momentum",
                 "lookback_days": args.lookback_days,
@@ -620,10 +685,10 @@ def main() -> None:
         refresh_cache=args.refresh_cache,
         offline=args.offline,
     )
-    
+
     # Fetch open orders to prevent double-submission
     open_orders = alpaca.get_open_orders()
-    
+
     plan = build_order_plan(
         symbols=model.symbols,
         target_weights=target_weights.tolist(),

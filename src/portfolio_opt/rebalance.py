@@ -15,7 +15,9 @@ def current_weights(
     # Any symbol not currently held is treated as a zero-weight position so the
     # optimizer and rebalance layer can work off the same ordered universe.
     return {
-        symbol: by_symbol.get(symbol, Position(symbol=symbol, qty=0.0, market_value=0.0)).market_value
+        symbol: by_symbol.get(
+            symbol, Position(symbol=symbol, qty=0.0, market_value=0.0)
+        ).market_value
         / account.equity
         for symbol in symbols
     }

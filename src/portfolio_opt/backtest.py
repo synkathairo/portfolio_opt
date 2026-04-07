@@ -8,7 +8,6 @@ from .config import OptimizationConfig
 from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
 from .optimizer import optimize_basket_weights, optimize_weights
 
-
 TRADING_DAYS_PER_YEAR = 252
 
 
@@ -65,12 +64,16 @@ def compute_dual_momentum_weights(
     trailing_volatility = returns.std(axis=1, ddof=0)
 
     risky_symbols = [
-        s for s in symbols
-        if not asset_classes.get(s, "").startswith("bond") and asset_classes.get(s) != "cash_like"
+        s
+        for s in symbols
+        if not asset_classes.get(s, "").startswith("bond")
+        and asset_classes.get(s) != "cash_like"
     ]
     defensive_symbols = [
-        s for s in symbols
-        if asset_classes.get(s, "").startswith("bond") or asset_classes.get(s) == "cash_like"
+        s
+        for s in symbols
+        if asset_classes.get(s, "").startswith("bond")
+        or asset_classes.get(s) == "cash_like"
     ]
     risky_indices = _find_symbol_indices(symbols, risky_symbols)
     defensive_indices = _find_symbol_indices(symbols, defensive_symbols)
@@ -103,7 +106,9 @@ def compute_dual_momentum_weights(
 
         if basket_opt == "mean-variance":
             basket_returns = trailing_returns[selected_indices]
-            basket_returns_history = returns[:, max(0, returns.shape[1] - lookback_days) :][selected_indices]
+            basket_returns_history = returns[
+                :, max(0, returns.shape[1] - lookback_days) :
+            ][selected_indices]
             if len(selected_indices) == 1:
                 basket_cov = np.array([[np.var(basket_returns_history[0])]])
             else:
@@ -148,12 +153,16 @@ def compute_dual_momentum_weights(
 
         if target_vol is not None:
             recent_returns_window = returns[:, max(0, returns.shape[1] - vol_window) :]
-            risky_indices_active = [i for i in range(len(symbols)) if target_weights[i] > 0]
+            risky_indices_active = [
+                i for i in range(len(symbols)) if target_weights[i] > 0
+            ]
             if len(risky_indices_active) > 0:
                 w = target_weights[risky_indices_active]
                 recent_risky_returns = recent_returns_window[risky_indices_active]
                 portfolio_recent_returns = np.dot(w, recent_risky_returns)
-                portfolio_vol = float(np.std(portfolio_recent_returns, ddof=0)) * np.sqrt(TRADING_DAYS_PER_YEAR)
+                portfolio_vol = float(
+                    np.std(portfolio_recent_returns, ddof=0)
+                ) * np.sqrt(TRADING_DAYS_PER_YEAR)
             else:
                 portfolio_vol = 0.0
 
@@ -188,16 +197,27 @@ def _dual_momentum_selected_weights(
         return {}
 
     if weighting == "equal":
-        weight_vector = np.full(len(selected_indices), 1.0 / len(selected_indices), dtype=float)
+        weight_vector = np.full(
+            len(selected_indices), 1.0 / len(selected_indices), dtype=float
+        )
     elif weighting == "score":
         scores = np.array([max(score, 0.0) for _index, score in selected], dtype=float)
         weight_vector = _normalize_positive(scores)
     elif weighting == "inverse-vol":
-        vol_values = np.array([max(float(trailing_volatility[index]), 1e-8) for index in selected_indices], dtype=float)
+        vol_values = np.array(
+            [
+                max(float(trailing_volatility[index]), 1e-8)
+                for index in selected_indices
+            ],
+            dtype=float,
+        )
         weight_vector = _normalize_positive(1.0 / vol_values)
     elif weighting == "softmax":
         scaled_scores = np.array(
-            [float(trailing_returns[index]) / max(softmax_temperature, 1e-6) for index in selected_indices],
+            [
+                float(trailing_returns[index]) / max(softmax_temperature, 1e-6)
+                for index in selected_indices
+            ],
             dtype=float,
         )
         shifted = scaled_scores - float(np.max(scaled_scores))
@@ -211,7 +231,9 @@ def _dual_momentum_selected_weights(
     }
 
 
-def summarize_return_series(returns: np.ndarray) -> tuple[float, float, float, float, float]:
+def summarize_return_series(
+    returns: np.ndarray,
+) -> tuple[float, float, float, float, float]:
     portfolio_value = 1.0
     peak_value = portfolio_value
     max_drawdown = 0.0
@@ -223,7 +245,13 @@ def summarize_return_series(returns: np.ndarray) -> tuple[float, float, float, f
     periods = max(len(returns), 1)
     annualized_return = portfolio_value ** (TRADING_DAYS_PER_YEAR / periods) - 1.0
     annualized_volatility = returns.std(ddof=0) * np.sqrt(TRADING_DAYS_PER_YEAR)
-    return portfolio_value, portfolio_value - 1.0, annualized_return, annualized_volatility, max_drawdown
+    return (
+        portfolio_value,
+        portfolio_value - 1.0,
+        annualized_return,
+        annualized_volatility,
+        max_drawdown,
+    )
 
 
 def align_close_history(
@@ -236,10 +264,7 @@ def align_close_history(
         raise ValueError("Not enough aligned price history to run the backtest.")
     if len(set(lengths)) == 1:
         return closes_by_symbol
-    return {
-        symbol: closes_by_symbol[symbol][-common_length:]
-        for symbol in symbols
-    }
+    return {symbol: closes_by_symbol[symbol][-common_length:] for symbol in symbols}
 
 
 def run_backtest(
@@ -309,7 +334,9 @@ def run_backtest(
         max_drawdown = max(max_drawdown, 1.0 - portfolio_value / peak_value)
 
     returns_array = np.array(portfolio_returns, dtype=float)
-    _, _, annualized_return, annualized_volatility, _ = summarize_return_series(returns_array)
+    _, _, annualized_return, annualized_volatility, _ = summarize_return_series(
+        returns_array
+    )
     average_turnover = float(np.mean(turnovers)) if turnovers else 0.0
 
     return BacktestResult(
@@ -334,7 +361,9 @@ def run_fixed_weight_benchmark(
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
     returns = price_matrix[:, 1:] / price_matrix[:, :-1] - 1.0
-    benchmark_weights = np.array([weights_by_symbol.get(symbol, 0.0) for symbol in symbols], dtype=float)
+    benchmark_weights = np.array(
+        [weights_by_symbol.get(symbol, 0.0) for symbol in symbols], dtype=float
+    )
     benchmark_returns = np.array(
         [
             float(np.dot(benchmark_weights, returns[:, step]))
@@ -342,9 +371,13 @@ def run_fixed_weight_benchmark(
         ],
         dtype=float,
     )
-    final_value, total_return, annualized_return, annualized_volatility, max_drawdown = summarize_return_series(
-        benchmark_returns
-    )
+    (
+        final_value,
+        total_return,
+        annualized_return,
+        annualized_volatility,
+        max_drawdown,
+    ) = summarize_return_series(benchmark_returns)
     return {
         "final_value": round(float(final_value), 6),
         "total_return": round(float(total_return), 6),
@@ -400,12 +433,14 @@ def run_dual_momentum_backtest(
     asset_peak_price: np.ndarray | None = None
 
     risky_symbols = [
-        symbol for symbol in symbols
+        symbol
+        for symbol in symbols
         if not asset_classes.get(symbol, "").startswith("bond")
         and asset_classes.get(symbol) != "cash_like"
     ]
     defensive_symbols = [
-        symbol for symbol in symbols
+        symbol
+        for symbol in symbols
         if asset_classes.get(symbol, "").startswith("bond")
         or asset_classes.get(symbol) == "cash_like"
     ]
@@ -415,14 +450,22 @@ def run_dual_momentum_backtest(
         raise ValueError("Dual momentum requires at least one risky symbol.")
 
     cash_like_index = next(
-        (index for index, symbol in enumerate(symbols) if asset_classes.get(symbol) == "cash_like"),
+        (
+            index
+            for index, symbol in enumerate(symbols)
+            if asset_classes.get(symbol) == "cash_like"
+        ),
         None,
     )
 
     for step in range(lookback_days, returns.shape[1]):
         if (step - lookback_days) % rebalance_every == 0:
-            trailing_returns = price_matrix[:, step] / price_matrix[:, step - lookback_days] - 1.0
-            trailing_volatility = returns[:, step - lookback_days : step].std(axis=1, ddof=0)
+            trailing_returns = (
+                price_matrix[:, step] / price_matrix[:, step - lookback_days] - 1.0
+            )
+            trailing_volatility = returns[:, step - lookback_days : step].std(
+                axis=1, ddof=0
+            )
             defensive_floor = (
                 float(trailing_returns[cash_like_index])
                 if cash_like_index is not None
@@ -432,7 +475,8 @@ def run_dual_momentum_backtest(
                 (
                     (index, float(trailing_returns[index]))
                     for index in risky_indices
-                    if float(trailing_returns[index]) > max(absolute_threshold, defensive_floor)
+                    if float(trailing_returns[index])
+                    > max(absolute_threshold, defensive_floor)
                 ),
                 key=lambda item: item[1],
                 reverse=True,
@@ -448,7 +492,9 @@ def run_dual_momentum_backtest(
                 #  - basket_opt: cvxpy mean-variance on the small basket
                 if basket_opt == "mean-variance":
                     basket_returns = trailing_returns[selected_indices]
-                    basket_returns_history = returns[:, max(0, step - lookback_days) : step][selected_indices]
+                    basket_returns_history = returns[
+                        :, max(0, step - lookback_days) : step
+                    ][selected_indices]
                     if len(selected_indices) == 1:
                         basket_cov = np.array([[np.var(basket_returns_history[0])]])
                     else:
@@ -496,13 +542,19 @@ def run_dual_momentum_backtest(
                 # Scale risky basket to hit target portfolio volatility
                 if target_vol is not None:
                     recent_returns_window = returns[:, max(0, step - vol_window) : step]
-                    risky_indices_active = [i for i in range(len(symbols)) if target_weights[i] > 0]
+                    risky_indices_active = [
+                        i for i in range(len(symbols)) if target_weights[i] > 0
+                    ]
                     if len(risky_indices_active) > 0:
                         w = target_weights[risky_indices_active]
-                        recent_risky_returns = recent_returns_window[risky_indices_active]
+                        recent_risky_returns = recent_returns_window[
+                            risky_indices_active
+                        ]
                         # Portfolio returns over the lookback window
                         portfolio_recent_returns = np.dot(w, recent_risky_returns)
-                        portfolio_vol = float(np.std(portfolio_recent_returns, ddof=0)) * np.sqrt(TRADING_DAYS_PER_YEAR)
+                        portfolio_vol = float(
+                            np.std(portfolio_recent_returns, ddof=0)
+                        ) * np.sqrt(TRADING_DAYS_PER_YEAR)
                     else:
                         portfolio_vol = 0.0
 
@@ -525,11 +577,15 @@ def run_dual_momentum_backtest(
             # Update peaks for held positions
             for i in range(len(symbols)):
                 if weights[i] > 0:
-                    asset_peak_price[i] = max(asset_peak_price[i], price_matrix[i, step])
+                    asset_peak_price[i] = max(
+                        asset_peak_price[i], price_matrix[i, step]
+                    )
             # Check for stop breaches and flatten
             for i in range(len(symbols)):
                 if weights[i] > 0 and asset_peak_price[i] > 0:
-                    drawdown_from_peak = (asset_peak_price[i] - price_matrix[i, step]) / asset_peak_price[i]
+                    drawdown_from_peak = (
+                        asset_peak_price[i] - price_matrix[i, step]
+                    ) / asset_peak_price[i]
                     if drawdown_from_peak > trailing_stop:
                         weights[i] = 0.0
                         asset_peak_price[i] = 0.0  # reset until re-entered
@@ -542,7 +598,9 @@ def run_dual_momentum_backtest(
         max_drawdown = max(max_drawdown, 1.0 - portfolio_value / peak_value)
 
     returns_array = np.array(portfolio_returns, dtype=float)
-    _, _, annualized_return, annualized_volatility, _ = summarize_return_series(returns_array)
+    _, _, annualized_return, annualized_volatility, _ = summarize_return_series(
+        returns_array
+    )
     average_turnover = float(np.mean(turnovers)) if turnovers else 0.0
 
     return BacktestResult(
@@ -584,13 +642,17 @@ def rolling_window_comparison(
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     total_periods = len(aligned_closes[symbols[0]]) - 1
     if total_periods < lookback_days + window_days:
-        raise ValueError("Not enough price history to run the requested rolling-window comparison.")
+        raise ValueError(
+            "Not enough price history to run the requested rolling-window comparison."
+        )
 
     window_results: list[dict[str, float | bool]] = []
     last_start = total_periods - (lookback_days + window_days)
     for start in range(0, last_start + 1, step_days):
         end = start + lookback_days + window_days + 1
-        window_closes = {symbol: closes[start:end] for symbol, closes in aligned_closes.items()}
+        window_closes = {
+            symbol: closes[start:end] for symbol, closes in aligned_closes.items()
+        }
 
         if strategy == "dual-momentum":
             backtest = run_dual_momentum_backtest(
@@ -629,24 +691,36 @@ def rolling_window_comparison(
             else 0.0
         )
         spy_sharpe = (
-            float(spy_benchmark["annualized_return"]) / float(spy_benchmark["annualized_volatility"])
+            float(spy_benchmark["annualized_return"])
+            / float(spy_benchmark["annualized_volatility"])
             if float(spy_benchmark["annualized_volatility"]) > 0
             else 0.0
         )
         window_results.append(
             {
-                "beat_return": backtest.total_return > float(spy_benchmark["total_return"]),
+                "beat_return": backtest.total_return
+                > float(spy_benchmark["total_return"]),
                 "beat_sharpe": strategy_sharpe > spy_sharpe,
-                "lower_drawdown": backtest.max_drawdown < float(spy_benchmark["max_drawdown"]),
-                "excess_total_return": backtest.total_return - float(spy_benchmark["total_return"]),
+                "lower_drawdown": backtest.max_drawdown
+                < float(spy_benchmark["max_drawdown"]),
+                "excess_total_return": backtest.total_return
+                - float(spy_benchmark["total_return"]),
             }
         )
 
     total_windows = len(window_results)
-    beat_return_count = sum(1 for result in window_results if bool(result["beat_return"]))
-    beat_sharpe_count = sum(1 for result in window_results if bool(result["beat_sharpe"]))
-    lower_drawdown_count = sum(1 for result in window_results if bool(result["lower_drawdown"]))
-    average_excess_return = float(np.mean([float(result["excess_total_return"]) for result in window_results]))
+    beat_return_count = sum(
+        1 for result in window_results if bool(result["beat_return"])
+    )
+    beat_sharpe_count = sum(
+        1 for result in window_results if bool(result["beat_sharpe"])
+    )
+    lower_drawdown_count = sum(
+        1 for result in window_results if bool(result["lower_drawdown"])
+    )
+    average_excess_return = float(
+        np.mean([float(result["excess_total_return"]) for result in window_results])
+    )
     return {
         "window_days": window_days,
         "step_days": step_days,

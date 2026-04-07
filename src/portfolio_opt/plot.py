@@ -41,12 +41,16 @@ def _plot_from_result(result: dict, save_path: str, benchmark: str = "SPY") -> N
 
     n = len(daily_values)
     # Generate a business day range ending today so the x-axis shows dates
-    end_date = pd.Timestamp(datetime.now()).replace(hour=0, minute=0, second=0, microsecond=0)
+    end_date = pd.Timestamp(datetime.now()).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
     dates = pd.bdate_range(end=end_date, periods=n)
 
     # Fetch benchmark for the same date range
     ticker = yf.Ticker(benchmark)
-    hist = ticker.history(start=dates[0] - timedelta(days=5), end=end_date + timedelta(days=1))
+    hist = ticker.history(
+        start=dates[0] - timedelta(days=5), end=end_date + timedelta(days=1)
+    )
     if hist.empty or "Close" not in hist.columns:
         # Fallback: just fetch the last 'n' days if the exact date range fails
         hist = ticker.history(period=f"{n + 10}d")
@@ -111,21 +115,23 @@ def _plot_from_alpaca_history(
     else:
         # Likely seconds (e.g. 1,712,000,000)
         dates = pd.to_datetime(timestamps, unit="s", utc=True)
-        
+
     # Normalize to start at 1.0
-    equity_values = [e / equity_curve[0] if equity_curve[0] > 0 else 1.0 for e in equity_curve]
+    equity_values = [
+        e / equity_curve[0] if equity_curve[0] > 0 else 1.0 for e in equity_curve
+    ]
 
     # Fetch SPY data from Alpaca for the same range
     spy_bars = []
     try:
         start_str = dates.min().strftime("%Y-%m-%dT%H:%M:%SZ")
         end_str = dates.max().strftime("%Y-%m-%dT%H:%M:%SZ")
-        spy_query = urlencode({
-            "timeframe": timeframe,
-            "start": start_str,
-            "end": end_str
-        })
-        spy_payload = alpaca._request_json("GET", f"/v2/stocks/{benchmark}/bars?{spy_query}", data_api=True)
+        spy_query = urlencode(
+            {"timeframe": timeframe, "start": start_str, "end": end_str}
+        )
+        spy_payload = alpaca._request_json(
+            "GET", f"/v2/stocks/{benchmark}/bars?{spy_query}", data_api=True
+        )
         spy_bars = spy_payload.get("bars", [])
     except Exception:
         pass
@@ -141,7 +147,9 @@ def _plot_from_alpaca_history(
             print(f"Warning: Could not fetch {benchmark} data.", file=sys.stderr)
 
     if not spy_bars:
-        print(f"Plotting portfolio history only (no {benchmark} data).", file=sys.stderr)
+        print(
+            f"Plotting portfolio history only (no {benchmark} data).", file=sys.stderr
+        )
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.plot(dates, equity_values, label="Portfolio", linewidth=2)
     else:
@@ -181,7 +189,9 @@ def main() -> None:
         action="store_true",
         help="Fetch live portfolio history from Alpaca API and plot it.",
     )
-    parser.add_argument("--period", default="1M", help="Alpaca history period (e.g. 1M, 3M, 1Y).")
+    parser.add_argument(
+        "--period", default="1M", help="Alpaca history period (e.g. 1M, 3M, 1Y)."
+    )
     args = parser.parse_args()
 
     if args.alpaca_history:

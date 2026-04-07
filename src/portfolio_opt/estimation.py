@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-
 TRADING_DAYS_PER_YEAR = 252
 
 
@@ -23,14 +22,18 @@ def estimate_inputs_from_prices(
     if not symbols:
         raise ValueError("At least one symbol is required.")
 
-    price_matrix = np.array([closes_by_symbol[symbol] for symbol in symbols], dtype=float)
+    price_matrix = np.array(
+        [closes_by_symbol[symbol] for symbol in symbols], dtype=float
+    )
     if price_matrix.ndim != 2 or price_matrix.shape[1] < 2:
         raise ValueError("Need at least two prices per symbol to estimate returns.")
 
     # Align all assets on the same close-to-close return grid.
     returns = price_matrix[:, 1:] / price_matrix[:, :-1] - 1.0
     if returns.shape[1] < 2:
-        raise ValueError("Need at least two return observations to estimate covariance.")
+        raise ValueError(
+            "Need at least two return observations to estimate covariance."
+        )
 
     sample_mean = returns.mean(axis=1)
     # Shrink noisy return estimates back toward zero so the optimizer does not
@@ -60,13 +63,17 @@ def estimate_inputs_from_momentum(
     if not symbols:
         raise ValueError("At least one symbol is required.")
 
-    price_matrix = np.array([closes_by_symbol[symbol] for symbol in symbols], dtype=float)
+    price_matrix = np.array(
+        [closes_by_symbol[symbol] for symbol in symbols], dtype=float
+    )
     if price_matrix.ndim != 2 or price_matrix.shape[1] < 2:
         raise ValueError("Need at least two prices per symbol to estimate returns.")
 
     returns = price_matrix[:, 1:] / price_matrix[:, :-1] - 1.0
     if returns.shape[1] < 2:
-        raise ValueError("Need at least two return observations to estimate covariance.")
+        raise ValueError(
+            "Need at least two return observations to estimate covariance."
+        )
 
     # Use recent cumulative return as a simple, interpretable trend signal
     # rather than trusting the noisy sample mean of daily returns.

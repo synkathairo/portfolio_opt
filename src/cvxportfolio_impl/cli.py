@@ -8,12 +8,21 @@ from portfolio_opt.runtime import configure_local_cache_dirs
 
 configure_local_cache_dirs()
 
-from .backtest import format_backtest, run_cvxportfolio_backtest, run_cvxportfolio_sweep, run_framework_comparison
+from .backtest import (
+    format_backtest,
+    run_cvxportfolio_backtest,
+    run_cvxportfolio_sweep,
+    run_framework_comparison,
+)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a minimal cvxportfolio backtest on the repo universe.")
-    parser.add_argument("--model", required=True, help="Path to the model or universe JSON file.")
+    parser = argparse.ArgumentParser(
+        description="Run a minimal cvxportfolio backtest on the repo universe."
+    )
+    parser.add_argument(
+        "--model", required=True, help="Path to the model or universe JSON file."
+    )
     parser.add_argument("--lookback-days", type=int, default=126)
     parser.add_argument("--backtest-days", type=int, default=252)
     parser.add_argument("--risk-aversion", type=float, default=1.0)
@@ -32,16 +41,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--planning-horizon", type=int, default=1)
     parser.add_argument("--rolling-window-days", type=int, default=0)
     parser.add_argument("--rolling-step-days", type=int, default=21)
-    parser.add_argument("--sweep", action="store_true", help="Run a simple parameter sweep for the cvxportfolio path.")
+    parser.add_argument(
+        "--sweep",
+        action="store_true",
+        help="Run a simple parameter sweep for the cvxportfolio path.",
+    )
     parser.add_argument(
         "--compare-custom",
         action="store_true",
         help="Compare the current cvxportfolio config against the repo's custom baseline preset.",
     )
     parser.add_argument("--top-n", type=int, default=5)
-    parser.add_argument("--use-cache", action="store_true", help="Use cached Alpaca data when available.")
-    parser.add_argument("--refresh-cache", action="store_true", help="Refresh cached Alpaca data from the API.")
-    parser.add_argument("--offline", action="store_true", help="Use cached data only and never call Alpaca.")
+    parser.add_argument(
+        "--use-cache",
+        action="store_true",
+        help="Use cached Alpaca data when available.",
+    )
+    parser.add_argument(
+        "--refresh-cache",
+        action="store_true",
+        help="Refresh cached Alpaca data from the API.",
+    )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Use cached data only and never call Alpaca.",
+    )
     return parser.parse_args()
 
 

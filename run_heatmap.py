@@ -33,6 +33,7 @@ def run_backtest(rebal_days, k):
         "--rebalance-every", str(rebal_days),
         "--top-k", str(k),
         "--use-cache",
+        "--refresh-cache"
         # "--offline"
     ]
     try:

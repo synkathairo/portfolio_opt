@@ -117,10 +117,17 @@ def estimate_inputs_from_black_litterman(
     cov_252 += 1e-8 * np.eye(len(symbols))
 
     # Momentum returns as views
-    mom_returns = np.array(
-        [price_matrix[i, -1] / price_matrix[i, -momentum_window] - 1.0 for i in range(len(symbols))],
-        dtype=float,
-    ) * 252 / momentum_window
+    mom_returns = (
+        np.array(
+            [
+                price_matrix[i, -1] / price_matrix[i, -momentum_window] - 1.0
+                for i in range(len(symbols))
+            ],
+            dtype=float,
+        )
+        * 252
+        / momentum_window
+    )
 
     # Apply shrinkage to views
     mom_returns = mom_returns * (1.0 - mean_shrinkage)

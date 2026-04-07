@@ -19,7 +19,12 @@ class AlpacaClient:
     def __init__(self, config: AlpacaConfig) -> None:
         self._config = config
 
-    def get_account(self, use_cache: bool = False, refresh_cache: bool = False, offline: bool = False) -> AccountSnapshot:
+    def get_account(
+        self,
+        use_cache: bool = False,
+        refresh_cache: bool = False,
+        offline: bool = False,
+    ) -> AccountSnapshot:
         payload = self._cached_json(
             "account",
             {"kind": "account"},
@@ -71,10 +76,7 @@ class AlpacaClient:
             offline=offline,
         )
         trades = payload.get("trades", {})
-        return {
-            symbol: float(trade["p"])
-            for symbol, trade in trades.items()
-        }
+        return {symbol: float(trade["p"]) for symbol, trade in trades.items()}
 
     def get_daily_closes(
         self,
@@ -86,13 +88,20 @@ class AlpacaClient:
     ) -> dict[str, list[float]]:
         cached = self._cached_json(
             "daily_closes",
-            {"kind": "daily_closes", "symbols": symbols, "lookback_days": lookback_days},
+            {
+                "kind": "daily_closes",
+                "symbols": symbols,
+                "lookback_days": lookback_days,
+            },
             lambda: self._daily_closes_payload(symbols, lookback_days),
             use_cache=use_cache,
             refresh_cache=refresh_cache,
             offline=offline,
         )
-        return {symbol: [float(value) for value in values] for symbol, values in cached.items()}
+        return {
+            symbol: [float(value) for value in values]
+            for symbol, values in cached.items()
+        }
 
     def get_daily_bars(
         self,
@@ -118,7 +127,9 @@ class AlpacaClient:
             for symbol, values in cached.items()
         }
 
-    def _daily_bars_payload(self, symbols: list[str], lookback_days: int) -> dict[str, list[dict[str, str | float]]]:
+    def _daily_bars_payload(
+        self, symbols: list[str], lookback_days: int
+    ) -> dict[str, list[dict[str, str | float]]]:
         end = datetime.now(UTC)
         start = end - timedelta(days=max(lookback_days * 3, 30))
         bars_by_symbol: dict[str, list[dict[str, str | float]]] = {}
@@ -133,7 +144,9 @@ class AlpacaClient:
                     "feed": "iex",
                 }
             )
-            payload = self._request_json("GET", f"/v2/stocks/{symbol}/bars?{query}", data_api=True)
+            payload = self._request_json(
+                "GET", f"/v2/stocks/{symbol}/bars?{query}", data_api=True
+            )
             series = payload.get("bars", [])
             bars = [
                 {
@@ -150,7 +163,9 @@ class AlpacaClient:
             bars_by_symbol[symbol] = bars
         return bars_by_symbol
 
-    def _daily_closes_payload(self, symbols: list[str], lookback_days: int) -> dict[str, list[float]]:
+    def _daily_closes_payload(
+        self, symbols: list[str], lookback_days: int
+    ) -> dict[str, list[float]]:
         end = datetime.now(UTC)
         # Ask for more calendar days than the trading lookback to survive weekends
         # and holidays while still ending up with enough bars.
@@ -170,7 +185,9 @@ class AlpacaClient:
                     "feed": "iex",
                 }
             )
-            payload = self._request_json("GET", f"/v2/stocks/{symbol}/bars?{query}", data_api=True)
+            payload = self._request_json(
+                "GET", f"/v2/stocks/{symbol}/bars?{query}", data_api=True
+            )
             series = payload.get("bars", [])
             closes = [float(row["c"]) for row in series][-lookback_days:]
             if len(closes) < 2:
@@ -183,7 +200,9 @@ class AlpacaClient:
 
     def _latest_prices_payload(self, symbols: list[str]) -> dict[str, Any]:
         query = urlencode({"symbols": ",".join(symbols), "feed": "iex"})
-        return self._request_json("GET", f"/v2/stocks/trades/latest?{query}", data_api=True)
+        return self._request_json(
+            "GET", f"/v2/stocks/trades/latest?{query}", data_api=True
+        )
 
     def get_daily_closes_for_period(
         self,
@@ -241,7 +260,9 @@ class AlpacaClient:
             except Exception as exc:
                 # Log failure but continue with other orders to avoid
                 # leaving the portfolio in a partially filled state.
-                print(f"Failed to submit order for {plan.symbol}: {exc}", file=sys.stderr)
+                print(
+                    f"Failed to submit order for {plan.symbol}: {exc}", file=sys.stderr
+                )
 
     def _cached_json(
         self,
@@ -270,7 +291,9 @@ class AlpacaClient:
                     )
                     if fallback is not None:
                         return fallback
-                raise RuntimeError(f"Offline mode requested but cache is missing: {path}")
+                raise RuntimeError(
+                    f"Offline mode requested but cache is missing: {path}"
+                )
             return read_cache(path)
         if use_cache and path.exists() and not refresh_cache:
             return read_cache(path)
@@ -319,7 +342,10 @@ class AlpacaClient:
             if min(lengths, default=0) >= lookback_days:
                 return {
                     symbol: [
-                        {"timestamp": str(row["timestamp"]), "close": float(row["close"])}
+                        {
+                            "timestamp": str(row["timestamp"]),
+                            "close": float(row["close"]),
+                        }
                         for row in values[-lookback_days:]
                     ]
                     for symbol, values in payload.items()
@@ -340,7 +366,9 @@ class AlpacaClient:
             "Content-Type": "application/json",
         }
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
-        request = Request(f"{base_url}{path}", data=body, headers=headers, method=method)
+        request = Request(
+            f"{base_url}{path}", data=body, headers=headers, method=method
+        )
         try:
             with urlopen(request) as response:
                 return json.loads(response.read().decode("utf-8"))

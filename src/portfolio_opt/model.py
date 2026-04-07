@@ -30,7 +30,9 @@ def load_model_inputs(path: str | Path) -> ModelInputs:
     # universe when inputs will be estimated from Alpaca history at runtime.
     if "expected_returns" in raw:
         expected_returns_map = raw["expected_returns"]
-        expected_returns = np.array([float(expected_returns_map[s]) for s in symbols], dtype=float)
+        expected_returns = np.array(
+            [float(expected_returns_map[s]) for s in symbols], dtype=float
+        )
 
     if "covariance" in raw:
         covariance = np.array(raw["covariance"], dtype=float)
@@ -38,17 +40,27 @@ def load_model_inputs(path: str | Path) -> ModelInputs:
             raise ValueError("Covariance matrix must match the number of symbols.")
 
     if (expected_returns is None) != (covariance is None):
-        raise ValueError("Model inputs must provide both expected_returns and covariance, or neither.")
+        raise ValueError(
+            "Model inputs must provide both expected_returns and covariance, or neither."
+        )
 
-    unknown_class_symbols = [symbol for symbol in asset_classes if symbol not in symbols]
+    unknown_class_symbols = [
+        symbol for symbol in asset_classes if symbol not in symbols
+    ]
     if unknown_class_symbols:
-        raise ValueError(f"Asset classes provided for unknown symbols: {unknown_class_symbols}")
+        raise ValueError(
+            f"Asset classes provided for unknown symbols: {unknown_class_symbols}"
+        )
 
     return ModelInputs(
         symbols=symbols,
         expected_returns=expected_returns,
         covariance=covariance,
         asset_classes=asset_classes,
-        class_min_weights={name: float(value) for name, value in class_min_weights.items()},
-        class_max_weights={name: float(value) for name, value in class_max_weights.items()},
+        class_min_weights={
+            name: float(value) for name, value in class_min_weights.items()
+        },
+        class_max_weights={
+            name: float(value) for name, value in class_max_weights.items()
+        },
     )

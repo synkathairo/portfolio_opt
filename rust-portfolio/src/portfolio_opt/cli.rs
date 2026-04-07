@@ -1,12 +1,14 @@
-use clap::Parser;
 use apca::api::v2::order::Order;
+use clap::Parser;
 use std::collections::HashMap;
 use std::fs;
 
-use crate::portfolio_opt::config::OptimizationConfig;
 use crate::portfolio_opt::alpaca::PortfolioClients;
-use crate::portfolio_opt::rebalance::{current_weights, build_order_plan};
-use crate::portfolio_opt::backtest::{run_dual_momentum_backtest, calculate_benchmark_stats, compute_dual_momentum_targets};
+use crate::portfolio_opt::backtest::{
+    calculate_benchmark_stats, compute_dual_momentum_targets, run_dual_momentum_backtest,
+};
+use crate::portfolio_opt::config::OptimizationConfig;
+use crate::portfolio_opt::rebalance::{build_order_plan, current_weights};
 
 #[derive(Parser)]
 #[command(name = "rust-portfolio")]
@@ -60,20 +62,25 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let model: ModelInputs = serde_json::from_str(&model_content)?;
 
     let clients = PortfolioClients::new().await?;
-    
+
     if args.backtest_days > 0 {
         // Backtest mode - use Yahoo Finance for historical data
         let total_days = args.lookback_days + args.backtest_days;
-        let closes = clients.fetch_yahoo_closes(&model.symbols, total_days).await?;
-        
+        let closes = clients
+            .fetch_yahoo_closes(&model.symbols, total_days)
+            .await?;
+
         // Filter to symbols with enough data
-        let valid_symbols: Vec<String> = model.symbols.iter()
+        let valid_symbols: Vec<String> = model
+            .symbols
+            .iter()
             .filter(|s| closes.get(*s).map(|v| v.len()).unwrap_or(0) > args.lookback_days)
             .cloned()
             .collect();
-        
+
         // Align to common trailing history
-        let min_len = valid_symbols.iter()
+        let min_len = valid_symbols
+            .iter()
             .filter_map(|s| closes.get(s).map(|v| v.len()))
             .min()
             .unwrap_or(0);
@@ -106,11 +113,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let benchmark_stats = if let Some(spy_closes) = closes.get("SPY") {
             // Slice SPY data to match the aligned backtest window
             // aligned_closes has min_len days. We take the last min_len days of SPY.
-            let min_len = valid_symbols.iter()
+            let min_len = valid_symbols
+                .iter()
                 .filter_map(|s| closes.get(s).map(|v| v.len()))
                 .min()
                 .unwrap_or(0);
-            
+
             if spy_closes.len() >= min_len && min_len > 1 {
                 let spy_slice = &spy_closes[spy_closes.len() - min_len..];
                 Some(calculate_benchmark_stats(spy_slice))
@@ -152,17 +160,24 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
         // Fetch history for the signal (lookback + buffer)
         let history_days = args.lookback_days + 50;
-        let closes = clients.fetch_yahoo_closes(&model.symbols, history_days).await?;
-        
+        let closes = clients
+            .fetch_yahoo_closes(&model.symbols, history_days)
+            .await?;
+
         // Check for missing data
-        let missing: Vec<_> = model.symbols.iter().filter(|s| !closes.contains_key(*s)).collect();
+        let missing: Vec<_> = model
+            .symbols
+            .iter()
+            .filter(|s| !closes.contains_key(*s))
+            .collect();
         if !missing.is_empty() {
             eprintln!("Warning: Missing history for: {:?}", missing);
             return Err("Incomplete history".into());
         }
 
         // Get latest prices for order sizing
-        let latest_prices: std::collections::HashMap<String, f64> = closes.iter()
+        let latest_prices: std::collections::HashMap<String, f64> = closes
+            .iter()
             .filter_map(|(s, v)| v.last().map(|p| (s.clone(), *p)))
             .collect();
 
@@ -175,7 +190,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             args.top_k,
             0.0,
         )?;
-        
+
         let config = OptimizationConfig {
             risk_aversion: args.risk_aversion,
             min_weight: args.min_weight,
@@ -190,10 +205,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             &positions,
             &latest_prices,
             &config,
-            Some(&open_orders.iter().map(|o| serde_json::json!({
-                "symbol": o.symbol,
-                "side": format!("{:?}", o.side)
-            })).collect::<Vec<_>>()),
+            Some(
+                &open_orders
+                    .iter()
+                    .map(|o| {
+                        serde_json::json!({
+                            "symbol": o.symbol,
+                            "side": format!("{:?}", o.side)
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            ),
         );
 
         let result = serde_json::json!({

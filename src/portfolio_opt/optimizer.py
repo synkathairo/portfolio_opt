@@ -18,7 +18,9 @@ def effective_turnover_penalty(
 ) -> float:
     if current_weights is None:
         return 0.0
-    invested_weight = float(np.clip(np.sum(np.array(current_weights, dtype=float)), 0.0, 1.0))
+    invested_weight = float(
+        np.clip(np.sum(np.array(current_weights, dtype=float)), 0.0, 1.0)
+    )
     # Scale the turnover penalty by the currently invested risky weight so an
     # all-cash portfolio is not punished for entering its first positions.
     return config.turnover_penalty * invested_weight
@@ -106,8 +108,7 @@ def optimize_basket_weights(
     weights = cp.Variable(asset_count)
 
     objective = cp.Maximize(
-        expected_returns @ weights
-        - risk_aversion * cp.quad_form(weights, covariance)
+        expected_returns @ weights - risk_aversion * cp.quad_form(weights, covariance)
     )
     constraints = [weights >= min_weight, weights <= max_weight]
     if force_full_investment:

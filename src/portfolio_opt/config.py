@@ -25,7 +25,9 @@ class AlpacaConfig:
                 "Missing Alpaca credentials. Set APCA_API_KEY_ID and "
                 "APCA_API_SECRET_KEY in your environment or a local .env file."
             )
-        return cls(api_key=api_key, api_secret=api_secret, base_url=base_url, data_url=data_url)
+        return cls(
+            api_key=api_key, api_secret=api_secret, base_url=base_url, data_url=data_url
+        )
 
 
 @dataclass(frozen=True)

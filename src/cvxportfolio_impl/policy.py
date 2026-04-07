@@ -21,7 +21,9 @@ def build_policy(
     benchmark=None,
     planning_horizon: int = 1,
 ):
-    objective = cvx.ReturnsForecast(r_hat=forecasts) - risk_aversion * cvx.FullCovariance()
+    objective = (
+        cvx.ReturnsForecast(r_hat=forecasts) - risk_aversion * cvx.FullCovariance()
+    )
     constraints = [
         cvx.LongOnly(applies_to_cash=True),
         cvx.MaxWeights(max_weight),
@@ -29,7 +31,9 @@ def build_policy(
     if max_leverage is not None:
         constraints.append(cvx.LeverageLimit(max_leverage))
     if target_volatility is not None:
-        constraints.append(cvx.FullCovariance() <= cvx.AnnualizedVolatility(target_volatility))
+        constraints.append(
+            cvx.FullCovariance() <= cvx.AnnualizedVolatility(target_volatility)
+        )
 
     total_exposure = pd.Series(1.0, index=symbols)
     constraints.append(cvx.FactorMaxLimit(total_exposure, 1.0 - min_cash_weight))
@@ -50,14 +54,20 @@ def build_policy(
 
     for class_name, lower_bound in class_min_weights.items():
         exposure = pd.Series(
-            [1.0 if asset_classes.get(symbol) == class_name else 0.0 for symbol in symbols],
+            [
+                1.0 if asset_classes.get(symbol) == class_name else 0.0
+                for symbol in symbols
+            ],
             index=symbols,
         )
         constraints.append(cvx.FactorMinLimit(exposure, lower_bound))
 
     for class_name, upper_bound in class_max_weights.items():
         exposure = pd.Series(
-            [1.0 if asset_classes.get(symbol) == class_name else 0.0 for symbol in symbols],
+            [
+                1.0 if asset_classes.get(symbol) == class_name else 0.0
+                for symbol in symbols
+            ],
             index=symbols,
         )
         constraints.append(cvx.FactorMaxLimit(exposure, upper_bound))

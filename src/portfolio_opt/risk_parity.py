@@ -53,7 +53,11 @@ def risk_parity_weights(
             # The closed-form update for RC = 1/n is:
             if abs(other) < 1e-16:
                 continue
-            w[i] = max(0.0, (-other + np.sqrt(other ** 2 + 4 * covariance[i, i] * (1.0 / n))) / (2 * covariance[i, i]))
+            w[i] = max(
+                0.0,
+                (-other + np.sqrt(other**2 + 4 * covariance[i, i] * (1.0 / n)))
+                / (2 * covariance[i, i]),
+            )
         # Normalize
         total = w.sum()
         if total > 0:

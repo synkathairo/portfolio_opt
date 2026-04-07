@@ -1,12 +1,12 @@
 use apca::api::v2::account;
-use apca::api::v2::order::{self, CreateReqInit, Amount, Type, TimeInForce, Side, Order};
-use apca::api::v2::positions;
+use apca::api::v2::order::{self, Amount, CreateReqInit, Order, Side, TimeInForce, Type};
 use apca::api::v2::orders::{self, ListReq, Status};
+use apca::api::v2::positions;
 use apca::{ApiInfo, Client as AlpacaClient};
 use num_decimal::Num;
 use std::collections::HashMap;
-use yfinance_rs::{Interval, Range, Ticker, YfClient};
 use yfinance_rs::core::conversions::money_to_f64;
+use yfinance_rs::{Interval, Range, Ticker, YfClient};
 
 use crate::portfolio_opt::types::{AccountSnapshot, OrderPlan, Position};
 
@@ -52,13 +52,23 @@ impl PortfolioClients {
             status: Status::Open,
             ..Default::default()
         };
-        self.alpaca.issue::<orders::List>(&req).await.map_err(|e| e.into())
+        self.alpaca
+            .issue::<orders::List>(&req)
+            .await
+            .map_err(|e| e.into())
     }
 
-    pub async fn submit_order_plan(&self, plans: &[OrderPlan]) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn submit_order_plan(
+        &self,
+        plans: &[OrderPlan],
+    ) -> Result<(), Box<dyn std::error::Error>> {
         for plan in plans {
-            let side = if plan.side == "buy" { Side::Buy } else { Side::Sell };
-            
+            let side = if plan.side == "buy" {
+                Side::Buy
+            } else {
+                Side::Sell
+            };
+
             let req_init = CreateReqInit {
                 type_: Type::Market,
                 time_in_force: TimeInForce::Day,
@@ -67,9 +77,11 @@ impl PortfolioClients {
 
             let notional_val: Num = format!("{}", plan.notional_usd).parse().unwrap();
             let req = req_init.init(
-                plan.symbol.as_str(), 
-                side, 
-                Amount::Notional { notional: notional_val }
+                plan.symbol.as_str(),
+                side,
+                Amount::Notional {
+                    notional: notional_val,
+                },
             );
 
             if let Err(e) = self.alpaca.issue::<order::Create>(&req).await {
@@ -79,24 +91,26 @@ impl PortfolioClients {
         Ok(())
     }
 
-    pub async fn fetch_yahoo_closes(&self, symbols: &[String], period_days: usize) -> Result<HashMap<String, Vec<f64>>, Box<dyn std::error::Error>> {
+    pub async fn fetch_yahoo_closes(
+        &self,
+        symbols: &[String],
+        period_days: usize,
+    ) -> Result<HashMap<String, Vec<f64>>, Box<dyn std::error::Error>> {
         let mut closes = HashMap::new();
-        
+
         // Map days to Yahoo Range
-        let range = if period_days > 600 { 
-            Range::Max 
-        } else if period_days > 252 { 
-            Range::Y2 
-        } else { 
-            Range::Y1 
+        let range = if period_days > 600 {
+            Range::Max
+        } else if period_days > 252 {
+            Range::Y2
+        } else {
+            Range::Y1
         };
-        
+
         for symbol in symbols {
             let ticker = Ticker::new(&self.yf, symbol);
             if let Ok(history) = ticker.history(Some(range), Some(Interval::D1), false).await {
-                let prices: Vec<f64> = history.iter()
-                    .map(|c| money_to_f64(&c.close))
-                    .collect();
+                let prices: Vec<f64> = history.iter().map(|c| money_to_f64(&c.close)).collect();
                 if !prices.is_empty() {
                     closes.insert(symbol.clone(), prices);
                 }

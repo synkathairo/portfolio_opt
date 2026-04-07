@@ -61,7 +61,9 @@ def fetch_closes(
                 raise ValueError(f"Empty close series for {symbol}")
             closes_by_symbol[symbol] = closes
         except Exception as exc:
-            raise RuntimeError(f"Failed to fetch {symbol} from yfinance: {exc}") from exc
+            raise RuntimeError(
+                f"Failed to fetch {symbol} from yfinance: {exc}"
+            ) from exc
 
     # Align to common trailing history — different ETFs have different inception
     # dates, so we trim to the shortest series.
