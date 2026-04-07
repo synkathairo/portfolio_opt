@@ -1,5 +1,10 @@
 {
-  "symbols": ["SPY", "QQQ", "TLT", "GLD"],
+  "symbols": [
+    "SPY",
+    "QQQ",
+    "TLT",
+    "GLD"
+  ],
   "asset_classes": {
     "SPY": "equity",
     "QQQ": "equity",

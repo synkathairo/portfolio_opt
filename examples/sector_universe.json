@@ -17,6 +17,7 @@
     "TLT",
     "TIP",
     "GLD",
+    "SLV",
     "DBC",
     "VNQ"
   ],
@@ -38,6 +39,7 @@
     "TLT": "bond_long",
     "TIP": "bond_inflation",
     "GLD": "commodity_gold",
+    "SLV": "commodity_silver",
     "DBC": "commodity_broad",
     "VNQ": "real_estate"
   },
@@ -64,6 +66,7 @@
     "bond_long": 0.25,
     "bond_inflation": 0.2,
     "commodity_gold": 0.2,
+    "commodity_silver": 0.2,
     "commodity_broad": 0.15,
     "real_estate": 0.15
   }

@@ -20,6 +20,18 @@ except ImportError as exc:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 
+def _to_yahoo_symbol(symbol: str) -> str:
+    """Convert a standard ticker symbol to Yahoo Finance format.
+
+    Yahoo Finance uses ``-`` instead of ``.`` for share class suffixes
+    (e.g. ``BRK.B`` → ``BRK-B``, ``BF.B`` → ``BF-B``).
+    """
+    parts = symbol.split(".")
+    if len(parts) == 2 and len(parts[1]) <= 2:
+        return f"{parts[0]}-{parts[1]}"
+    return symbol
+
+
 def fetch_closes(
     symbols: list[str],
     period: str = "max",
@@ -45,24 +57,28 @@ def fetch_closes(
 
     # yfinance can fetch multiple tickers in one call, returning a DataFrame
     # with a MultiIndex column (symbol, price_field).  We only need "Adj Close".
-    tickers = yf.Tickers(" ".join(symbols))
+    # Normalize symbols: Yahoo uses '-' instead of '.' for share classes.
+    yahoo_symbols = [_to_yahoo_symbol(s) for s in symbols]
+    symbol_map = dict(zip(yahoo_symbols, symbols))  # yahoo -> original
+
+    tickers = yf.Tickers(" ".join(yahoo_symbols))
     closes_by_symbol: dict[str, list[float]] = {}
 
-    for symbol in symbols:
+    for yahoo_sym, orig_sym in symbol_map.items():
         try:
-            ticker = tickers.tickers.get(symbol) or tickers.tickers.get(symbol.upper())
+            ticker = tickers.tickers.get(yahoo_sym)
             if ticker is None:
-                raise ValueError(f"yfinance returned no data for {symbol}")
+                raise ValueError(f"yfinance returned no data for {orig_sym}")
             hist = ticker.history(period=period, auto_adjust=True)
             if hist.empty or "Close" not in hist.columns:
-                raise ValueError(f"No close data for {symbol}")
+                raise ValueError(f"No close data for {orig_sym}")
             closes = [float(c) for c in hist["Close"].values]
             if not closes:
-                raise ValueError(f"Empty close series for {symbol}")
-            closes_by_symbol[symbol] = closes
+                raise ValueError(f"Empty close series for {orig_sym}")
+            closes_by_symbol[orig_sym] = closes
         except Exception as exc:
             raise RuntimeError(
-                f"Failed to fetch {symbol} from yfinance: {exc}"
+                f"Failed to fetch {orig_sym} from yfinance: {exc}"
             ) from exc
 
     # Align to common trailing history — different ETFs have different inception
