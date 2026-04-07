@@ -304,6 +304,7 @@ def run_backtest(
         period_return = float(np.dot(weights, returns[:, step]) + cash_weight * 0.0)
         portfolio_returns.append(period_return)
         portfolio_value *= 1.0 + period_return
+        daily_values.append(portfolio_value)
         peak_value = max(peak_value, portfolio_value)
         max_drawdown = max(max_drawdown, 1.0 - portfolio_value / peak_value)
 

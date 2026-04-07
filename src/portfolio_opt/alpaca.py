@@ -350,6 +350,34 @@ class AlpacaClient:
         except URLError as exc:  # pragma: no cover
             raise RuntimeError(f"Alpaca connection error: {exc.reason}") from exc
 
+    def fetch_yahoo_closes(
+        self,
+        symbols: list[str],
+        period_days: int,
+    ) -> dict[str, list[float]]:
+        """Fetch historical daily closes from Yahoo Finance."""
+        import yfinance as yf
+
+        closes: dict[str, list[float]] = {}
+        # Map days to Yahoo Range
+        if period_days > 600:
+            range_str = "max"
+        elif period_days > 252:
+            range_str = "2y"
+        else:
+            range_str = "1y"
+
+        for symbol in symbols:
+            try:
+                ticker = yf.Ticker(symbol)
+                hist = ticker.history(period=range_str)
+                if not hist.empty:
+                    closes[symbol] = hist["Close"].tolist()
+            except Exception:
+                # Skip symbols that fail (e.g., delisted, invalid)
+                continue
+        return closes
+
 
 def format_order_plans(plans: list[OrderPlan]) -> str:
     return json.dumps([asdict(plan) for plan in plans], indent=2)

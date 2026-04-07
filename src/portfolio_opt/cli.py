@@ -423,6 +423,12 @@ def main() -> None:
                 weights_by_symbol={"SPY": 1.0},
                 start_day=args.lookback_days,
             ),
+            "qqq": run_fixed_weight_benchmark(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                weights_by_symbol={"QQQ": 1.0},
+                start_day=args.lookback_days,
+            ),
             "sixty_forty_spy_tlt": run_fixed_weight_benchmark(
                 symbols=model.symbols,
                 closes_by_symbol=closes_by_symbol,
