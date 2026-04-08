@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 import json
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -14,6 +15,91 @@ from portfolio_opt.model import load_model_inputs
 
 from .data import bars_to_market_data, momentum_forecast
 from .policy import build_policy
+
+
+def _run_single_sweep(params: tuple) -> dict[str, float | int]:
+    """Run one grid point of the parameter sweep. Module-level for pickling."""
+    (
+        risk_aversion,
+        mean_shrinkage,
+        min_cash_weight,
+        min_invested_weight,
+        momentum_window,
+        symbols,
+        returns_array,
+        prices_array,
+        warmup_days,
+        class_min_weights,
+        class_max_weights,
+        asset_classes,
+        core_symbol,
+        core_weight,
+        target_volatility,
+        max_leverage,
+        benchmark_df,
+        linear_trade_cost,
+        planning_horizon,
+    ) = params
+
+    try:
+        import cvxportfolio as cvx
+    except ImportError as exc:
+        raise RuntimeError("cvxportfolio is not installed") from exc
+
+    forecasts = momentum_forecast(
+        returns_frame=returns_array,
+        momentum_window=momentum_window,
+        mean_shrinkage=mean_shrinkage,
+    )
+    policy = build_policy(
+        cvx=cvx,
+        symbols=symbols,
+        forecasts=forecasts,
+        risk_aversion=risk_aversion,
+        max_weight=0.35,
+        min_cash_weight=min_cash_weight,
+        min_invested_weight=min_invested_weight,
+        class_min_weights=class_min_weights,
+        class_max_weights=class_max_weights,
+        asset_classes=asset_classes,
+        core_symbol=core_symbol,
+        core_weight=core_weight,
+        target_volatility=target_volatility,
+        max_leverage=max_leverage,
+        benchmark=benchmark_df,
+        planning_horizon=planning_horizon,
+    )
+    simulator = cvx.MarketSimulator(
+        returns=returns_array, prices=prices_array, cash_key="USDOLLAR"
+    )
+    result = simulator.backtest(
+        policy, start_time=returns_array.index[warmup_days]
+    )
+    realized_returns = result.v.pct_change().dropna().to_numpy()
+    turnover_series = (
+        result.turnover.reindex(result.v.index).fillna(0.0).to_numpy()
+    )
+    net_realized_returns = realized_returns - linear_trade_cost * turnover_series[1:]
+    _, _, annualized_return, annualized_volatility, max_drawdown = (
+        summarize_return_series(net_realized_returns)
+    )
+    sharpe_ratio = (
+        annualized_return / annualized_volatility
+        if annualized_volatility > 0
+        else 0.0
+    )
+    return {
+        "risk_aversion": risk_aversion,
+        "mean_shrinkage": mean_shrinkage,
+        "min_cash_weight": min_cash_weight,
+        "min_invested_weight": min_invested_weight,
+        "momentum_window": momentum_window,
+        "annualized_return": round(float(annualized_return), 6),
+        "annualized_volatility": round(float(annualized_volatility), 6),
+        "max_drawdown": round(float(max_drawdown), 6),
+        "average_turnover": round(float(result.turnover.mean()), 6),
+        "sharpe_ratio": round(float(sharpe_ratio), 6),
+    }
 
 
 def clean_value(value: float, tolerance: float = 1e-5) -> float:
@@ -623,97 +709,60 @@ def run_cvxportfolio_sweep(
     cash_grid = [0.05, 0.10, 0.20]
     invested_grid = [0.20, 0.30, 0.40]
     momentum_grid = [42, 63, 84]
+
+    benchmark_df = build_benchmark_weights(
+        returns_frame.index,
+        model.symbols,
+        benchmark_symbol=benchmark_symbol,
+        benchmark_weight=benchmark_weight,
+    )
+
+    grid_params = list(
+        itertools.product(
+            risk_grid,
+            shrinkage_grid,
+            cash_grid,
+            invested_grid,
+            momentum_grid,
+        )
+    )
+    worker_args = [
+        (
+            risk_aversion,
+            mean_shrinkage,
+            min_cash_weight,
+            min_invested_weight,
+            momentum_window,
+            model.symbols,
+            returns_frame,
+            prices_frame,
+            warmup_days,
+            model.class_min_weights,
+            model.class_max_weights,
+            model.asset_classes,
+            core_symbol,
+            core_weight,
+            target_volatility,
+            max_leverage,
+            benchmark_df,
+            linear_trade_cost,
+            planning_horizon,
+        )
+        for (
+            risk_aversion,
+            mean_shrinkage,
+            min_cash_weight,
+            min_invested_weight,
+            momentum_window,
+        ) in grid_params
+    ]
+
     results: list[dict[str, float | int]] = []
     skipped: list[dict[str, float | int | str]] = []
 
-    for (
-        risk_aversion,
-        mean_shrinkage,
-        min_cash_weight,
-        min_invested_weight,
-        momentum_window,
-    ) in itertools.product(
-        risk_grid,
-        shrinkage_grid,
-        cash_grid,
-        invested_grid,
-        momentum_grid,
-    ):
-        forecasts = momentum_forecast(
-            returns_frame=returns_frame,
-            momentum_window=momentum_window,
-            mean_shrinkage=mean_shrinkage,
-        )
-        try:
-            policy = build_policy(
-                cvx=cvx,
-                symbols=model.symbols,
-                forecasts=forecasts,
-                risk_aversion=risk_aversion,
-                max_weight=0.35,
-                min_cash_weight=min_cash_weight,
-                min_invested_weight=min_invested_weight,
-                class_min_weights=model.class_min_weights,
-                class_max_weights=model.class_max_weights,
-                asset_classes=model.asset_classes,
-                core_symbol=core_symbol,
-                core_weight=core_weight,
-                target_volatility=target_volatility,
-                max_leverage=max_leverage,
-                benchmark=build_benchmark_weights(
-                    returns_frame.index,
-                    model.symbols,
-                    benchmark_symbol=benchmark_symbol,
-                    benchmark_weight=benchmark_weight,
-                ),
-                planning_horizon=planning_horizon,
-            )
-            simulator = cvx.MarketSimulator(
-                returns=returns_frame, prices=prices_frame, cash_key="USDOLLAR"
-            )
-            result = simulator.backtest(
-                policy, start_time=returns_frame.index[warmup_days]
-            )
-            realized_returns = result.v.pct_change().dropna().to_numpy()
-            turnover_series = (
-                result.turnover.reindex(result.v.index).fillna(0.0).to_numpy()
-            )
-            net_realized_returns = (
-                realized_returns - linear_trade_cost * turnover_series[1:]
-            )
-            _, _, annualized_return, annualized_volatility, max_drawdown = (
-                summarize_return_series(net_realized_returns)
-            )
-            sharpe_ratio = (
-                annualized_return / annualized_volatility
-                if annualized_volatility > 0
-                else 0.0
-            )
-            results.append(
-                {
-                    "risk_aversion": risk_aversion,
-                    "mean_shrinkage": mean_shrinkage,
-                    "min_cash_weight": min_cash_weight,
-                    "min_invested_weight": min_invested_weight,
-                    "momentum_window": momentum_window,
-                    "annualized_return": round(float(annualized_return), 6),
-                    "annualized_volatility": round(float(annualized_volatility), 6),
-                    "max_drawdown": round(float(max_drawdown), 6),
-                    "average_turnover": round(float(result.turnover.mean()), 6),
-                    "sharpe_ratio": round(float(sharpe_ratio), 6),
-                }
-            )
-        except Exception as exc:  # pragma: no cover
-            skipped.append(
-                {
-                    "risk_aversion": risk_aversion,
-                    "mean_shrinkage": mean_shrinkage,
-                    "min_cash_weight": min_cash_weight,
-                    "min_invested_weight": min_invested_weight,
-                    "momentum_window": momentum_window,
-                    "reason": str(exc),
-                }
-            )
+    with ProcessPoolExecutor() as executor:
+        for combo_params, outcome in zip(grid_params, executor.map(_run_single_sweep, worker_args)):
+            results.append(outcome)
 
     results.sort(
         key=lambda item: (

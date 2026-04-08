@@ -7,6 +7,7 @@ custom backtest can reach back to ETF inception (e.g. the 2008 crisis).
 from __future__ import annotations
 
 import logging
+import time
 
 import pandas as pd
 
@@ -35,6 +36,8 @@ def _to_yahoo_symbol(symbol: str) -> str:
 def fetch_closes(
     symbols: list[str],
     period: str = "max",
+    retries: int = 3,
+    retry_delay: float = 1.0,
 ) -> dict[str, list[float]]:
     """Download daily adjusted closes for *symbols* from Yahoo Finance.
 
@@ -44,6 +47,10 @@ def fetch_closes(
         Ticker symbols (e.g. ``["SPY", "QQQ", "GLD"]``).
     period : str
         yfinance period string — ``"max"``, ``"10y"``, ``"5y"``, etc.
+    retries : int
+        Number of retry attempts per symbol on transient failures.
+    retry_delay : float
+        Seconds to wait between retries.
 
     Returns
     -------
@@ -55,31 +62,39 @@ def fetch_closes(
     if not symbols:
         return {}
 
-    # yfinance can fetch multiple tickers in one call, returning a DataFrame
-    # with a MultiIndex column (symbol, price_field).  We only need "Adj Close".
-    # Normalize symbols: Yahoo uses '-' instead of '.' for share classes.
-    yahoo_symbols = [_to_yahoo_symbol(s) for s in symbols]
-    symbol_map = dict(zip(yahoo_symbols, symbols))  # yahoo -> original
-
-    tickers = yf.Tickers(" ".join(yahoo_symbols))
     closes_by_symbol: dict[str, list[float]] = {}
+    failed: list[str] = []
 
-    for yahoo_sym, orig_sym in symbol_map.items():
-        try:
-            ticker = tickers.tickers.get(yahoo_sym)
-            if ticker is None:
-                raise ValueError(f"yfinance returned no data for {orig_sym}")
-            hist = ticker.history(period=period, auto_adjust=True)
-            if hist.empty or "Close" not in hist.columns:
-                raise ValueError(f"No close data for {orig_sym}")
-            closes = [float(c) for c in hist["Close"].values]
-            if not closes:
-                raise ValueError(f"Empty close series for {orig_sym}")
-            closes_by_symbol[orig_sym] = closes
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to fetch {orig_sym} from yfinance: {exc}"
-            ) from exc
+    for symbol in symbols:
+        yahoo_sym = _to_yahoo_symbol(symbol)
+        last_err: Exception | None = None
+        for attempt in range(1, retries + 1):
+            try:
+                ticker = yf.Ticker(yahoo_sym)
+                hist = ticker.history(period=period, auto_adjust=True)
+                if hist.empty or "Close" not in hist.columns:
+                    raise ValueError(f"No close data for {symbol}")
+                closes = [float(c) for c in hist["Close"].values]
+                if not closes:
+                    raise ValueError(f"Empty close series for {symbol}")
+                closes_by_symbol[symbol] = closes
+                break
+            except Exception as exc:
+                last_err = exc
+                if attempt < retries:
+                    logger.debug(
+                        "Retry %d/%d for %s: %s", attempt, retries, symbol, exc
+                    )
+                    time.sleep(retry_delay)
+        else:
+            failed.append(symbol)
+            logger.warning("Failed to fetch %s after %d retries: %s", symbol, retries, last_err)
+
+    if failed:
+        raise RuntimeError(
+            f"Failed to fetch {len(failed)}/{len(symbols)} symbols: "
+            f"{', '.join(failed[:10])}{'...' if len(failed) > 10 else ''}"
+        )
 
     # Align to common trailing history — different ETFs have different inception
     # dates, so we trim to the shortest series.

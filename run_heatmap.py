@@ -11,17 +11,24 @@ today = str(date.today())
 # Configuration
 # MODEL = "examples/nasdaq100_universe.json"
 # MODEL = "examples/nasdaq100_historical_universe.json"
-MODEL = "examples/sector_universe_pre2020.json"
+# MODEL = "examples/sector_universe_pre2020.json"
+# MODEL = "examples/nasdaq100_sp500_sector_universe.json"
+MODEL = "examples/nasdaq100_sp500_sector_universe_b2016filtered.json"
 # TITLE_NAME_VAR = "Nasdaq_100_historical"
-TITLE_NAME_VAR = "sector_universe_pre2020"
+# TITLE_NAME_VAR = "sector_universe_pre2020"
+TITLE_NAME_VAR = "nasdaq100_sp500_sector_universe_b2016filtered"
 LOOKBACK = 60
 # LOOKBACK = 252
-BACKTEST_DAYS = 252
+BACKTEST_DAYS = 252*9
+# BACKTEST_DAYS = 252*4
 # BACKTEST_DAYS = 6000
-BACKTEST_DAYS = 2520
+# BACKTEST_DAYS = 2520
 REBALANCE_DAYS = [1, 5, 10, 21, 42, 63]
 TOP_KS = [1, 2, 3, 5, 8]
 FIGURE_NAME = f"heatmap_comparison_{TITLE_NAME_VAR}_{BACKTEST_DAYS}_{LOOKBACK}_{today}"
+# TIMEOUT = 120
+# TIMEOUT_LEN = 600
+TIMEOUT_LEN = 2000
 
 def run_backtest(rebal_days, k):
     cmd = [
@@ -32,12 +39,13 @@ def run_backtest(rebal_days, k):
         "--backtest-days", str(BACKTEST_DAYS),
         "--rebalance-every", str(rebal_days),
         "--top-k", str(k),
+        "--data-source", "yfinance",
         "--use-cache",
-        "--refresh-cache"
-        # "--offline"
+        # "--refresh-cache"
+        "--offline"
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT_LEN)
         data = json.loads(result.stdout)
         return data['backtest']
     except Exception as e:
