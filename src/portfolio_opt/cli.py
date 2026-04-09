@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
 
 import numpy as np
@@ -26,6 +27,80 @@ from .runtime import configure_local_cache_dirs
 from .yfinance_data import fetch_closes as yf_fetch_closes
 
 configure_local_cache_dirs()
+
+
+def _run_sweep_point(
+    *,
+    symbols: list[str],
+    closes_by_symbol: dict[str, list[float]],
+    lookback_days: int,
+    rebalance_every: int,
+    return_model: str,
+    mean_shrinkage: float,
+    min_weight: float,
+    max_weight: float,
+    rebalance_threshold: float,
+    max_turnover: float | None,
+    class_min_weights: dict[str, float],
+    class_max_weights: dict[str, float],
+    risk_aversion: float,
+    min_cash_weight: float,
+    min_invested_weight: float,
+    turnover_penalty: float,
+    momentum_window: int,
+    asset_class_matrix: np.ndarray | None,
+) -> dict[str, float | int | dict[str, float]] | tuple[str, str]:
+    """Run a single sweep parameter combination. Returns result or error tuple."""
+    sweep_config = OptimizationConfig(
+        risk_aversion=risk_aversion,
+        min_weight=min_weight,
+        max_weight=max_weight,
+        rebalance_threshold=rebalance_threshold,
+        turnover_penalty=turnover_penalty,
+        force_full_investment=False,
+        min_cash_weight=min_cash_weight,
+        max_turnover=max_turnover,
+        min_invested_weight=min_invested_weight,
+        class_min_weights=class_min_weights,
+        class_max_weights=class_max_weights,
+    )
+    try:
+        sweep_backtest = run_backtest(
+            symbols=symbols,
+            closes_by_symbol=closes_by_symbol,
+            lookback_days=lookback_days,
+            rebalance_every=rebalance_every,
+            return_model=return_model,
+            mean_shrinkage=mean_shrinkage,
+            momentum_window=momentum_window,
+            opt_config=sweep_config,
+            asset_class_matrix=asset_class_matrix,
+        )
+    except RuntimeError as exc:
+        return (
+            "error",
+            json.dumps(
+                {
+                    "risk_aversion": risk_aversion,
+                    "min_cash_weight": min_cash_weight,
+                    "min_invested_weight": min_invested_weight,
+                    "turnover_penalty": turnover_penalty,
+                    "momentum_window": momentum_window,
+                    "reason": str(exc),
+                }
+            ),
+        )
+    return {
+        "risk_aversion": risk_aversion,
+        "min_cash_weight": min_cash_weight,
+        "min_invested_weight": min_invested_weight,
+        "turnover_penalty": turnover_penalty,
+        "momentum_window": momentum_window,
+        "annualized_return": round(float(sweep_backtest.annualized_return), 6),
+        "annualized_volatility": round(float(sweep_backtest.annualized_volatility), 6),
+        "max_drawdown": round(float(sweep_backtest.max_drawdown), 6),
+        "average_turnover": round(float(sweep_backtest.average_turnover), 6),
+    }
 
 
 def build_asset_class_matrix(
@@ -306,80 +381,54 @@ def main() -> None:
             invested_grid = [0.20, 0.30, 0.40]
             turnover_grid = [0.02, 0.05]
             momentum_grid = [42, 63, 84]
-            results: list[dict[str, float | int | dict[str, float]]] = []
-            skipped: list[dict[str, float | int | str]] = []
 
-            for (
-                risk_aversion,
-                min_cash_weight,
-                min_invested_weight,
-                turnover_penalty,
-                momentum_window,
-            ) in itertools.product(
-                risk_grid,
-                cash_grid,
-                invested_grid,
-                turnover_grid,
-                momentum_grid,
-            ):
-                sweep_config = OptimizationConfig(
-                    risk_aversion=risk_aversion,
-                    min_weight=args.min_weight,
-                    max_weight=args.max_weight,
-                    rebalance_threshold=args.rebalance_threshold,
-                    turnover_penalty=turnover_penalty,
-                    force_full_investment=False,
-                    min_cash_weight=min_cash_weight,
-                    max_turnover=args.max_turnover,
-                    min_invested_weight=min_invested_weight,
-                    class_min_weights=model.class_min_weights,
-                    class_max_weights=model.class_max_weights,
+            grid_params = list(
+                itertools.product(
+                    risk_grid,
+                    cash_grid,
+                    invested_grid,
+                    turnover_grid,
+                    momentum_grid,
                 )
-                try:
-                    sweep_backtest = run_backtest(
+            )
+
+            with ProcessPoolExecutor() as executor:
+                futures = [
+                    executor.submit(
+                        _run_sweep_point,
                         symbols=model.symbols,
                         closes_by_symbol=closes_by_symbol,
                         lookback_days=args.lookback_days,
                         rebalance_every=args.rebalance_every,
                         return_model=args.return_model,
                         mean_shrinkage=args.mean_shrinkage,
+                        min_weight=args.min_weight,
+                        max_weight=args.max_weight,
+                        rebalance_threshold=args.rebalance_threshold,
+                        max_turnover=args.max_turnover,
+                        class_min_weights=model.class_min_weights,
+                        class_max_weights=model.class_max_weights,
+                        risk_aversion=risk_aversion,
+                        min_cash_weight=min_cash_weight,
+                        min_invested_weight=min_invested_weight,
+                        turnover_penalty=turnover_penalty,
                         momentum_window=momentum_window,
-                        opt_config=sweep_config,
                         asset_class_matrix=(
                             asset_class_matrix if constrained_class_names else None
                         ),
                     )
-                except RuntimeError as exc:
-                    skipped.append(
-                        {
-                            "risk_aversion": risk_aversion,
-                            "min_cash_weight": min_cash_weight,
-                            "min_invested_weight": min_invested_weight,
-                            "turnover_penalty": turnover_penalty,
-                            "momentum_window": momentum_window,
-                            "reason": str(exc),
-                        }
-                    )
-                    continue
-                results.append(
-                    {
-                        "risk_aversion": risk_aversion,
-                        "min_cash_weight": min_cash_weight,
-                        "min_invested_weight": min_invested_weight,
-                        "turnover_penalty": turnover_penalty,
-                        "momentum_window": momentum_window,
-                        "annualized_return": round(
-                            float(sweep_backtest.annualized_return), 6
-                        ),
-                        "annualized_volatility": round(
-                            float(sweep_backtest.annualized_volatility), 6
-                        ),
-                        "max_drawdown": round(float(sweep_backtest.max_drawdown), 6),
-                        "average_turnover": round(
-                            float(sweep_backtest.average_turnover), 6
-                        ),
-                    }
-                )
+                    for risk_aversion, min_cash_weight, min_invested_weight, turnover_penalty, momentum_window in grid_params
+                ]
+
+            results: list[dict[str, float | int | dict[str, float]]] = []
+            skipped: list[dict[str, float | int | str]] = []
+
+            for future in futures:
+                outcome = future.result()
+                if isinstance(outcome, tuple):
+                    skipped.append(json.loads(outcome[1]))
+                else:
+                    results.append(outcome)
 
             results.sort(
                 key=lambda item: (

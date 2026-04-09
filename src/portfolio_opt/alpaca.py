@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -133,7 +134,8 @@ class AlpacaClient:
         end = datetime.now(UTC)
         start = end - timedelta(days=max(lookback_days * 3, 30))
         bars_by_symbol: dict[str, list[dict[str, str | float]]] = {}
-        for symbol in symbols:
+
+        def _fetch_bars(symbol: str) -> tuple[str, list[dict[str, str | float]]]:
             query = urlencode(
                 {
                     "timeframe": "1Day",
@@ -160,7 +162,14 @@ class AlpacaClient:
                     f"Not enough daily bars returned for {symbol}. "
                     f"Requested {lookback_days} trading days, got {len(bars)}."
                 )
-            bars_by_symbol[symbol] = bars
+            return symbol, bars
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(_fetch_bars, s): s for s in symbols}
+            for future in as_completed(futures):
+                symbol, bars = future.result()
+                bars_by_symbol[symbol] = bars
+
         return bars_by_symbol
 
     def _daily_closes_payload(
@@ -171,7 +180,8 @@ class AlpacaClient:
         # and holidays while still ending up with enough bars.
         start = end - timedelta(days=max(lookback_days * 3, 30))
         closes_by_symbol: dict[str, list[float]] = {}
-        for symbol in symbols:
+
+        def _fetch_closes(symbol: str) -> tuple[str, list[float]]:
             # Use the single-symbol endpoint here. Alpaca's multi-symbol bars
             # endpoint sorts results by symbol first, so a modest limit can
             # return only the first symbol and leave the rest empty.
@@ -195,7 +205,14 @@ class AlpacaClient:
                     f"Not enough daily bars returned for {symbol}. "
                     f"Requested {lookback_days} trading days, got {len(closes)}."
                 )
-            closes_by_symbol[symbol] = closes
+            return symbol, closes
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(_fetch_closes, s): s for s in symbols}
+            for future in as_completed(futures):
+                symbol, closes = future.result()
+                closes_by_symbol[symbol] = closes
+
         return closes_by_symbol
 
     def _latest_prices_payload(self, symbols: list[str]) -> dict[str, Any]:
@@ -395,15 +412,25 @@ class AlpacaClient:
         else:
             range_str = "1y"
 
-        for symbol in symbols:
+        def _fetch_yahoo(
+            symbol: str,
+        ) -> tuple[str, list[float] | None]:
             try:
                 ticker = yf.Ticker(symbol)
                 hist = ticker.history(period=range_str)
                 if not hist.empty:
-                    closes[symbol] = hist["Close"].tolist()
+                    return symbol, hist["Close"].tolist()
             except Exception:
-                # Skip symbols that fail (e.g., delisted, invalid)
-                continue
+                pass
+            return symbol, None
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(_fetch_yahoo, s): s for s in symbols}
+            for future in as_completed(futures):
+                symbol, result = future.result()
+                if result is not None:
+                    closes[symbol] = result
+
         return closes
 
 

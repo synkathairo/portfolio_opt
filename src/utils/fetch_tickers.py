@@ -1,6 +1,9 @@
 import requests
 import yfinance as yf
 import pandas as pd
+from datetime import datetime
+from typing import Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # present a json-like dict object(?)
 
@@ -8,20 +11,32 @@ import pandas as pd
 # these should match in layout
 
 
-def _format_ticker_dict(tickers: list[str]) -> dict:
-    symbols = tickers
-    asset_classes = {}
+def _get_ticker_info(ticker: str) -> tuple[str, str]:
+    """Fetch info for a single ticker. Returns (symbol, formatted_name)."""
+    try:
+        info = yf.Ticker(ticker).info or {}
+        name = info.get("shortName") or info.get("longName") or ticker
+        sector = info.get("sector") or "Unknown"
+        return ticker, f"{name} ({sector})"
+    except Exception:
+        return ticker, f"{ticker} (Unknown)"
 
-    for t in tickers:
-        try:
-            info = yf.Ticker(t).info or {}
-            name = info.get("shortName") or info.get("longName") or t
-            sector = info.get("sector") or "Unknown"
-            asset_classes[t] = f"{name} ({sector})"
-        except Exception:
-            asset_classes[t] = f"{t} (Unknown)"
 
-    result = {"symbols": symbols, "asset_classes": asset_classes}
+def _format_ticker_dict(tickers: list[str], max_workers: int = 10) -> dict:
+    asset_classes: dict[str, str] = {}
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_get_ticker_info, t): t for t in tickers}
+        results = {}
+        for future in as_completed(futures):
+            ticker = futures[future]
+            results[ticker] = future.result()
+
+    # Reconstruct in original order
+    for ticker in tickers:
+        asset_classes[ticker] = results[ticker][1]
+
+    result = {"symbols": tickers, "asset_classes": asset_classes}
     return result
 
 
@@ -90,3 +105,50 @@ def fetch_ticker_dict(
     ticker_list = list(tickers)
     ticker_list.sort()
     return _format_ticker_dict(ticker_list)
+
+
+def get_ticker_firstTradeDate(symbol: str) -> Optional[datetime]:
+    try:
+        ticker_obj = yf.Ticker(symbol)
+
+        # Fetch the metadata (one quick request)
+        info: dict = ticker_obj.info
+
+        # This field provides the first trade date in Unix timestamp (Epoch)
+        epoch_time = info.get("firstTradeDateMilliseconds")
+
+        if epoch_time:
+            # Convert Unix timestamp to a readable date
+            listing_date = datetime.strptime(
+                datetime.fromtimestamp(epoch_time / 1000).strftime("%Y-%m-%d"),
+                "%Y-%m-%d",
+            )
+            # tickers_comb_dict[symbol] = listing_date
+            # print(symbol, listing_date)
+            return listing_date
+        else:
+            return None
+
+    except Exception as e:
+        print(f"{symbol:<8} | Error: {e}")
+        return None
+
+
+def filter_tickers_before(
+    tickers: list[str], date: datetime, max_workers: int = 10
+) -> list[str]:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(get_ticker_firstTradeDate, t): t for t in tickers}
+        results = {}
+        for future in as_completed(futures):
+            ticker = futures[future]
+            results[ticker] = future.result()
+
+    return [
+        ticker
+        for ticker in tickers
+        if (trade_date := results.get(ticker)) is not None and trade_date < date
+    ]
+
+
+# def get_tickers_from_ticker_json(dict)

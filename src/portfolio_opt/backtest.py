@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
@@ -616,6 +617,77 @@ def run_dual_momentum_backtest(
     )
 
 
+def _run_single_window(
+    *,
+    strategy: str,
+    symbols: list[str],
+    window_closes: dict[str, list[float]],
+    asset_classes: dict[str, str],
+    lookback_days: int,
+    rebalance_every: int,
+    return_model: str,
+    mean_shrinkage: float,
+    momentum_window: int,
+    opt_config: OptimizationConfig,
+    asset_class_matrix: np.ndarray | None,
+    top_k: int,
+    absolute_threshold: float,
+    weighting: str,
+    softmax_temperature: float,
+) -> dict[str, float | bool]:
+    """Run a single rolling window backtest and compare against SPY."""
+    if strategy == "dual-momentum":
+        backtest = run_dual_momentum_backtest(
+            symbols=symbols,
+            closes_by_symbol=window_closes,
+            asset_classes=asset_classes,
+            lookback_days=lookback_days,
+            rebalance_every=rebalance_every,
+            top_k=top_k,
+            absolute_threshold=absolute_threshold,
+            weighting=weighting,
+            softmax_temperature=softmax_temperature,
+        )
+    else:
+        backtest = run_backtest(
+            symbols=symbols,
+            closes_by_symbol=window_closes,
+            lookback_days=lookback_days,
+            rebalance_every=rebalance_every,
+            return_model=return_model,
+            mean_shrinkage=mean_shrinkage,
+            momentum_window=momentum_window,
+            opt_config=opt_config,
+            asset_class_matrix=asset_class_matrix,
+        )
+
+    spy_benchmark = run_fixed_weight_benchmark(
+        symbols=symbols,
+        closes_by_symbol=window_closes,
+        weights_by_symbol={"SPY": 1.0},
+        start_day=lookback_days,
+    )
+    strategy_sharpe = (
+        backtest.annualized_return / backtest.annualized_volatility
+        if backtest.annualized_volatility > 0
+        else 0.0
+    )
+    spy_sharpe = (
+        float(spy_benchmark["annualized_return"])
+        / float(spy_benchmark["annualized_volatility"])
+        if float(spy_benchmark["annualized_volatility"]) > 0
+        else 0.0
+    )
+    return {
+        "beat_return": backtest.total_return > float(spy_benchmark["total_return"]),
+        "beat_sharpe": strategy_sharpe > spy_sharpe,
+        "lower_drawdown": backtest.max_drawdown
+        < float(spy_benchmark["max_drawdown"]),
+        "excess_total_return": backtest.total_return
+        - float(spy_benchmark["total_return"]),
+    }
+
+
 def rolling_window_comparison(
     *,
     strategy: str,
@@ -648,28 +720,24 @@ def rolling_window_comparison(
 
     window_results: list[dict[str, float | bool]] = []
     last_start = total_periods - (lookback_days + window_days)
+
+    # Build window data for parallel execution
+    window_args = []
     for start in range(0, last_start + 1, step_days):
         end = start + lookback_days + window_days + 1
         window_closes = {
             symbol: closes[start:end] for symbol, closes in aligned_closes.items()
         }
+        window_args.append(window_closes)
 
-        if strategy == "dual-momentum":
-            backtest = run_dual_momentum_backtest(
+    with ProcessPoolExecutor() as executor:
+        futures = [
+            executor.submit(
+                _run_single_window,
+                strategy=strategy,
                 symbols=symbols,
-                closes_by_symbol=window_closes,
+                window_closes=wc,
                 asset_classes=asset_classes,
-                lookback_days=lookback_days,
-                rebalance_every=rebalance_every,
-                top_k=top_k,
-                absolute_threshold=absolute_threshold,
-                weighting=weighting,
-                softmax_temperature=softmax_temperature,
-            )
-        else:
-            backtest = run_backtest(
-                symbols=symbols,
-                closes_by_symbol=window_closes,
                 lookback_days=lookback_days,
                 rebalance_every=rebalance_every,
                 return_model=return_model,
@@ -677,36 +745,15 @@ def rolling_window_comparison(
                 momentum_window=momentum_window,
                 opt_config=opt_config,
                 asset_class_matrix=asset_class_matrix,
+                top_k=top_k,
+                absolute_threshold=absolute_threshold,
+                weighting=weighting,
+                softmax_temperature=softmax_temperature,
             )
-
-        spy_benchmark = run_fixed_weight_benchmark(
-            symbols=symbols,
-            closes_by_symbol=window_closes,
-            weights_by_symbol={"SPY": 1.0},
-            start_day=lookback_days,
-        )
-        strategy_sharpe = (
-            backtest.annualized_return / backtest.annualized_volatility
-            if backtest.annualized_volatility > 0
-            else 0.0
-        )
-        spy_sharpe = (
-            float(spy_benchmark["annualized_return"])
-            / float(spy_benchmark["annualized_volatility"])
-            if float(spy_benchmark["annualized_volatility"]) > 0
-            else 0.0
-        )
-        window_results.append(
-            {
-                "beat_return": backtest.total_return
-                > float(spy_benchmark["total_return"]),
-                "beat_sharpe": strategy_sharpe > spy_sharpe,
-                "lower_drawdown": backtest.max_drawdown
-                < float(spy_benchmark["max_drawdown"]),
-                "excess_total_return": backtest.total_return
-                - float(spy_benchmark["total_return"]),
-            }
-        )
+            for wc in window_args
+        ]
+        for future in futures:
+            window_results.append(future.result())
 
     total_windows = len(window_results)
     beat_return_count = sum(
