@@ -681,8 +681,7 @@ def _run_single_window(
     return {
         "beat_return": backtest.total_return > float(spy_benchmark["total_return"]),
         "beat_sharpe": strategy_sharpe > spy_sharpe,
-        "lower_drawdown": backtest.max_drawdown
-        < float(spy_benchmark["max_drawdown"]),
+        "lower_drawdown": backtest.max_drawdown < float(spy_benchmark["max_drawdown"]),
         "excess_total_return": backtest.total_return
         - float(spy_benchmark["total_return"]),
     }

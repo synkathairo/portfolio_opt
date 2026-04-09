@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from .alpaca import AlpacaClient
+from .alpaca_interface import AlpacaClient
 from .config import AlpacaConfig
 
 matplotlib.use("Agg")
@@ -98,8 +98,7 @@ def _plot_from_alpaca_history(
 ) -> None:
     """Fetch portfolio history from Alpaca and plot against benchmark."""
     alpaca = AlpacaClient(AlpacaConfig.from_env())
-    query = urlencode({"period": period, "timeframe": timeframe})
-    payload = alpaca._request_json("GET", f"/v2/account/portfolio/history?{query}")
+    payload = alpaca.get_portfolio_history(period=period, timeframe=timeframe)
 
     timestamps = payload.get("timestamp", [])
     equity_curve = payload.get("equity", [])
@@ -110,10 +109,8 @@ def _plot_from_alpaca_history(
     # Auto-detect timestamp unit (Alpaca usually returns ms, but can vary)
     first_ts = timestamps[0]
     if first_ts > 1e11:
-        # Likely milliseconds (e.g. 1,712,000,000,000)
         dates = pd.to_datetime(timestamps, unit="ms", utc=True)
     else:
-        # Likely seconds (e.g. 1,712,000,000)
         dates = pd.to_datetime(timestamps, unit="s", utc=True)
 
     # Normalize to start at 1.0
@@ -124,15 +121,9 @@ def _plot_from_alpaca_history(
     # Fetch SPY data from Alpaca for the same range
     spy_bars = []
     try:
-        start_str = dates.min().strftime("%Y-%m-%dT%H:%M:%SZ")
-        end_str = dates.max().strftime("%Y-%m-%dT%H:%M:%SZ")
-        spy_query = urlencode(
-            {"timeframe": timeframe, "start": start_str, "end": end_str}
-        )
-        spy_payload = alpaca._request_json(
-            "GET", f"/v2/stocks/{benchmark}/bars?{spy_query}", data_api=True
-        )
-        spy_bars = spy_payload.get("bars", [])
+        start = dates.min().to_pydatetime().replace(tzinfo=None)
+        end = dates.max().to_pydatetime().replace(tzinfo=None)
+        spy_bars = alpaca.get_stock_bars_raw(benchmark, start, end)
     except Exception:
         pass
 
@@ -142,7 +133,10 @@ def _plot_from_alpaca_history(
             ticker = yf.Ticker(benchmark)
             hist = ticker.history(start=dates.min(), end=dates.max())
             if not hist.empty:
-                spy_bars = [{"t": t, "c": c} for t, c in zip(hist.index, hist["Close"])]
+                spy_bars = [
+                    {"timestamp": t, "close": c}
+                    for t, c in zip(hist.index, hist["Close"])
+                ]
         except Exception:
             print(f"Warning: Could not fetch {benchmark} data.", file=sys.stderr)
 
@@ -155,11 +149,11 @@ def _plot_from_alpaca_history(
     else:
         # Create a DataFrame for easy merging
         spy_df = pd.DataFrame(spy_bars)
-        spy_df["t"] = pd.to_datetime(spy_df["t"], utc=True)
-        spy_df = spy_df.set_index("t").sort_index()
+        spy_df["timestamp"] = pd.to_datetime(spy_df["timestamp"], utc=True)
+        spy_df = spy_df.set_index("timestamp").sort_index()
 
         # Reindex to match portfolio history dates
-        bench_series = spy_df["c"].reindex(dates).ffill()
+        bench_series = spy_df["close"].reindex(dates).ffill()
         bench_values = bench_series.values / bench_series.values[0]
 
         fig, ax = plt.subplots(figsize=(10, 5))

@@ -57,9 +57,7 @@ def _fetch_single_symbol(
         except Exception as exc:
             last_err = exc
             if attempt < retries:
-                logger.debug(
-                    "Retry %d/%d for %s: %s", attempt, retries, symbol, exc
-                )
+                logger.debug("Retry %d/%d for %s: %s", attempt, retries, symbol, exc)
                 time.sleep(retry_delay)
     raise RuntimeError(f"Failed to fetch {symbol} after {retries} retries: {last_err}")
 
@@ -124,9 +122,7 @@ def fetch_closes(
     # as the mean of the surrounding bars.
     if closes_by_symbol:
         # Check if any symbol has a trailing NaN
-        any_trailing_nan = any(
-            math.isnan(v[-1]) for v in closes_by_symbol.values()
-        )
+        any_trailing_nan = any(math.isnan(v[-1]) for v in closes_by_symbol.values())
         if any_trailing_nan:
             for s in closes_by_symbol:
                 closes_by_symbol[s] = closes_by_symbol[s][:-1]

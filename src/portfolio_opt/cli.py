@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import itertools
 import json
+import sys
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
+from typing import cast
 
+import exchange_calendars as xcals
 import numpy as np
+import pandas as pd
 
-from .alpaca import AlpacaClient, format_order_plans
+from .alpaca_interface import AlpacaClient, format_order_plans
 from .backtest import (
     compute_dual_momentum_weights,
     rolling_window_comparison,
@@ -20,13 +26,37 @@ from .config import AlpacaConfig, OptimizationConfig
 from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
 from .black_litterman import estimate_inputs_from_black_litterman
 from .risk_parity import estimate_inputs_risk_parity
-from .model import load_model_inputs
+from .model import ModelInputs, load_model_inputs
 from .optimizer import effective_turnover_penalty, optimize_weights
 from .rebalance import build_order_plan, current_weights
 from .runtime import configure_local_cache_dirs
 from .yfinance_data import fetch_closes as yf_fetch_closes
+from utils.fetch_tickers import fetch_ticker_dict, filter_tickers_before
 
 configure_local_cache_dirs()
+
+
+def _calculate_trading_date_offset(trading_days: int) -> datetime:
+    """Return the date exactly `trading_days` trading sessions ago."""
+    cal = xcals.get_calendar("XNYS")
+    sessions = cal.sessions
+
+    # Convert index to list of datetime objects for easy bisect
+    session_dates: list[datetime] = sessions.tolist()
+    # exchange_calendars returns naive timestamps (no timezone)
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Find the index of the last trading day on or before today
+    idx = bisect.bisect_right(session_dates, today)
+    if idx == len(session_dates) or session_dates[idx] > today:
+        idx -= 1
+
+    cutoff_idx = idx - trading_days
+    if cutoff_idx < 0:
+        raise ValueError(
+            f"Cannot look back {trading_days} trading days; not enough history in calendar."
+        )
+    return cast(datetime, session_dates[cutoff_idx])
 
 
 def _run_sweep_point(
@@ -149,7 +179,25 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a mean-variance rebalance against Alpaca."
     )
-    parser.add_argument("--model", required=True, help="Path to model input JSON file.")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--model", help="Path to model input JSON file.")
+    group.add_argument(
+        "--dynamic-universe",
+        action="store_true",
+        help="Fetch current index constituents dynamically instead of using a model file.",
+    )
+    parser.add_argument(
+        "--filter-before",
+        type=str,
+        default=None,
+        help="Only include tickers that started trading before this ISO date (e.g. 2020-01-01).",
+    )
+    parser.add_argument(
+        "--ticker-basket",
+        nargs="*",
+        default=[],
+        help="Universe components for --dynamic-universe (uses fetch_ticker_dict defaults if empty).",
+    )
     parser.add_argument("--risk-aversion", type=float, default=4.0)
     parser.add_argument("--min-weight", type=float, default=0.0)
     parser.add_argument("--max-weight", type=float, default=0.35)
@@ -329,7 +377,63 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    model = load_model_inputs(args.model)
+
+    # Dynamic universe is only useful for live/dry-run trading, not backtesting
+    if args.dynamic_universe and args.backtest_days > 0:
+        raise SystemExit("--dynamic-universe cannot be used with --backtest-days")
+    if args.dynamic_universe and args.rolling_window_days > 0:
+        raise SystemExit("--dynamic-universe cannot be used with --rolling-window-days")
+
+    # Build model inputs from either a static file or a dynamic universe
+    if args.dynamic_universe:
+        kwargs = {}
+        if args.ticker_basket:
+            kwargs["ticker_basket"] = args.ticker_basket
+        fetched = fetch_ticker_dict(**kwargs)
+        dynamic_symbols = set(fetched["symbols"])
+        asset_classes = dict(fetched["asset_classes"])
+
+        # Merge with currently held positions so the model can decide to exit
+        # even if a stock gets delisted between universe updates.
+        alpaca_temp = AlpacaClient(AlpacaConfig.from_env())
+        positions = alpaca_temp.get_positions(
+            use_cache=args.use_cache,
+            refresh_cache=args.refresh_cache,
+            offline=args.offline,
+        )
+        held_symbols = {p.symbol for p in positions}
+        all_symbols = sorted(dynamic_symbols | held_symbols)
+
+        # Ensure held symbols have an asset class entry
+        for sym in held_symbols:
+            if sym not in asset_classes:
+                asset_classes[sym] = f"{sym} (Unknown)"
+
+        # Filter out stocks that haven't been trading long enough for the lookback window.
+        # If the user didn't specify a date, calculate the exact date from trading days.
+        cutoff = None
+        if args.filter_before:
+            cutoff = datetime.strptime(args.filter_before, "%Y-%m-%d")
+        else:
+            try:
+                cutoff = _calculate_trading_date_offset(args.lookback_days)
+            except ValueError:
+                pass  # Ignore if we can't look back far enough (unlikely)
+
+        if cutoff:
+            all_symbols = filter_tickers_before(all_symbols, cutoff)
+
+        model = ModelInputs(
+            symbols=all_symbols,
+            expected_returns=None,
+            covariance=None,
+            asset_classes=asset_classes,
+            class_min_weights={},
+            class_max_weights={},
+        )
+    else:
+        model = load_model_inputs(args.model)
+
     opt_config = OptimizationConfig(
         risk_aversion=args.risk_aversion,
         min_weight=args.min_weight,
@@ -613,6 +717,40 @@ def main() -> None:
             refresh_cache=args.refresh_cache,
             offline=args.offline,
         )
+
+        # Filter out symbols with insufficient history.
+        # This handles cases where Alpaca (IEX data) or Yahoo has gaps,
+        # or stocks are new IPOs/SPACs with limited history.
+        original_count = len(closes_by_symbol)
+        closes_by_symbol = {
+            s: bars
+            for s, bars in closes_by_symbol.items()
+            if len(bars) >= args.lookback_days
+        }
+        dropped_count = original_count - len(closes_by_symbol)
+        if dropped_count > 0:
+            print(
+                f"Warning: Dropped {dropped_count} symbols with insufficient history "
+                f"(< {args.lookback_days} days).",
+                file=sys.stderr,
+            )
+            # Update model to match available data
+            model = ModelInputs(
+                symbols=list(closes_by_symbol.keys()),
+                expected_returns=model.expected_returns,
+                covariance=model.covariance,
+                asset_classes=model.asset_classes,
+                class_min_weights=model.class_min_weights,
+                class_max_weights=model.class_max_weights,
+            )
+            # Recompute existing weights for the filtered symbol list
+            existing_weights_map = current_weights(model.symbols, account, positions)
+            existing_weights = np.array(
+                [existing_weights_map[symbol] for symbol in model.symbols], dtype=float
+            )
+            scaled_turnover_penalty = effective_turnover_penalty(
+                opt_config, existing_weights
+            )
 
         if args.strategy == "dual-momentum":
             dm_weights = compute_dual_momentum_weights(

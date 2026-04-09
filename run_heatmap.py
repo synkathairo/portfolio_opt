@@ -16,9 +16,10 @@ today = str(date.today())
 MODEL = "examples/nasdaq100_sp500_sector_universe_b2016filtered.json"
 # TITLE_NAME_VAR = "Nasdaq_100_historical"
 # TITLE_NAME_VAR = "sector_universe_pre2020"
-TITLE_NAME_VAR = "nasdaq100_sp500_sector_universe_b2016filtered"
-LOOKBACK = 60
-# LOOKBACK = 252
+# TITLE_NAME_VAR = "nasdaq100_sp500_sector_universe_b2016filtered"
+TITLE_NAME_VAR = "nasdaq100_sp500_sector_universe_b2016filtered-basketoptrisk2.0"
+# LOOKBACK = 60
+LOOKBACK = 252
 BACKTEST_DAYS = 252*9
 # BACKTEST_DAYS = 252*4
 # BACKTEST_DAYS = 6000
@@ -39,6 +40,7 @@ def run_backtest(rebal_days, k):
         "--backtest-days", str(BACKTEST_DAYS),
         "--rebalance-every", str(rebal_days),
         "--top-k", str(k),
+        "--basket-opt", "mean-variance", "--basket-risk-aversion", "2.0",
         "--data-source", "yfinance",
         "--use-cache",
         # "--refresh-cache"
@@ -60,11 +62,28 @@ for rebal in REBALANCE_DAYS:
         print(f"Running rebal={rebal}, k={k}...")
         res = run_backtest(rebal, k)
         if res:
+            ann_ret = res.get("annualized_return", 0)
+            ann_vol = res.get("annualized_volatility", 0)
+            # ann_vol = res.get("annualized_volatility", 1)
+            max_dd = abs(res.get("max_drawdown", 0))
+
+            # Calculate Sharpe Ratio: Return / Vol
+            # note TODO: it's technically not minus risk-free return
+            # (see https://en.wikipedia.org/wiki/Sharpe_ratio) but good enough for purposes of comparison
+            sharpe = (ann_ret / ann_vol) if ann_vol > 0 else 0.0
+
+            # Calculate Calmar Ratio: Return / Max Drawdown
+            # note TODO: again technically involves risk-free return but this is close enough for purposes here
+            # (see https://www.investopedia.com/terms/c/calmarratio.asp https://en.wikipedia.org/wiki/Calmar_ratio)
+            calmar = (ann_ret / max_dd) if max_dd > 0 else 0.0
+
             rows.append({
                 "Rebalance Days": rebal,
                 "Top K": k,
-                "Annualized Return": res.get("annualized_return", 0),
-                "Annualized Volatility": res.get("annualized_volatility", 0),
+                "Annualized Return": ann_ret,
+                "Annualized Volatility": ann_vol,
+                "Sharpe Ratio": sharpe,
+                "Calmar Ratio": calmar,
                 "Max Drawdown": res.get("max_drawdown", 0),
                 "Average Turnover": res.get("average_turnover", 0)
             })
@@ -76,9 +95,12 @@ df_return = df.pivot(index="Rebalance Days", columns="Top K", values="Annualized
 df_vol = df.pivot(index="Rebalance Days", columns="Top K", values="Annualized Volatility")
 df_dd = df.pivot(index="Rebalance Days", columns="Top K", values="Max Drawdown")
 df_turn = df.pivot(index="Rebalance Days", columns="Top K", values="Average Turnover")
+df_sharpe = df.pivot(index="Rebalance Days", columns="Top K", values="Sharpe Ratio")
+df_calmar = df.pivot(index="Rebalance Days", columns="Top K", values="Calmar Ratio")
 
 # Plotting
-fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+# fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+fig, axes = plt.subplots(3, 2, figsize=(14, 16))
 fig.suptitle(f'{TITLE_NAME_VAR} Dual Momentum Grid Search (Lookback={LOOKBACK}, Days={BACKTEST_DAYS})', fontsize=16)
 
 # 1. Return
@@ -96,6 +118,15 @@ axes[1, 0].set_title("Max Drawdown")
 # 4. Turnover
 sns.heatmap(df_turn, annot=True, fmt=".2f", cmap="Purples", ax=axes[1, 1], cbar_kws={'label': 'Turnover'})
 axes[1, 1].set_title("Average Turnover")
+
+# 5. Sharpe Ratio
+sns.heatmap(df_sharpe, annot=True, fmt=".2f", cmap="YlOrRd", ax=axes[2, 0], cbar_kws={'label': 'Sharpe'})
+axes[2, 0].set_title("Sharpe Ratio")
+
+# 6. Calmar Ratio
+sns.heatmap(df_calmar, annot=True, fmt=".2f", cmap="YlOrRd", ax=axes[2, 1], cbar_kws={'label': 'Calmar'})
+axes[2, 1].set_title("Calmar Ratio")
+# axes[2, 1].set_title("Calmar Ratio (Return / |MaxDD|)")
 
 plt.tight_layout()
 plt.savefig(f"{FIGURE_NAME}.png", dpi=150)

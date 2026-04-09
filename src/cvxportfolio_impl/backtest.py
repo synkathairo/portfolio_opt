@@ -7,7 +7,7 @@ from concurrent.futures import ProcessPoolExecutor
 import numpy as np
 import pandas as pd
 
-from portfolio_opt.alpaca import AlpacaClient
+from portfolio_opt.alpaca_interface import AlpacaClient
 from portfolio_opt.backtest import run_fixed_weight_benchmark, summarize_return_series
 from portfolio_opt.backtest import run_backtest as run_custom_backtest
 from portfolio_opt.config import AlpacaConfig, OptimizationConfig
@@ -72,21 +72,15 @@ def _run_single_sweep(params: tuple) -> dict[str, float | int]:
     simulator = cvx.MarketSimulator(
         returns=returns_array, prices=prices_array, cash_key="USDOLLAR"
     )
-    result = simulator.backtest(
-        policy, start_time=returns_array.index[warmup_days]
-    )
+    result = simulator.backtest(policy, start_time=returns_array.index[warmup_days])
     realized_returns = result.v.pct_change().dropna().to_numpy()
-    turnover_series = (
-        result.turnover.reindex(result.v.index).fillna(0.0).to_numpy()
-    )
+    turnover_series = result.turnover.reindex(result.v.index).fillna(0.0).to_numpy()
     net_realized_returns = realized_returns - linear_trade_cost * turnover_series[1:]
     _, _, annualized_return, annualized_volatility, max_drawdown = (
         summarize_return_series(net_realized_returns)
     )
     sharpe_ratio = (
-        annualized_return / annualized_volatility
-        if annualized_volatility > 0
-        else 0.0
+        annualized_return / annualized_volatility if annualized_volatility > 0 else 0.0
     )
     return {
         "risk_aversion": risk_aversion,
@@ -761,7 +755,9 @@ def run_cvxportfolio_sweep(
     skipped: list[dict[str, float | int | str]] = []
 
     with ProcessPoolExecutor() as executor:
-        for combo_params, outcome in zip(grid_params, executor.map(_run_single_sweep, worker_args)):
+        for combo_params, outcome in zip(
+            grid_params, executor.map(_run_single_sweep, worker_args)
+        ):
             results.append(outcome)
 
     results.sort(

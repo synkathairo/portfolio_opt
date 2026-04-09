@@ -11,6 +11,9 @@ except ImportError as exc:  # pragma: no cover
         "cvxpy is required for optimization. Install dependencies with `pip install -e .`."
     ) from exc
 
+SOLVER = cp.CLARABEL
+# SOLVER = cp.ECOS
+
 
 def effective_turnover_penalty(
     config: OptimizationConfig,
@@ -69,7 +72,7 @@ def optimize_weights(
         for class_index, max_weight in enumerate(config.class_max_weights.values()):
             constraints.append(class_exposures[class_index] <= max_weight)
     problem = cp.Problem(objective, constraints)
-    problem.solve()
+    problem.solve(solver=SOLVER)
 
     if weights.value is None:
         raise RuntimeError(f"Optimization failed with status {problem.status}.")
@@ -117,7 +120,7 @@ def optimize_basket_weights(
         constraints.append(cp.sum(weights) <= 1.0)
 
     problem = cp.Problem(objective, constraints)
-    problem.solve()
+    problem.solve(solver=SOLVER)
 
     if weights.value is None:
         raise RuntimeError(f"Basket optimization failed with status {problem.status}.")

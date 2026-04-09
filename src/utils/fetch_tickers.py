@@ -1,9 +1,11 @@
+import time
 import requests
 import yfinance as yf
 import pandas as pd
 from datetime import datetime
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
 
 # present a json-like dict object(?)
 
@@ -22,19 +24,28 @@ def _get_ticker_info(ticker: str) -> tuple[str, str]:
         return ticker, f"{ticker} (Unknown)"
 
 
-def _format_ticker_dict(tickers: list[str], max_workers: int = 10) -> dict:
+def _format_ticker_dict(tickers: list[str], max_workers: int = 3) -> dict:
     asset_classes: dict[str, str] = {}
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_get_ticker_info, t): t for t in tickers}
-        results = {}
-        for future in as_completed(futures):
-            ticker = futures[future]
-            results[ticker] = future.result()
+    # Process in small batches to avoid Yahoo rate limiting
+    batch_size = max_workers * 2
+    for i in range(0, len(tickers), batch_size):
+        batch = tickers[i : i + batch_size]
 
-    # Reconstruct in original order
-    for ticker in tickers:
-        asset_classes[ticker] = results[ticker][1]
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_get_ticker_info, t): t for t in batch}
+            results: dict[str, tuple[str, str]] = {}
+            for future in as_completed(futures):
+                ticker = futures[future]
+                results[ticker] = future.result()
+
+        # Reconstruct in original order
+        for ticker in batch:
+            asset_classes[ticker] = results[ticker][1]
+
+        # Small delay between batches to avoid Yahoo rate limits
+        if i + batch_size < len(tickers):
+            time.sleep(1.0)
 
     result = {"symbols": tickers, "asset_classes": asset_classes}
     return result
@@ -75,7 +86,7 @@ def fetch_sp500_tickers(retries: int = 3, backoff: float = 1.5) -> list[str]:
 # nasdaq100 and sp500 are updated on fixed basis
 def fetch_ticker_dict(
     preexisting: list[str] = [],
-    ticker_selection: list[str] = [
+    ticker_basket: list[str] = [
         "nasdaq100",
         "sp500",
         "sectors",
@@ -86,20 +97,20 @@ def fetch_ticker_dict(
     ],
 ) -> dict:
     tickers = set()
-    if "nasdaq100" in ticker_selection:
+    if "nasdaq100" in ticker_basket:
         tickers |= set(fetch_nasdaq100_tickers())
-    if "sp500" in ticker_selection:
+    if "sp500" in ticker_basket:
         tickers |= set(fetch_sp500_tickers())
     # note: below were statically coded, so need to be mindful of when the ETFs were created when querying
-    if "sectors" in ticker_selection:
+    if "sectors" in ticker_basket:
         tickers |= {"XLK", "XLF", "XLE", "XLV", "XLI", "XLP", "XLU"}
-    if "indexes" in ticker_selection:
+    if "indexes" in ticker_basket:
         tickers |= {"SPY", "QQQ", "IWM"}
-    if "cashlike" in ticker_selection:
+    if "cashlike" in ticker_basket:
         tickers |= {"SGOV", "IEF", "TLT", "TIP"}
-    if "commodities" in ticker_selection:
+    if "commodities" in ticker_basket:
         tickers |= {"GLD", "SLV", "DBC"}
-    if "realestate" in ticker_selection:
+    if "realestate" in ticker_basket:
         tickers |= {"VNQ"}
     tickers |= set(preexisting)
     ticker_list = list(tickers)
@@ -135,14 +146,24 @@ def get_ticker_firstTradeDate(symbol: str) -> Optional[datetime]:
 
 
 def filter_tickers_before(
-    tickers: list[str], date: datetime, max_workers: int = 10
+    tickers: list[str], date: datetime, max_workers: int = 3
 ) -> list[str]:
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(get_ticker_firstTradeDate, t): t for t in tickers}
-        results = {}
-        for future in as_completed(futures):
-            ticker = futures[future]
-            results[ticker] = future.result()
+    results: dict[str, Optional[datetime]] = {}
+
+    # Process in small batches to avoid Yahoo rate limiting
+    batch_size = max_workers * 2
+    for i in range(0, len(tickers), batch_size):
+        batch = tickers[i : i + batch_size]
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(get_ticker_firstTradeDate, t): t for t in batch}
+            for future in as_completed(futures):
+                ticker = futures[future]
+                results[ticker] = future.result()
+
+        # Small delay between batches to avoid Yahoo rate limits
+        if i + batch_size < len(tickers):
+            time.sleep(1.0)
 
     return [
         ticker
