@@ -5,9 +5,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .black_litterman import estimate_inputs_from_black_litterman
 from .config import OptimizationConfig
 from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
-from .optimizer import optimize_basket_weights, optimize_weights
+from .optimizer import optimize_basket_weights, optimize_weights, project_weights
+from .risk_parity import estimate_inputs_risk_parity
 
 TRADING_DAYS_PER_YEAR = 252
 
@@ -55,13 +57,18 @@ def compute_dual_momentum_weights(
     Used by the live rebalancing path to produce target weights from current
     Alpaca data, identical to the backtest logic at a single rebalance step.
     """
+    if trailing_stop is not None:
+        raise ValueError(
+            "Live dual momentum does not support trailing stops because it does not "
+            "track per-position entry peaks across runs."
+        )
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
-    if price_matrix.ndim != 2 or price_matrix.shape[1] < 2:
+    if price_matrix.ndim != 2 or price_matrix.shape[1] < lookback_days + 1:
         raise ValueError("Not enough price history to compute dual momentum weights.")
 
     returns = price_matrix[:, 1:] / price_matrix[:, :-1] - 1.0
-    trailing_returns = price_matrix[:, -1] / price_matrix[:, -lookback_days] - 1.0
+    trailing_returns = price_matrix[:, -1] / price_matrix[:, -(lookback_days + 1)] - 1.0
     trailing_volatility = returns.std(axis=1, ddof=0)
 
     risky_symbols = [
@@ -309,19 +316,52 @@ def run_backtest(
                     mean_shrinkage=mean_shrinkage,
                     momentum_window=momentum_window,
                 )
+                target_weights = optimize_weights(
+                    expected_returns=estimated.expected_returns,
+                    covariance=estimated.covariance,
+                    config=opt_config,
+                    current_weights=weights,
+                    asset_class_matrix=asset_class_matrix,
+                )
+            elif return_model == "black-litterman":
+                estimated = estimate_inputs_from_black_litterman(
+                    symbols=symbols,
+                    closes_by_symbol=window_closes,
+                    momentum_window=momentum_window,
+                    mean_shrinkage=mean_shrinkage,
+                )
+                target_weights = optimize_weights(
+                    expected_returns=estimated.expected_returns,
+                    covariance=estimated.covariance,
+                    config=opt_config,
+                    current_weights=weights,
+                    asset_class_matrix=asset_class_matrix,
+                )
+            elif return_model == "risk-parity":
+                estimated = estimate_inputs_risk_parity(
+                    symbols=symbols,
+                    closes_by_symbol=window_closes,
+                    lookback_days=lookback_days,
+                )
+                target_weights = project_weights(
+                    target_weights=estimated.weights,
+                    config=opt_config,
+                    current_weights=weights,
+                    asset_class_matrix=asset_class_matrix,
+                )
             else:
                 estimated = estimate_inputs_from_prices(
                     symbols=symbols,
                     closes_by_symbol=window_closes,
                     mean_shrinkage=mean_shrinkage,
                 )
-            target_weights = optimize_weights(
-                expected_returns=estimated.expected_returns,
-                covariance=estimated.covariance,
-                config=opt_config,
-                current_weights=weights,
-                asset_class_matrix=asset_class_matrix,
-            )
+                target_weights = optimize_weights(
+                    expected_returns=estimated.expected_returns,
+                    covariance=estimated.covariance,
+                    config=opt_config,
+                    current_weights=weights,
+                    asset_class_matrix=asset_class_matrix,
+                )
             turnovers.append(float(np.abs(target_weights - weights).sum()))
             weights = target_weights
             rebalance_count += 1
@@ -729,30 +769,52 @@ def rolling_window_comparison(
         }
         window_args.append(window_closes)
 
-    with ProcessPoolExecutor() as executor:
-        futures = [
-            executor.submit(
-                _run_single_window,
-                strategy=strategy,
-                symbols=symbols,
-                window_closes=wc,
-                asset_classes=asset_classes,
-                lookback_days=lookback_days,
-                rebalance_every=rebalance_every,
-                return_model=return_model,
-                mean_shrinkage=mean_shrinkage,
-                momentum_window=momentum_window,
-                opt_config=opt_config,
-                asset_class_matrix=asset_class_matrix,
-                top_k=top_k,
-                absolute_threshold=absolute_threshold,
-                weighting=weighting,
-                softmax_temperature=softmax_temperature,
+    try:
+        with ProcessPoolExecutor() as executor:
+            futures = [
+                executor.submit(
+                    _run_single_window,
+                    strategy=strategy,
+                    symbols=symbols,
+                    window_closes=wc,
+                    asset_classes=asset_classes,
+                    lookback_days=lookback_days,
+                    rebalance_every=rebalance_every,
+                    return_model=return_model,
+                    mean_shrinkage=mean_shrinkage,
+                    momentum_window=momentum_window,
+                    opt_config=opt_config,
+                    asset_class_matrix=asset_class_matrix,
+                    top_k=top_k,
+                    absolute_threshold=absolute_threshold,
+                    weighting=weighting,
+                    softmax_temperature=softmax_temperature,
+                )
+                for wc in window_args
+            ]
+            for future in futures:
+                window_results.append(future.result())
+    except (NotImplementedError, PermissionError, OSError):
+        for wc in window_args:
+            window_results.append(
+                _run_single_window(
+                    strategy=strategy,
+                    symbols=symbols,
+                    window_closes=wc,
+                    asset_classes=asset_classes,
+                    lookback_days=lookback_days,
+                    rebalance_every=rebalance_every,
+                    return_model=return_model,
+                    mean_shrinkage=mean_shrinkage,
+                    momentum_window=momentum_window,
+                    opt_config=opt_config,
+                    asset_class_matrix=asset_class_matrix,
+                    top_k=top_k,
+                    absolute_threshold=absolute_threshold,
+                    weighting=weighting,
+                    softmax_temperature=softmax_temperature,
+                )
             )
-            for wc in window_args
-        ]
-        for future in futures:
-            window_results.append(future.result())
 
     total_windows = len(window_results)
     beat_return_count = sum(

@@ -20,6 +20,10 @@ class ModelInputs:
 def load_model_inputs(path: str | Path) -> ModelInputs:
     raw = json.loads(Path(path).read_text())
     symbols = raw["symbols"]
+    if not symbols:
+        raise ValueError("Model must contain at least one symbol.")
+    if len(set(symbols)) != len(symbols):
+        raise ValueError("Model symbols must be unique.")
     expected_returns = None
     covariance = None
     asset_classes = raw.get("asset_classes", {})
@@ -30,9 +34,15 @@ def load_model_inputs(path: str | Path) -> ModelInputs:
     # universe when inputs will be estimated from Alpaca history at runtime.
     if "expected_returns" in raw:
         expected_returns_map = raw["expected_returns"]
-        expected_returns = np.array(
-            [float(expected_returns_map[s]) for s in symbols], dtype=float
-        )
+        missing_expected_returns = [
+            symbol for symbol in symbols if symbol not in expected_returns_map
+        ]
+        if missing_expected_returns:
+            raise ValueError(
+                "Missing expected_returns entries for symbols: "
+                f"{missing_expected_returns}"
+            )
+        expected_returns = np.array([float(expected_returns_map[s]) for s in symbols], dtype=float)
 
     if "covariance" in raw:
         covariance = np.array(raw["covariance"], dtype=float)
@@ -50,6 +60,25 @@ def load_model_inputs(path: str | Path) -> ModelInputs:
     if unknown_class_symbols:
         raise ValueError(
             f"Asset classes provided for unknown symbols: {unknown_class_symbols}"
+        )
+
+    declared_classes = set(asset_classes.values())
+    constrained_classes = set(class_min_weights) | set(class_max_weights)
+    unknown_constraint_classes = sorted(constrained_classes - declared_classes)
+    if unknown_constraint_classes:
+        raise ValueError(
+            "Class constraints reference unknown asset classes: "
+            f"{unknown_constraint_classes}"
+        )
+    overlapping_classes = set(class_min_weights) & set(class_max_weights)
+    invalid_ranges = sorted(
+        class_name
+        for class_name in overlapping_classes
+        if float(class_min_weights[class_name]) > float(class_max_weights[class_name])
+    )
+    if invalid_ranges:
+        raise ValueError(
+            f"Class minimums exceed maximums for asset classes: {invalid_ranges}"
         )
 
     return ModelInputs(

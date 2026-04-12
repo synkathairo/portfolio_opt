@@ -8,9 +8,9 @@ today = str(date.today())
 
 # MODEL_NAME = "Nasdaq 100"
 # MODEL_NAME = "Nasdaq100+SP500+sectors"
-# MODEL_NAME = "nasdaq100_sp500_sector_universe_b2016filtered"
+MODEL_NAME = "nasdaq100_sp500_sector_universe_b2016filtered"
 # MODEL_NAME = "sector_universe"
-MODEL_NAME = "nasdaq100_universe"
+# MODEL_NAME = "nasdaq100_universe"
 # MODEL = "examples/nasdaq100_universe.json"
 # MODEL = "examples/nasdaq100_sp500_sector_universe.json"
 MODEL = f"examples/{MODEL_NAME}.json"
@@ -29,6 +29,9 @@ def run_backtest(args):
         ["uv", "run", "portfolio-opt"] + args,
         capture_output=True, text=True
     )
+    if result.returncode != 0:
+        print(f"Error running backtest: {result.stderr}")
+        return None
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError:
@@ -38,7 +41,7 @@ def run_backtest(args):
 # 1. Run Mean-Variance Backtest
 mv_data = run_backtest([
     "--model", f"{MODEL}",
-    "--data-source", "yfinance",
+    "--data-source", f"{DATASOURCE}",
     "--strategy", "mean-variance",
     "--lookback-days", f"{LOOKBACK_DAYS}",
     "--backtest-days", f"{BACKTEST_DAYS}",
@@ -48,7 +51,8 @@ mv_data = run_backtest([
     "--momentum-window", f"{MOMENTUM_WINDOW}",
     "--mean-shrinkage", "0.5",
     "--risk-aversion", "2.0",
-    "--use-cache", "--offline"
+    "--use-cache"
+    # , "--offline"
     # "--use-cache", "--refresh-cache"
     # , "--rebalance-threshold 0.1"
 ])
@@ -62,7 +66,8 @@ dm_data = run_backtest([
     "--backtest-days", f"{BACKTEST_DAYS}",
     "--rebalance-every", "5",
     "--top-k", "5",
-    "--use-cache", "--offline"
+    "--use-cache"
+    # , "--offline"
 ])
 
 # 3. Run Dual Momentum Backtest (Top-2)
@@ -74,7 +79,8 @@ dm_data2 = run_backtest([
     "--backtest-days", f"{BACKTEST_DAYS}",
     "--rebalance-every", "5",
     "--top-k", "2",
-    "--use-cache", "--offline"
+    "--use-cache"
+    # , "--offline"
 ])
 
 # 3. Run Dual Momentum Backtest (Top-2, rebalance daily)
@@ -86,7 +92,8 @@ dm_data3 = run_backtest([
     "--backtest-days", f"{BACKTEST_DAYS}",
     "--rebalance-every", "1",
     "--top-k", "2",
-    "--use-cache", "--offline"
+    "--use-cache"
+    # , "--offline"
 ])
 
 # 4. Run Dual Momentum Backtest (Top-1, rebalance daily)
@@ -98,10 +105,12 @@ dm_data4 = run_backtest([
     "--backtest-days", f"{BACKTEST_DAYS}",
     "--rebalance-every", "1",
     "--top-k", "1",
-    "--use-cache", "--offline"
+    "--use-cache"
+    # , "--offline"
 ])
 
-# # Limit volatility to 0.15
+LIMIT_VOL = "0.3"
+# # Limit volatility
 dm_data_limit_volatility = run_backtest([
     "--model", f"{MODEL}",
     "--data-source", f"{DATASOURCE}",
@@ -110,10 +119,13 @@ dm_data_limit_volatility = run_backtest([
     "--backtest-days", f"{BACKTEST_DAYS}",
     "--rebalance-every", "5",
     "--top-k", "2",
-    "--use-cache", "--offline", "--target-vol", "0.15"
+    "--use-cache",
+    # "--offline",
+    # "--target-vol", "0.15"
+    "--target-vol", f"{LIMIT_VOL}", "--vol-window", "252",
 ])
 
-if not mv_data or not dm_data:
+if not all([mv_data, dm_data, dm_data2, dm_data3, dm_data4, dm_data_limit_volatility]):
     print("Failed to get backtest data.")
     exit()
 
@@ -162,7 +174,7 @@ plt.plot(days, dm_curve, label='Dual Momentum (Top-5)', linewidth=2, color='#c15
 plt.plot(days, dm_curve2, label='Dual Momentum (Top-2)', linewidth=2, color='#ff7f0e')
 plt.plot(days, dm_curve3, label='Dual Momentum (Top-2 daily rebalance)', linewidth=2, color='#ff9a41')
 plt.plot(days, dm_curve4, label='Dual Momentum (Top-1 daily rebalance)', linewidth=2, color='#ffa85b')
-plt.plot(days, dmvol_curve, label='Dual Momentum (Top-2, vol 15%)', linewidth=2, color='#FA5BFF')
+plt.plot(days, dmvol_curve, label=f'Dual Momentum (Top-2, vol {LIMIT_VOL})', linewidth=2, color='#FA5BFF')
 plt.plot(days, qqq_norm, label='QQQ (Nasdaq 100)', linestyle='--', alpha=0.7, color='#2ca02c')
 plt.plot(days, spy_norm, label='SPY (S&P 500)', linestyle='--', alpha=0.7, color='#d62728')
 plt.plot(days, iwm_norm, label='IWM (Russell 2000)', linestyle='--', alpha=0.7, color='#9467bd')

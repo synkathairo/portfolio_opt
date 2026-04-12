@@ -27,7 +27,7 @@ from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_pric
 from .black_litterman import estimate_inputs_from_black_litterman
 from .risk_parity import estimate_inputs_risk_parity
 from .model import ModelInputs, load_model_inputs
-from .optimizer import effective_turnover_penalty, optimize_weights
+from .optimizer import effective_turnover_penalty, optimize_weights, project_weights
 from .rebalance import build_order_plan, current_weights
 from .runtime import configure_local_cache_dirs
 from .yfinance_data import fetch_closes as yf_fetch_closes
@@ -141,11 +141,13 @@ def build_asset_class_matrix(
     if not class_names:
         return np.zeros((0, len(symbols)), dtype=float)
     matrix = np.zeros((len(class_names), len(symbols)), dtype=float)
+    class_index = {class_name: index for index, class_name in enumerate(class_names)}
     for symbol_index, symbol in enumerate(symbols):
         class_name = asset_classes.get(symbol)
         if class_name is None:
             continue
-        matrix[class_names.index(class_name), symbol_index] = 1.0
+        if class_name in class_index:
+            matrix[class_index[class_name], symbol_index] = 1.0
     return matrix
 
 
@@ -173,6 +175,35 @@ def asset_class_exposures(
         )
         for class_name in sorted(set(asset_classes.values()))
     }
+
+
+def _validate_backtest_history(
+    closes_by_symbol: dict[str, list[float]],
+    *,
+    lookback_days: int,
+    backtest_days: int,
+) -> None:
+    if not closes_by_symbol:
+        raise ValueError("No price history was loaded for the requested backtest.")
+
+    lengths = {symbol: len(closes) for symbol, closes in closes_by_symbol.items()}
+    common_history_days = min(lengths.values())
+    required_history_days = lookback_days + backtest_days + 1
+    if common_history_days >= required_history_days:
+        return
+
+    available_backtest_days = max(0, common_history_days - lookback_days - 1)
+    limiting_symbols = sorted(lengths.items(), key=lambda item: item[1])[:5]
+    limiting_summary = ", ".join(
+        f"{symbol}={length}" for symbol, length in limiting_symbols
+    )
+    raise ValueError(
+        "Not enough common history for the requested backtest. "
+        f"Requested {backtest_days} backtest days with lookback {lookback_days}, "
+        f"which needs {required_history_days} prices, but only {common_history_days} "
+        f"common prices are available across the universe. That supports at most "
+        f"{available_backtest_days} backtest days. Shortest histories: {limiting_summary}"
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -287,6 +318,12 @@ def parse_args() -> argparse.Namespace:
         help="Target annualized portfolio volatility for the risky basket (vol targeting).",
     )
     parser.add_argument(
+        "--vol-window",
+        type=int,
+        default=63,
+        help="Trailing trading-day window used to estimate volatility for --target-vol.",
+    )
+    parser.add_argument(
         "--max-single-weight",
         type=float,
         default=None,
@@ -315,6 +352,18 @@ def parse_args() -> argparse.Namespace:
         choices=("alpaca", "yfinance"),
         default="alpaca",
         help="Source for historical price data in backtest mode.",
+    )
+    parser.add_argument(
+        "--yfinance-max-workers",
+        type=int,
+        default=10,
+        help="Maximum concurrent yfinance symbol downloads when --data-source yfinance is used.",
+    )
+    parser.add_argument(
+        "--yfinance-retry-delay",
+        type=float,
+        default=1.0,
+        help="Seconds to wait between yfinance retry attempts.",
     )
     parser.add_argument(
         "--backtest-days",
@@ -377,6 +426,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    alpaca: AlpacaClient | None = None
+    yfinance_max_workers = getattr(args, "yfinance_max_workers", 10)
+    yfinance_retry_delay = getattr(args, "yfinance_retry_delay", 1.0)
 
     # Dynamic universe is only useful for live/dry-run trading, not backtesting
     if args.dynamic_universe and args.backtest_days > 0:
@@ -395,8 +447,8 @@ def main() -> None:
 
         # Merge with currently held positions so the model can decide to exit
         # even if a stock gets delisted between universe updates.
-        alpaca_temp = AlpacaClient(AlpacaConfig.from_env())
-        positions = alpaca_temp.get_positions(
+        alpaca = AlpacaClient(AlpacaConfig.from_env())
+        positions = alpaca.get_positions(
             use_cache=args.use_cache,
             refresh_cache=args.refresh_cache,
             offline=args.offline,
@@ -448,9 +500,6 @@ def main() -> None:
         class_max_weights=model.class_max_weights,
     )
 
-    # The optimizer is intentionally decoupled from data acquisition so the
-    # expected return and covariance model can be replaced later.
-    alpaca = AlpacaClient(AlpacaConfig.from_env())
     constrained_class_names = list(model.class_min_weights) + [
         name for name in model.class_max_weights if name not in model.class_min_weights
     ]
@@ -463,11 +512,21 @@ def main() -> None:
     if args.backtest_days > 0:
         total_days = args.lookback_days + args.backtest_days + 1
         if args.data_source == "yfinance":
-            closes_by_symbol = yf_fetch_closes(model.symbols, period="max")
+            closes_by_symbol = yf_fetch_closes(
+                model.symbols,
+                period="max",
+                use_cache=args.use_cache,
+                refresh_cache=args.refresh_cache,
+                offline=args.offline,
+                max_workers=yfinance_max_workers,
+                retry_delay=yfinance_retry_delay,
+            )
             # Trim to the requested total_days from the most recent
             for s in closes_by_symbol:
                 closes_by_symbol[s] = closes_by_symbol[s][-total_days:]
         else:
+            if alpaca is None:
+                alpaca = AlpacaClient(AlpacaConfig.from_env())
             closes_by_symbol = alpaca.get_daily_closes_for_period(
                 model.symbols,
                 total_days,
@@ -475,6 +534,11 @@ def main() -> None:
                 refresh_cache=args.refresh_cache,
                 offline=args.offline,
             )
+        _validate_backtest_history(
+            closes_by_symbol,
+            lookback_days=args.lookback_days,
+            backtest_days=args.backtest_days,
+        )
         if args.sweep:
             if args.strategy == "dual-momentum":
                 raise ValueError(
@@ -496,10 +560,38 @@ def main() -> None:
                 )
             )
 
-            with ProcessPoolExecutor() as executor:
-                futures = [
-                    executor.submit(
-                        _run_sweep_point,
+            try:
+                with ProcessPoolExecutor() as executor:
+                    futures = [
+                        executor.submit(
+                            _run_sweep_point,
+                            symbols=model.symbols,
+                            closes_by_symbol=closes_by_symbol,
+                            lookback_days=args.lookback_days,
+                            rebalance_every=args.rebalance_every,
+                            return_model=args.return_model,
+                            mean_shrinkage=args.mean_shrinkage,
+                            min_weight=args.min_weight,
+                            max_weight=args.max_weight,
+                            rebalance_threshold=args.rebalance_threshold,
+                            max_turnover=args.max_turnover,
+                            class_min_weights=model.class_min_weights,
+                            class_max_weights=model.class_max_weights,
+                            risk_aversion=risk_aversion,
+                            min_cash_weight=min_cash_weight,
+                            min_invested_weight=min_invested_weight,
+                            turnover_penalty=turnover_penalty,
+                            momentum_window=momentum_window,
+                            asset_class_matrix=(
+                                asset_class_matrix if constrained_class_names else None
+                            ),
+                        )
+                        for risk_aversion, min_cash_weight, min_invested_weight, turnover_penalty, momentum_window in grid_params
+                    ]
+                    outcomes = [future.result() for future in futures]
+            except (NotImplementedError, PermissionError, OSError):
+                outcomes = [
+                    _run_sweep_point(
                         symbols=model.symbols,
                         closes_by_symbol=closes_by_symbol,
                         lookback_days=args.lookback_days,
@@ -527,8 +619,7 @@ def main() -> None:
             results: list[dict[str, float | int | dict[str, float]]] = []
             skipped: list[dict[str, float | int | str]] = []
 
-            for future in futures:
-                outcome = future.result()
+            for outcome in outcomes:
                 if isinstance(outcome, tuple):
                     skipped.append(json.loads(outcome[1]))
                 else:
@@ -572,6 +663,7 @@ def main() -> None:
                 softmax_temperature=args.softmax_temperature,
                 target_vol=args.target_vol,
                 max_single_weight=args.max_single_weight,
+                vol_window=args.vol_window,
                 trailing_stop=args.trailing_stop,
                 basket_opt=args.basket_opt,
                 basket_risk_aversion=args.basket_risk_aversion,
@@ -658,6 +750,7 @@ def main() -> None:
                     else None
                 ),
                 "target_vol": args.target_vol,
+                "vol_window": args.vol_window if args.strategy == "dual-momentum" else None,
                 "max_single_weight": args.max_single_weight,
                 "basket_opt": args.basket_opt,
                 "basket_risk_aversion": (
@@ -695,6 +788,9 @@ def main() -> None:
         print(json.dumps(result, indent=2))
         return
 
+    if alpaca is None:
+        alpaca = AlpacaClient(AlpacaConfig.from_env())
+
     # Even in dry-run mode we fetch live account state for the rebalance path,
     # because the order plan depends on current equity, holdings, and prices.
     account = alpaca.get_account(
@@ -708,6 +804,7 @@ def main() -> None:
         [existing_weights_map[symbol] for symbol in model.symbols], dtype=float
     )
     scaled_turnover_penalty = effective_turnover_penalty(opt_config, existing_weights)
+    target_weights: np.ndarray | None = None
 
     if args.estimate_from_history:
         closes_by_symbol = alpaca.get_daily_closes(
@@ -748,6 +845,11 @@ def main() -> None:
             existing_weights = np.array(
                 [existing_weights_map[symbol] for symbol in model.symbols], dtype=float
             )
+            asset_class_matrix = build_asset_class_matrix(
+                symbols=model.symbols,
+                asset_classes=model.asset_classes,
+                class_names=constrained_class_names,
+            )
             scaled_turnover_penalty = effective_turnover_penalty(
                 opt_config, existing_weights
             )
@@ -766,6 +868,7 @@ def main() -> None:
                 basket_risk_aversion=args.basket_risk_aversion,
                 target_vol=args.target_vol,
                 max_single_weight=args.max_single_weight,
+                vol_window=args.vol_window,
                 trailing_stop=args.trailing_stop,
             )
             target_weights = np.array(
@@ -776,6 +879,7 @@ def main() -> None:
                 "lookback_days": args.lookback_days,
                 "top_k": args.top_k,
                 "weighting": args.dual_momentum_weighting,
+                "vol_window": args.vol_window,
             }
         elif args.return_model == "momentum":
             estimated = estimate_inputs_from_momentum(
@@ -792,7 +896,7 @@ def main() -> None:
                 "lookback_days": args.lookback_days,
                 "mean_shrinkage": args.mean_shrinkage,
                 "observations": estimated.observations,
-                "momentum_window": min(args.momentum_window, args.lookback_days - 1),
+                "momentum_window": min(args.momentum_window, args.lookback_days),
             }
         elif args.return_model == "black-litterman":
             estimated = estimate_inputs_from_black_litterman(
@@ -808,7 +912,7 @@ def main() -> None:
                 "lookback_days": args.lookback_days,
                 "mean_shrinkage": args.mean_shrinkage,
                 "observations": estimated.observations,
-                "momentum_window": min(args.momentum_window, args.lookback_days - 1),
+                "momentum_window": min(args.momentum_window, args.lookback_days),
             }
         elif args.return_model == "risk-parity":
             estimated = estimate_inputs_risk_parity(
@@ -816,10 +920,14 @@ def main() -> None:
                 closes_by_symbol=closes_by_symbol,
                 lookback_days=args.lookback_days,
             )
-            # Risk parity has no expected returns; use small positive values
-            # so the optimizer can still apply constraints.
-            expected_returns = np.full(len(model.symbols), 0.01, dtype=float)
-            covariance = estimated.covariance
+            target_weights = project_weights(
+                target_weights=estimated.weights,
+                config=opt_config,
+                current_weights=existing_weights,
+                asset_class_matrix=(
+                    asset_class_matrix if constrained_class_names else None
+                ),
+            )
             estimation_metadata = {
                 "method": "risk_parity",
                 "lookback_days": args.lookback_days,
@@ -850,7 +958,7 @@ def main() -> None:
         covariance = model.covariance
         estimation_metadata = {"method": "model_file"}
 
-    if args.strategy != "dual-momentum":
+    if args.strategy != "dual-momentum" and target_weights is None:
         target_weights = optimize_weights(
             expected_returns=expected_returns,
             covariance=covariance,
@@ -858,6 +966,8 @@ def main() -> None:
             current_weights=existing_weights,
             asset_class_matrix=asset_class_matrix if constrained_class_names else None,
         )
+    if target_weights is None:
+        raise RuntimeError("Failed to produce target weights for the requested strategy.")
     target_weights = clean_weights(target_weights)
     target_cash_weight = max(0.0, 1.0 - float(target_weights.sum()))
     current_cash_weight = max(0.0, 1.0 - float(existing_weights.sum()))

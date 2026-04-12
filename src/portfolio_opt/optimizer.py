@@ -15,6 +15,51 @@ SOLVER = cp.CLARABEL
 # SOLVER = cp.ECOS
 
 
+def _class_constraint_names(config: OptimizationConfig) -> list[str]:
+    return list(config.class_min_weights) + [
+        name for name in config.class_max_weights if name not in config.class_min_weights
+    ]
+
+
+def _build_constraints(
+    weights: cp.Variable,
+    config: OptimizationConfig,
+    asset_class_matrix: np.ndarray | None,
+    baseline_weights: np.ndarray | None = None,
+) -> list[cp.Constraint]:
+    constraints = [weights >= config.min_weight, weights <= config.max_weight]
+    if config.force_full_investment:
+        constraints.append(cp.sum(weights) == 1)
+    else:
+        constraints.append(cp.sum(weights) <= 1.0 - config.min_cash_weight)
+        constraints.append(cp.sum(weights) >= config.min_invested_weight)
+    if baseline_weights is not None and config.max_turnover is not None:
+        constraints.append(cp.norm1(weights - baseline_weights) <= config.max_turnover)
+    if asset_class_matrix is not None:
+        class_exposures = asset_class_matrix @ weights
+        for class_index, class_name in enumerate(_class_constraint_names(config)):
+            min_weight = config.class_min_weights.get(class_name)
+            if min_weight is not None:
+                constraints.append(class_exposures[class_index] >= min_weight)
+            max_weight = config.class_max_weights.get(class_name)
+            if max_weight is not None:
+                constraints.append(class_exposures[class_index] <= max_weight)
+    return constraints
+
+
+def _finalize_solution(
+    solution: np.ndarray,
+    config: OptimizationConfig,
+) -> np.ndarray:
+    clipped = np.clip(solution, config.min_weight, config.max_weight)
+    total = clipped.sum()
+    if config.force_full_investment:
+        if total <= 0:
+            raise RuntimeError("Optimization returned non-positive total weight.")
+        return clipped / total
+    return clipped
+
+
 def effective_turnover_penalty(
     config: OptimizationConfig,
     current_weights: np.ndarray | None,
@@ -55,22 +100,12 @@ def optimize_weights(
         - config.risk_aversion * cp.quad_form(weights, covariance)
         - scaled_turnover_penalty * cp.norm1(weights - baseline_weights)
     )
-    constraints = [weights >= config.min_weight, weights <= config.max_weight]
-    if config.force_full_investment:
-        constraints.append(cp.sum(weights) == 1)
-    else:
-        # Allowing partial investment leaves the remainder in cash.
-        constraints.append(cp.sum(weights) <= 1.0 - config.min_cash_weight)
-        constraints.append(cp.sum(weights) >= config.min_invested_weight)
-    if config.max_turnover is not None:
-        # Hard turnover cap for operational control on top of the soft penalty.
-        constraints.append(cp.norm1(weights - baseline_weights) <= config.max_turnover)
-    if asset_class_matrix is not None:
-        class_exposures = asset_class_matrix @ weights
-        for class_index, min_weight in enumerate(config.class_min_weights.values()):
-            constraints.append(class_exposures[class_index] >= min_weight)
-        for class_index, max_weight in enumerate(config.class_max_weights.values()):
-            constraints.append(class_exposures[class_index] <= max_weight)
+    constraints = _build_constraints(
+        weights,
+        config,
+        asset_class_matrix,
+        baseline_weights=baseline_weights,
+    )
     problem = cp.Problem(objective, constraints)
     problem.solve(solver=SOLVER)
 
@@ -78,19 +113,41 @@ def optimize_weights(
         raise RuntimeError(f"Optimization failed with status {problem.status}.")
 
     solution = np.array(weights.value, dtype=float)
-    # Normalize after clipping to keep the output usable even if the solver
-    # returns tiny numerical violations around the bounds.
-    clipped = np.clip(solution, config.min_weight, config.max_weight)
-    total = clipped.sum()
-    if config.force_full_investment:
-        if total <= 0:
-            raise RuntimeError("Optimization returned non-positive total weight.")
-        # With full investment enabled this keeps weights summing to one.
-        return clipped / total
+    return _finalize_solution(solution, config)
 
-    # In partial-investment mode the leftover weight is explicit cash, so keep
-    # the raw clipped solution instead of renormalizing it back to 100%.
-    return clipped
+
+def project_weights(
+    target_weights: np.ndarray,
+    config: OptimizationConfig,
+    current_weights: np.ndarray | None = None,
+    asset_class_matrix: np.ndarray | None = None,
+) -> np.ndarray:
+    asset_count = target_weights.shape[0]
+    weights = cp.Variable(asset_count)
+    baseline_weights = (
+        np.array(current_weights, dtype=float)
+        if current_weights is not None
+        else np.zeros(asset_count, dtype=float)
+    )
+    scaled_turnover_penalty = effective_turnover_penalty(config, baseline_weights)
+
+    objective = cp.Minimize(
+        cp.sum_squares(weights - np.array(target_weights, dtype=float))
+        + scaled_turnover_penalty * cp.norm1(weights - baseline_weights)
+    )
+    constraints = _build_constraints(
+        weights,
+        config,
+        asset_class_matrix,
+        baseline_weights=baseline_weights,
+    )
+    problem = cp.Problem(objective, constraints)
+    problem.solve(solver=SOLVER)
+
+    if weights.value is None:
+        raise RuntimeError(f"Projection failed with status {problem.status}.")
+
+    return _finalize_solution(np.array(weights.value, dtype=float), config)
 
 
 def optimize_basket_weights(

@@ -7,11 +7,12 @@ custom backtest can reach back to ETF inception (e.g. the 2008 crisis).
 from __future__ import annotations
 
 import logging
-import math
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
+
+from .cache import cache_path, read_cache, write_cache
 
 try:
     import yfinance as yf
@@ -40,7 +41,7 @@ def _fetch_single_symbol(
     period: str,
     retries: int,
     retry_delay: float,
-) -> tuple[str, list[float]]:
+) -> tuple[str, pd.Series]:
     """Fetch daily adjusted closes for a single symbol from Yahoo Finance."""
     yahoo_sym = _to_yahoo_symbol(symbol)
     last_err: Exception | None = None
@@ -50,9 +51,11 @@ def _fetch_single_symbol(
             hist = ticker.history(period=period, auto_adjust=True)
             if hist.empty or "Close" not in hist.columns:
                 raise ValueError(f"No close data for {symbol}")
-            closes = [float(c) for c in hist["Close"].values]
-            if not closes:
+            closes = hist["Close"].astype(float).dropna()
+            if closes.empty:
                 raise ValueError(f"Empty close series for {symbol}")
+            closes.index = pd.to_datetime(closes.index).tz_localize(None).normalize()
+            closes = closes[~closes.index.duplicated(keep="last")].sort_index()
             return symbol, closes
         except Exception as exc:
             last_err = exc
@@ -68,6 +71,9 @@ def fetch_closes(
     retries: int = 3,
     retry_delay: float = 1.0,
     max_workers: int = 10,
+    use_cache: bool = False,
+    refresh_cache: bool = False,
+    offline: bool = False,
 ) -> dict[str, list[float]]:
     """Download daily adjusted closes for *symbols* from Yahoo Finance.
 
@@ -83,18 +89,41 @@ def fetch_closes(
         Seconds to wait between retries.
     max_workers : int
         Maximum number of concurrent threads for fetching symbols.
+    use_cache : bool
+        Reuse a cached yfinance result when available, otherwise fetch and write it.
+    refresh_cache : bool
+        Fetch from yfinance and overwrite the cached result.
+    offline : bool
+        Read from cache only and never call yfinance.
 
     Returns
     -------
     dict[str, list[float]]
-        Mapping of symbol to a list of adjusted close prices, oldest first.
-        All lists are aligned to the same trailing length (the minimum across
-        symbols) so the backtest can use them directly.
+        Mapping of symbol to adjusted close prices, oldest first. All lists are
+        aligned by actual trading date so delisted or stale histories cannot be
+        paired with unrelated recent bars from active tickers.
     """
     if not symbols:
         return {}
 
-    closes_by_symbol: dict[str, list[float]] = {}
+    path = cache_path(
+        "yfinance_closes",
+        {"kind": "yfinance_closes", "symbols": symbols, "period": period},
+    )
+    if offline:
+        if not path.exists():
+            raise RuntimeError(f"Offline mode requested but cache is missing: {path}")
+        return {
+            symbol: [float(value) for value in values]
+            for symbol, values in read_cache(path).items()
+        }
+    if use_cache and path.exists() and not refresh_cache:
+        return {
+            symbol: [float(value) for value in values]
+            for symbol, values in read_cache(path).items()
+        }
+
+    closes_by_symbol: dict[str, pd.Series] = {}
     failed: list[str] = []
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -105,8 +134,8 @@ def fetch_closes(
         for future in as_completed(futures):
             symbol = futures[future]
             try:
-                symbol, closes = future.result()
-                closes_by_symbol[symbol] = closes
+                fetched_symbol, closes = future.result()
+                closes_by_symbol[fetched_symbol] = closes
             except RuntimeError as exc:
                 failed.append(symbol)
                 logger.warning("Failed to fetch %s: %s", symbol, exc)
@@ -117,39 +146,23 @@ def fetch_closes(
             f"{', '.join(failed[:10])}{'...' if len(failed) > 10 else ''}"
         )
 
-    # Clean NaN values: trailing NaN (incomplete today bar) is dropped from
-    # all symbols; middle NaN values (historical data gaps) are interpolated
-    # as the mean of the surrounding bars.
-    if closes_by_symbol:
-        # Check if any symbol has a trailing NaN
-        any_trailing_nan = any(math.isnan(v[-1]) for v in closes_by_symbol.values())
-        if any_trailing_nan:
-            for s in closes_by_symbol:
-                closes_by_symbol[s] = closes_by_symbol[s][:-1]
-
-        # Interpolate any remaining middle NaN values
-        for s in closes_by_symbol:
-            prices = closes_by_symbol[s]
-            for i in range(len(prices)):
-                if math.isnan(prices[i]):
-                    if i > 0 and i < len(prices) - 1:
-                        prices[i] = (prices[i - 1] + prices[i + 1]) / 2.0
-                    else:
-                        # Edge NaN with no neighbor — should not happen for
-                        # liquid symbols, but handle defensively
-                        raise ValueError(
-                            f"Unrecoverable NaN at edge of close series for {s}"
-                        )
-
-    # Align to common trailing history — different ETFs have different inception
-    # dates, so we trim to the shortest series.
-    lengths = {s: len(v) for s, v in closes_by_symbol.items()}
-    min_len = min(lengths.values())
-    if min_len < 2:
+    close_frame = pd.concat(
+        [closes_by_symbol[symbol].rename(symbol) for symbol in symbols],
+        axis=1,
+        join="inner",
+    ).dropna(how="any")
+    if len(close_frame) < 2:
+        lengths = {symbol: len(series) for symbol, series in closes_by_symbol.items()}
         raise ValueError(
-            f"Not enough common history. Shortest: {min(lengths, key=lambda s: lengths[s])} "
-            f"with {min_len} bars."
+            "Not enough date-aligned common history. "
+            f"Shortest raw history: {min(lengths, key=lambda s: lengths[s])} "
+            f"with {min(lengths.values())} bars."
         )
 
-    trimmed = {s: v[-min_len:] for s, v in closes_by_symbol.items()}
-    return trimmed
+    aligned = {
+        symbol: [float(value) for value in close_frame[symbol].to_numpy()]
+        for symbol in symbols
+    }
+    if use_cache or refresh_cache:
+        write_cache(path, aligned)
+    return aligned

@@ -17,13 +17,16 @@ MODEL = "examples/nasdaq100_sp500_sector_universe_b2016filtered.json"
 # TITLE_NAME_VAR = "Nasdaq_100_historical"
 # TITLE_NAME_VAR = "sector_universe_pre2020"
 # TITLE_NAME_VAR = "nasdaq100_sp500_sector_universe_b2016filtered"
-TITLE_NAME_VAR = "nasdaq100_sp500_sector_universe_b2016filtered-basketoptrisk2.0"
+TITLE_NAME_VAR = "nasdaq100_sp500_sector_universe_b2016filtered-targetvol0.3-252"
+# TITLE_NAME_VAR = "nasdaq100_sp500_sector_universe_b2016filtered-basketoptrisk2.0"
 # LOOKBACK = 60
 LOOKBACK = 252
 BACKTEST_DAYS = 252*9
 # BACKTEST_DAYS = 252*4
 # BACKTEST_DAYS = 6000
 # BACKTEST_DAYS = 2520
+TARGET_VOL = 0.3
+VOL_WINDOW = 252
 REBALANCE_DAYS = [1, 5, 10, 21, 42, 63]
 TOP_KS = [1, 2, 3, 5, 8]
 FIGURE_NAME = f"heatmap_comparison_{TITLE_NAME_VAR}_{BACKTEST_DAYS}_{LOOKBACK}_{today}"
@@ -40,14 +43,18 @@ def run_backtest(rebal_days, k):
         "--backtest-days", str(BACKTEST_DAYS),
         "--rebalance-every", str(rebal_days),
         "--top-k", str(k),
-        "--basket-opt", "mean-variance", "--basket-risk-aversion", "2.0",
+        # "--basket-opt", "mean-variance", "--basket-risk-aversion", "2.0",
+        "--target-vol", str(TARGET_VOL), "--vol-window", str(VOL_WINDOW),
         "--data-source", "yfinance",
-        "--use-cache",
+        "--use-cache"
         # "--refresh-cache"
-        "--offline"
+        # "--offline"
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT_LEN)
+        if result.returncode != 0:
+            print(f"Error for rebal={rebal_days}, k={k}: {result.stderr.strip()}")
+            return None
         data = json.loads(result.stdout)
         return data['backtest']
     except Exception as e:
@@ -89,6 +96,8 @@ for rebal in REBALANCE_DAYS:
             })
 
 df = pd.DataFrame(rows)
+if df.empty:
+    raise SystemExit("No successful backtests; no heatmap generated.")
 
 # Pivot for heatmaps
 df_return = df.pivot(index="Rebalance Days", columns="Top K", values="Annualized Return")

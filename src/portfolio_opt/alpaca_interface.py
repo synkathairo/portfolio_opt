@@ -2,10 +2,18 @@ from __future__ import annotations
 
 import json
 import sys
+import warnings
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
+
+warnings.filterwarnings(
+    "ignore",
+    message="websockets\\.legacy is deprecated.*",
+    category=DeprecationWarning,
+    module="websockets\\.legacy",
+)
 
 from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical.stock import StockHistoricalDataClient
@@ -93,7 +101,12 @@ class AlpacaClient:
             refresh_cache=refresh_cache,
             offline=offline,
         )
-        return {symbol: float(trade["p"]) for symbol, trade in payload.items()}
+        trades_payload = payload.get("trades", payload)
+        return {
+            symbol: float(trade["p"])
+            for symbol, trade in trades_payload.items()
+            if isinstance(trade, dict) and "p" in trade
+        }
 
     def get_daily_closes(
         self,
@@ -444,24 +457,16 @@ class AlpacaClient:
     ) -> dict[str, list[float]] | None:
         for path in sorted(Path(".cache").glob("daily_closes_*.json")):
             payload = read_cache(path)
-            if not isinstance(payload, dict) or list(payload.keys()) != symbols:
-                continue
-            lengths = [len(values) for values in payload.values()]
-            if min(lengths, default=0) >= lookback_days:
-                return {
-                    symbol: [float(value) for value in values[-lookback_days:]]
-                    for symbol, values in payload.items()
-                }
+            extracted = self._extract_close_subset(payload, symbols, lookback_days)
+            if extracted is not None:
+                return extracted
         for path in sorted(Path(".cache").glob("daily_bars_*.json")):
             payload = read_cache(path)
-            if not isinstance(payload, dict) or list(payload.keys()) != symbols:
-                continue
-            lengths = [len(values) for values in payload.values()]
-            if min(lengths, default=0) >= lookback_days:
-                return {
-                    symbol: [float(row["close"]) for row in values[-lookback_days:]]
-                    for symbol, values in payload.items()
-                }
+            extracted = self._extract_closes_from_bars_subset(
+                payload, symbols, lookback_days
+            )
+            if extracted is not None:
+                return extracted
         return None
 
     def _find_offline_bars_fallback(
@@ -471,21 +476,76 @@ class AlpacaClient:
     ) -> dict[str, list[dict[str, str | float]]] | None:
         for path in sorted(Path(".cache").glob("daily_bars_*.json")):
             payload = read_cache(path)
-            if not isinstance(payload, dict) or list(payload.keys()) != symbols:
-                continue
-            lengths = [len(values) for values in payload.values()]
-            if min(lengths, default=0) >= lookback_days:
-                return {
-                    symbol: [
-                        {
-                            "timestamp": str(row["timestamp"]),
-                            "close": float(row["close"]),
-                        }
-                        for row in values[-lookback_days:]
-                    ]
-                    for symbol, values in payload.items()
-                }
+            extracted = self._extract_bar_subset(payload, symbols, lookback_days)
+            if extracted is not None:
+                return extracted
         return None
+
+    def _extract_close_subset(
+        self,
+        payload: Any,
+        symbols: list[str],
+        lookback_days: int,
+    ) -> dict[str, list[float]] | None:
+        if not isinstance(payload, dict):
+            return None
+        if any(symbol not in payload for symbol in symbols):
+            return None
+        selected = {symbol: payload[symbol] for symbol in symbols}
+        lengths = [
+            len(values)
+            for values in selected.values()
+            if isinstance(values, list)
+        ]
+        if len(lengths) != len(symbols) or min(lengths, default=0) < lookback_days:
+            return None
+        return {
+            symbol: [float(value) for value in selected[symbol][-lookback_days:]]
+            for symbol in symbols
+        }
+
+    def _extract_closes_from_bars_subset(
+        self,
+        payload: Any,
+        symbols: list[str],
+        lookback_days: int,
+    ) -> dict[str, list[float]] | None:
+        bars_subset = self._extract_bar_subset(payload, symbols, lookback_days)
+        if bars_subset is None:
+            return None
+        return {
+            symbol: [float(row["close"]) for row in rows]
+            for symbol, rows in bars_subset.items()
+        }
+
+    def _extract_bar_subset(
+        self,
+        payload: Any,
+        symbols: list[str],
+        lookback_days: int,
+    ) -> dict[str, list[dict[str, str | float]]] | None:
+        if not isinstance(payload, dict):
+            return None
+        if any(symbol not in payload for symbol in symbols):
+            return None
+        selected = {symbol: payload[symbol] for symbol in symbols}
+        lengths = [
+            len(values)
+            for values in selected.values()
+            if isinstance(values, list)
+        ]
+        if len(lengths) != len(symbols) or min(lengths, default=0) < lookback_days:
+            return None
+        return {
+            symbol: [
+                {
+                    "timestamp": str(row["timestamp"]),
+                    "close": float(row["close"]),
+                }
+                for row in selected[symbol][-lookback_days:]
+            ]
+            for symbol in symbols
+        }
 
     def fetch_yahoo_closes(
         self,

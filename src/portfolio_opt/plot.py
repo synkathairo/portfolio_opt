@@ -20,6 +20,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
 
+from .runtime import configure_local_cache_dirs
+
+configure_local_cache_dirs()
+
 import matplotlib
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
