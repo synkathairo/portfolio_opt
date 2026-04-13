@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from datetime import UTC, datetime
+import json
 
 import numpy as np
 
@@ -480,3 +482,55 @@ def test_latest_prices_payload_accepts_trade_objects_and_dicts() -> None:
         "GLD": {"p": 310.0},
         "XLU": {"p": 85.75},
     }
+
+
+def test_daily_closes_refresh_appends_only_missing_bars(monkeypatch, tmp_path) -> None:
+    client = object.__new__(AlpacaClient)
+    cache_file = tmp_path / "spy.json"
+    cache_file.write_text(
+        json.dumps(
+            [
+                {"timestamp": "2026-01-01", "close": 101.0},
+                {"timestamp": "2026-01-02", "close": 102.0},
+            ]
+        )
+    )
+    calls: list[tuple[list[str], datetime, int]] = []
+
+    def fake_cache_path(_name, _payload):
+        return cache_file
+
+    def fake_daily_bar_rows_payload(symbols, *, start, end, limit):
+        calls.append((symbols, start, limit))
+        return {"SPY": [{"timestamp": "2026-01-05", "close": 103.0}]}
+
+    monkeypatch.setattr(
+        "portfolio_opt.alpaca_interface.cache_path",
+        fake_cache_path,
+    )
+    monkeypatch.setattr(client, "_daily_bar_rows_payload", fake_daily_bar_rows_payload)
+    monkeypatch.setattr(
+        "portfolio_opt.alpaca_interface.datetime",
+        type(
+            "FakeDateTime",
+            (),
+            {
+                "now": staticmethod(lambda _tz=None: datetime(2026, 1, 5, tzinfo=UTC)),
+                "strptime": staticmethod(datetime.strptime),
+            },
+        ),
+    )
+
+    closes = client.get_daily_closes(
+        ["SPY"],
+        lookback_days=2,
+        use_cache=True,
+        refresh_cache=True,
+    )
+
+    assert closes == {"SPY": [102.0, 103.0]}
+    assert calls == [(["SPY"], datetime(2026, 1, 3, tzinfo=UTC), 7)]
+    assert json.loads(cache_file.read_text()) == [
+        {"timestamp": "2026-01-02", "close": 102.0},
+        {"timestamp": "2026-01-05", "close": 103.0},
+    ]

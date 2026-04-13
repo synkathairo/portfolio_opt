@@ -116,6 +116,16 @@ class AlpacaClient:
         refresh_cache: bool = False,
         offline: bool = False,
     ) -> dict[str, list[float]]:
+        if use_cache or refresh_cache or offline:
+            incremental = self._incremental_daily_closes(
+                symbols=symbols,
+                lookback_days=lookback_days,
+                refresh_cache=refresh_cache,
+                offline=offline,
+            )
+            if incremental is not None:
+                return incremental
+
         cached = self._cached_json(
             "daily_closes",
             {
@@ -310,6 +320,218 @@ class AlpacaClient:
                     closes_by_symbol[symbol] = closes
 
         return closes_by_symbol
+
+    def _incremental_daily_closes(
+        self,
+        *,
+        symbols: list[str],
+        lookback_days: int,
+        refresh_cache: bool,
+        offline: bool,
+    ) -> dict[str, list[float]] | None:
+        cached_rows: dict[str, list[dict[str, str | float]]] = {}
+        missing_symbols: list[str] = []
+
+        for symbol in symbols:
+            path = self._daily_closes_v2_cache_path(symbol)
+            if path.exists():
+                payload = read_cache(path)
+                rows = self._normalize_daily_bar_rows(payload)
+                if rows:
+                    cached_rows[symbol] = rows
+                    continue
+            missing_symbols.append(symbol)
+
+        if offline:
+            if missing_symbols:
+                return None
+            return self._daily_close_rows_to_close_map(
+                cached_rows, symbols, lookback_days
+            )
+
+        if not refresh_cache:
+            if missing_symbols:
+                return None
+            closes = self._daily_close_rows_to_close_map(
+                cached_rows, symbols, lookback_days
+            )
+            return closes
+
+        fetch_groups: dict[str, tuple[datetime, list[str], int]] = {}
+        now = datetime.now(UTC)
+        full_fetch_start = now - timedelta(days=max(lookback_days * 3, 30))
+        full_fetch_key = full_fetch_start.date().isoformat()
+        fetch_groups[full_fetch_key] = (full_fetch_start, [], lookback_days + 5)
+
+        for symbol in symbols:
+            rows = cached_rows.get(symbol, [])
+            if not rows:
+                fetch_groups[full_fetch_key][1].append(symbol)
+                continue
+            if len(rows) < lookback_days:
+                fetch_groups[full_fetch_key][1].append(symbol)
+                continue
+
+            last_date = str(rows[-1]["timestamp"])
+            try:
+                next_start = (
+                    datetime.strptime(last_date, "%Y-%m-%d").replace(tzinfo=UTC)
+                    + timedelta(days=1)
+                )
+            except ValueError:
+                fetch_groups[full_fetch_key][1].append(symbol)
+                continue
+            if next_start.date() > now.date():
+                continue
+
+            fetch_key = next_start.date().isoformat()
+            if fetch_key not in fetch_groups:
+                fetch_groups[fetch_key] = (next_start, [], lookback_days + 5)
+            fetch_groups[fetch_key][1].append(symbol)
+
+        for start, group_symbols, limit in fetch_groups.values():
+            if not group_symbols:
+                continue
+            fetched = self._daily_bar_rows_payload(
+                group_symbols,
+                start=start,
+                end=now,
+                limit=limit,
+            )
+            for symbol in group_symbols:
+                merged = self._merge_daily_bar_rows(
+                    cached_rows.get(symbol, []),
+                    fetched.get(symbol, []),
+                    lookback_days=lookback_days,
+                )
+                if merged:
+                    cached_rows[symbol] = merged
+                    write_cache(self._daily_closes_v2_cache_path(symbol), merged)
+
+        return self._daily_close_rows_to_close_map(cached_rows, symbols, lookback_days)
+
+    def _daily_closes_v2_cache_path(self, symbol: str) -> Path:
+        return cache_path(
+            "daily_closes_v2",
+            {
+                "kind": "daily_closes_v2",
+                "symbol": symbol,
+                "adjustment": "all",
+                "feed": "iex",
+            },
+        )
+
+    def _daily_bar_rows_payload(
+        self,
+        symbols: list[str],
+        *,
+        start: datetime,
+        end: datetime,
+        limit: int,
+    ) -> dict[str, list[dict[str, str | float]]]:
+        rows_by_symbol: dict[str, list[dict[str, str | float]]] = {}
+        batch_size = 100
+        for i in range(0, len(symbols), batch_size):
+            batch = symbols[i : i + batch_size]
+            request = StockBarsRequest(
+                symbol_or_symbols=batch,
+                timeframe=TimeFrame.Day,
+                start=start,
+                end=end,
+                limit=limit,
+                adjustment=Adjustment.ALL,
+                feed=DataFeed.IEX,
+            )
+            bars = cast(BarSet, self._data.get_stock_bars(request))
+            for symbol, bar_list in bars.data.items():
+                rows_by_symbol[symbol] = [
+                    {
+                        "timestamp": self._bar_timestamp_date(b.timestamp),
+                        "close": float(b.close),
+                    }
+                    for b in bar_list
+                ]
+
+        missing = [symbol for symbol in symbols if symbol not in rows_by_symbol]
+        for symbol in missing:
+            single_req = StockBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=TimeFrame.Day,
+                start=start,
+                end=end,
+                limit=limit,
+                adjustment=Adjustment.ALL,
+                feed=DataFeed.IEX,
+            )
+            single_bars = cast(BarSet, self._data.get_stock_bars(single_req))
+            if symbol in single_bars.data:
+                rows_by_symbol[symbol] = [
+                    {
+                        "timestamp": self._bar_timestamp_date(b.timestamp),
+                        "close": float(b.close),
+                    }
+                    for b in single_bars.data[symbol]
+                ]
+        return rows_by_symbol
+
+    def _bar_timestamp_date(self, timestamp: Any) -> str:
+        if isinstance(timestamp, datetime):
+            return timestamp.date().isoformat()
+        return str(timestamp)[:10]
+
+    def _normalize_daily_bar_rows(
+        self, payload: Any
+    ) -> list[dict[str, str | float]]:
+        if not isinstance(payload, list):
+            return []
+        rows: list[dict[str, str | float]] = []
+        for row in payload:
+            if not isinstance(row, dict):
+                continue
+            if "timestamp" not in row or "close" not in row:
+                continue
+            rows.append(
+                {
+                    "timestamp": self._bar_timestamp_date(row["timestamp"]),
+                    "close": float(row["close"]),
+                }
+            )
+        return self._merge_daily_bar_rows([], rows, lookback_days=len(rows))
+
+    def _merge_daily_bar_rows(
+        self,
+        existing: list[dict[str, str | float]],
+        new: list[dict[str, str | float]],
+        *,
+        lookback_days: int,
+    ) -> list[dict[str, str | float]]:
+        by_date: dict[str, dict[str, str | float]] = {}
+        for row in existing + new:
+            if "timestamp" not in row or "close" not in row:
+                continue
+            by_date[str(row["timestamp"])] = {
+                "timestamp": str(row["timestamp"]),
+                "close": float(row["close"]),
+            }
+        return [by_date[key] for key in sorted(by_date)][-lookback_days:]
+
+    def _daily_close_rows_to_close_map(
+        self,
+        rows_by_symbol: dict[str, list[dict[str, str | float]]],
+        symbols: list[str],
+        lookback_days: int,
+    ) -> dict[str, list[float]] | None:
+        if any(symbol not in rows_by_symbol for symbol in symbols):
+            return None
+        if any(len(rows_by_symbol[symbol]) < lookback_days for symbol in symbols):
+            return None
+        return {
+            symbol: [
+                float(row["close"])
+                for row in rows_by_symbol[symbol][-lookback_days:]
+            ]
+            for symbol in symbols
+        }
 
     def get_daily_closes_for_period(
         self,

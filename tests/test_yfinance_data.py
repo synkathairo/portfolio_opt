@@ -83,3 +83,76 @@ def test_fetch_closes_use_cache_avoids_yfinance_download(monkeypatch) -> None:
     closes = yfinance_data.fetch_closes(["SPY", "QQQ"], use_cache=True)
 
     assert closes == cached
+
+
+def test_fetch_closes_refresh_fetches_only_missing_tail_for_v2_cache(
+    monkeypatch,
+) -> None:
+    cached = {
+        "SPY": [
+            {"timestamp": "2024-01-01", "close": 100.0},
+            {"timestamp": "2024-01-02", "close": 101.0},
+        ],
+        "QQQ": [
+            {"timestamp": "2024-01-01", "close": 200.0},
+            {"timestamp": "2024-01-02", "close": 201.0},
+        ],
+    }
+    writes: dict[str, list[dict[str, str | float]]] = {}
+
+    class DummyPath:
+        def __init__(self, symbol: str) -> None:
+            self.symbol = symbol
+
+        def exists(self) -> bool:
+            return self.symbol in cached
+
+    def fake_cache_path(_name, payload):
+        return DummyPath(payload["symbol"])
+
+    def fake_fetch_symbols(symbols, **_kwargs):
+        assert symbols == []
+        return {}
+
+    def fake_fetch_symbols_since(starts_by_symbol, **_kwargs):
+        assert starts_by_symbol == {
+            "SPY": pd.Timestamp("2024-01-03"),
+            "QQQ": pd.Timestamp("2024-01-03"),
+        }
+        return {
+            "SPY": pd.Series(
+                [102.0],
+                index=pd.to_datetime(["2024-01-03"]),
+            ),
+            "QQQ": pd.Series(
+                [202.0],
+                index=pd.to_datetime(["2024-01-03"]),
+            ),
+        }
+
+    monkeypatch.setattr(yfinance_data, "cache_path", fake_cache_path)
+    monkeypatch.setattr(
+        yfinance_data,
+        "read_cache",
+        lambda path: cached[path.symbol],
+    )
+    monkeypatch.setattr(
+        yfinance_data,
+        "write_cache",
+        lambda path, payload: writes.__setitem__(path.symbol, payload),
+    )
+    monkeypatch.setattr(yfinance_data, "_fetch_symbols", fake_fetch_symbols)
+    monkeypatch.setattr(yfinance_data, "_fetch_symbols_since", fake_fetch_symbols_since)
+
+    closes = yfinance_data.fetch_closes(
+        ["SPY", "QQQ"],
+        use_cache=True,
+        refresh_cache=True,
+    )
+
+    assert closes == {
+        "SPY": [100.0, 101.0, 102.0],
+        "QQQ": [200.0, 201.0, 202.0],
+    }
+    assert writes["SPY"][-1] == {"timestamp": "2024-01-03", "close": 102.0}
+    assert writes["QQQ"][-1] == {"timestamp": "2024-01-03", "close": 202.0}

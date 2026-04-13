@@ -3,8 +3,12 @@ import requests
 import yfinance as yf
 import pandas as pd
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from portfolio_opt.cache import cache_path, read_cache, write_cache
+
+_TICKER_INFO_MEMORY_CACHE: dict[str, dict[str, Any]] = {}
 
 
 # present a json-like dict object(?)
@@ -13,10 +17,32 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # these should match in layout
 
 
+def _get_ticker_info_payload(ticker: str) -> dict[str, Any]:
+    if ticker in _TICKER_INFO_MEMORY_CACHE:
+        return _TICKER_INFO_MEMORY_CACHE[ticker]
+    path = cache_path("ticker_info", {"symbol": ticker})
+    if path.exists():
+        cached = read_cache(path)
+        if isinstance(cached, dict):
+            _TICKER_INFO_MEMORY_CACHE[ticker] = cached
+            return cached
+    try:
+        info = yf.Ticker(ticker).info or {}
+    except Exception:
+        _TICKER_INFO_MEMORY_CACHE[ticker] = {}
+        return {}
+    if isinstance(info, dict) and info:
+        write_cache(path, info)
+        _TICKER_INFO_MEMORY_CACHE[ticker] = info
+        return info
+    _TICKER_INFO_MEMORY_CACHE[ticker] = {}
+    return {}
+
+
 def _get_ticker_info(ticker: str) -> tuple[str, str]:
     """Fetch info for a single ticker. Returns (symbol, formatted_name)."""
     try:
-        info = yf.Ticker(ticker).info or {}
+        info = _get_ticker_info_payload(ticker)
         name = info.get("shortName") or info.get("longName") or ticker
         sector = info.get("sector") or "Unknown"
         return ticker, f"{name} ({sector})"
@@ -120,10 +146,7 @@ def fetch_ticker_dict(
 
 def get_ticker_firstTradeDate(symbol: str) -> Optional[datetime]:
     try:
-        ticker_obj = yf.Ticker(symbol)
-
-        # Fetch the metadata (one quick request)
-        info: dict = ticker_obj.info
+        info = _get_ticker_info_payload(symbol)
 
         # This field provides the first trade date in Unix timestamp (Epoch)
         epoch_time = info.get("firstTradeDateMilliseconds")

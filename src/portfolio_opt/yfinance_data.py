@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
 
 import pandas as pd
 
@@ -65,6 +66,34 @@ def _fetch_single_symbol(
     raise RuntimeError(f"Failed to fetch {symbol} after {retries} retries: {last_err}")
 
 
+def _fetch_single_symbol_from(
+    symbol: str,
+    start: pd.Timestamp,
+    retries: int,
+    retry_delay: float,
+) -> tuple[str, pd.Series]:
+    yahoo_sym = _to_yahoo_symbol(symbol)
+    last_err: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            ticker = yf.Ticker(yahoo_sym)
+            hist = ticker.history(start=start.date().isoformat(), auto_adjust=True)
+            if hist.empty or "Close" not in hist.columns:
+                return symbol, pd.Series(dtype=float)
+            closes = hist["Close"].astype(float).dropna()
+            if closes.empty:
+                return symbol, pd.Series(dtype=float)
+            closes.index = pd.to_datetime(closes.index).tz_localize(None).normalize()
+            closes = closes[~closes.index.duplicated(keep="last")].sort_index()
+            return symbol, closes
+        except Exception as exc:
+            last_err = exc
+            if attempt < retries:
+                logger.debug("Retry %d/%d for %s: %s", attempt, retries, symbol, exc)
+                time.sleep(retry_delay)
+    raise RuntimeError(f"Failed to fetch {symbol} after {retries} retries: {last_err}")
+
+
 def fetch_closes(
     symbols: list[str],
     period: str = "max",
@@ -105,6 +134,19 @@ def fetch_closes(
     """
     if not symbols:
         return {}
+
+    if use_cache or refresh_cache or offline:
+        incremental = _incremental_fetch_closes(
+            symbols=symbols,
+            period=period,
+            retries=retries,
+            retry_delay=retry_delay,
+            max_workers=max_workers,
+            refresh_cache=refresh_cache,
+            offline=offline,
+        )
+        if incremental is not None:
+            return incremental
 
     path = cache_path(
         "yfinance_closes",
@@ -166,3 +208,211 @@ def fetch_closes(
     if use_cache or refresh_cache:
         write_cache(path, aligned)
     return aligned
+
+
+def _incremental_fetch_closes(
+    *,
+    symbols: list[str],
+    period: str,
+    retries: int,
+    retry_delay: float,
+    max_workers: int,
+    refresh_cache: bool,
+    offline: bool,
+) -> dict[str, list[float]] | None:
+    cached_by_symbol: dict[str, pd.Series] = {}
+    missing_symbols: list[str] = []
+    for symbol in symbols:
+        path = _symbol_closes_cache_path(symbol)
+        if not path.exists():
+            missing_symbols.append(symbol)
+            continue
+        series = _series_from_cached_rows(read_cache(path))
+        if series.empty:
+            missing_symbols.append(symbol)
+            continue
+        cached_by_symbol[symbol] = series
+
+    if offline:
+        if missing_symbols:
+            return None
+        return _align_close_series(symbols, cached_by_symbol)
+
+    if not refresh_cache:
+        if missing_symbols:
+            return None
+        return _align_close_series(symbols, cached_by_symbol)
+
+    refreshed = _fetch_symbols(
+        missing_symbols,
+        period=period,
+        retries=retries,
+        retry_delay=retry_delay,
+        max_workers=max_workers,
+    )
+    refreshed.update(
+        _fetch_symbols_since(
+            {
+                symbol: series.index[-1] + pd.Timedelta(days=1)
+                for symbol, series in cached_by_symbol.items()
+                if symbol not in missing_symbols and not series.empty
+            },
+            retries=retries,
+            retry_delay=retry_delay,
+            max_workers=max_workers,
+        )
+    )
+    for symbol, series in refreshed.items():
+        if series.empty and symbol in cached_by_symbol:
+            continue
+        merged = _merge_close_series(cached_by_symbol.get(symbol), series)
+        cached_by_symbol[symbol] = merged
+        write_cache(_symbol_closes_cache_path(symbol), _series_to_cached_rows(merged))
+
+    if any(symbol not in cached_by_symbol for symbol in symbols):
+        return None
+    return _align_close_series(symbols, cached_by_symbol)
+
+
+def _fetch_symbols(
+    symbols: list[str],
+    *,
+    period: str,
+    retries: int,
+    retry_delay: float,
+    max_workers: int,
+) -> dict[str, pd.Series]:
+    if not symbols:
+        return {}
+    closes_by_symbol: dict[str, pd.Series] = {}
+    failed: list[str] = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_fetch_single_symbol, s, period, retries, retry_delay): s
+            for s in symbols
+        }
+        for future in as_completed(futures):
+            symbol = futures[future]
+            try:
+                fetched_symbol, closes = future.result()
+                closes_by_symbol[fetched_symbol] = closes
+            except RuntimeError as exc:
+                failed.append(symbol)
+                logger.warning("Failed to fetch %s: %s", symbol, exc)
+
+    if failed:
+        raise RuntimeError(
+            f"Failed to fetch {len(failed)}/{len(symbols)} symbols: "
+            f"{', '.join(failed[:10])}{'...' if len(failed) > 10 else ''}"
+        )
+    return closes_by_symbol
+
+
+def _fetch_symbols_since(
+    starts_by_symbol: dict[str, pd.Timestamp],
+    *,
+    retries: int,
+    retry_delay: float,
+    max_workers: int,
+) -> dict[str, pd.Series]:
+    if not starts_by_symbol:
+        return {}
+    closes_by_symbol: dict[str, pd.Series] = {}
+    failed: list[str] = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                _fetch_single_symbol_from,
+                symbol,
+                start,
+                retries,
+                retry_delay,
+            ): symbol
+            for symbol, start in starts_by_symbol.items()
+        }
+        for future in as_completed(futures):
+            symbol = futures[future]
+            try:
+                fetched_symbol, closes = future.result()
+                closes_by_symbol[fetched_symbol] = closes
+            except RuntimeError as exc:
+                failed.append(symbol)
+                logger.warning("Failed to fetch %s: %s", symbol, exc)
+
+    if failed:
+        raise RuntimeError(
+            f"Failed to fetch {len(failed)}/{len(starts_by_symbol)} symbols: "
+            f"{', '.join(failed[:10])}{'...' if len(failed) > 10 else ''}"
+        )
+    return closes_by_symbol
+
+
+def _symbol_closes_cache_path(symbol: str):
+    return cache_path(
+        "yfinance_closes_v2",
+        {
+            "kind": "yfinance_closes_v2",
+            "symbol": symbol,
+            "adjustment": "auto",
+        },
+    )
+
+
+def _series_from_cached_rows(payload: Any) -> pd.Series:
+    if not isinstance(payload, list):
+        return pd.Series(dtype=float)
+    dates: list[str] = []
+    values: list[float] = []
+    for row in payload:
+        if not isinstance(row, dict):
+            continue
+        if "timestamp" not in row or "close" not in row:
+            continue
+        dates.append(str(row["timestamp"])[:10])
+        values.append(float(row["close"]))
+    if not dates:
+        return pd.Series(dtype=float)
+    index = pd.DatetimeIndex(pd.to_datetime(dates))
+    series = pd.Series(values, index=index, dtype=float)
+    series = series[~series.index.duplicated(keep="last")].sort_index()
+    return series
+
+
+def _series_to_cached_rows(series: pd.Series) -> list[dict[str, str | float]]:
+    rows: list[dict[str, str | float]] = []
+    for index, value in series.sort_index().items():
+        rows.append({"timestamp": str(index)[:10], "close": float(value)})
+    return rows
+
+
+def _merge_close_series(
+    existing: pd.Series | None,
+    new: pd.Series,
+) -> pd.Series:
+    if existing is None or existing.empty:
+        merged = new
+    else:
+        merged = pd.concat([existing, new])
+    merged = merged.astype(float)
+    merged.index = pd.DatetimeIndex(pd.to_datetime(merged.index)).tz_localize(None)
+    merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+    return merged
+
+
+def _align_close_series(
+    symbols: list[str],
+    closes_by_symbol: dict[str, pd.Series],
+) -> dict[str, list[float]] | None:
+    if any(symbol not in closes_by_symbol for symbol in symbols):
+        return None
+    close_frame = pd.concat(
+        [closes_by_symbol[symbol].rename(symbol) for symbol in symbols],
+        axis=1,
+        join="inner",
+    ).dropna(how="any")
+    if len(close_frame) < 2:
+        return None
+    return {
+        symbol: [float(value) for value in close_frame[symbol].to_numpy()]
+        for symbol in symbols
+    }
