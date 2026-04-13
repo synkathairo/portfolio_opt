@@ -250,13 +250,17 @@ def _incremental_fetch_closes(
         retry_delay=retry_delay,
         max_workers=max_workers,
     )
+    today = pd.Timestamp.today().normalize()
+    starts_by_symbol: dict[str, pd.Timestamp] = {}
+    for symbol, series in cached_by_symbol.items():
+        if symbol in missing_symbols or series.empty:
+            continue
+        next_start = series.index[-1] + pd.Timedelta(days=1)
+        if next_start <= today:
+            starts_by_symbol[symbol] = next_start
     refreshed.update(
         _fetch_symbols_since(
-            {
-                symbol: series.index[-1] + pd.Timedelta(days=1)
-                for symbol, series in cached_by_symbol.items()
-                if symbol not in missing_symbols and not series.empty
-            },
+            starts_by_symbol,
             retries=retries,
             retry_delay=retry_delay,
             max_workers=max_workers,
@@ -267,7 +271,7 @@ def _incremental_fetch_closes(
             continue
         merged = _merge_close_series(cached_by_symbol.get(symbol), series)
         cached_by_symbol[symbol] = merged
-        write_cache(_symbol_closes_cache_path(symbol), _series_to_cached_rows(merged))
+        write_cache(_symbol_closes_cache_path(symbol), _series_to_cached_rows(symbol, merged))
 
     if any(symbol not in cached_by_symbol for symbol in symbols):
         return None
@@ -348,7 +352,8 @@ def _fetch_symbols_since(
 
 
 def _symbol_closes_cache_path(symbol: str):
-    return cache_path(
+    safe_symbol = "".join(char if char.isalnum() else "_" for char in symbol.upper())
+    path = cache_path(
         "yfinance_closes_v2",
         {
             "kind": "yfinance_closes_v2",
@@ -356,9 +361,17 @@ def _symbol_closes_cache_path(symbol: str):
             "adjustment": "auto",
         },
     )
+    return path.with_name(f"yfinance_closes_v2_{safe_symbol}_{path.name.rsplit('_', 1)[-1]}")
 
 
 def _series_from_cached_rows(payload: Any) -> pd.Series:
+    if isinstance(payload, dict):
+        closes = payload.get("closes")
+        if isinstance(closes, dict):
+            payload = [
+                {"timestamp": date, "close": close}
+                for date, close in closes.items()
+            ]
     if not isinstance(payload, list):
         return pd.Series(dtype=float)
     dates: list[str] = []
@@ -378,11 +391,19 @@ def _series_from_cached_rows(payload: Any) -> pd.Series:
     return series
 
 
-def _series_to_cached_rows(series: pd.Series) -> list[dict[str, str | float]]:
-    rows: list[dict[str, str | float]] = []
+def _series_to_cached_rows(
+    symbol: str,
+    series: pd.Series,
+) -> dict[str, Any]:
+    closes: dict[str, float] = {}
     for index, value in series.sort_index().items():
-        rows.append({"timestamp": str(index)[:10], "close": float(value)})
-    return rows
+        closes[str(index)[:10]] = float(value)
+    return {
+        "symbol": symbol,
+        "source": "yfinance",
+        "adjustment": "auto",
+        "closes": closes,
+    }
 
 
 def _merge_close_series(

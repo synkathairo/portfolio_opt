@@ -45,6 +45,17 @@ class AlpacaClient:
         self._data = StockHistoricalDataClient(
             api_key=config.api_key, secret_key=config.api_secret
         )
+        try:
+            self._data_feed = DataFeed(config.data_feed.lower())
+        except ValueError as exc:
+            valid = ", ".join(feed.value for feed in DataFeed)
+            raise ValueError(
+                f"Unsupported Alpaca data feed {config.data_feed!r}. "
+                f"Expected one of: {valid}"
+            ) from exc
+
+    def _alpaca_data_feed(self) -> DataFeed:
+        return getattr(self, "_data_feed", DataFeed.IEX)
 
     def get_account(
         self,
@@ -224,7 +235,7 @@ class AlpacaClient:
                 end=end,
                 limit=lookback_days + 5,
                 adjustment=Adjustment.ALL,
-                feed=DataFeed.IEX,
+                feed=self._alpaca_data_feed(),
             )
             bars = cast(BarSet, self._data.get_stock_bars(request))
             for symbol, bar_list in bars.data.items():
@@ -252,7 +263,7 @@ class AlpacaClient:
                 end=end,
                 limit=lookback_days + 5,
                 adjustment=Adjustment.ALL,
-                feed=DataFeed.IEX,
+                feed=self._alpaca_data_feed(),
             )
             single_bars = cast(BarSet, self._data.get_stock_bars(single_req))
             if symbol in single_bars.data:
@@ -288,7 +299,7 @@ class AlpacaClient:
                 end=end,
                 limit=lookback_days + 5,
                 adjustment=Adjustment.ALL,
-                feed=DataFeed.IEX,
+                feed=self._alpaca_data_feed(),
             )
             bars = cast(BarSet, self._data.get_stock_bars(request))
             for symbol, bar_list in bars.data.items():
@@ -310,7 +321,7 @@ class AlpacaClient:
                 end=end,
                 limit=lookback_days + 5,
                 adjustment=Adjustment.ALL,
-                feed=DataFeed.IEX,
+                feed=self._alpaca_data_feed(),
             )
             single_bars = cast(BarSet, self._data.get_stock_bars(single_req))
             if symbol in single_bars.data:
@@ -329,7 +340,7 @@ class AlpacaClient:
         refresh_cache: bool,
         offline: bool,
     ) -> dict[str, list[float]] | None:
-        cached_rows: dict[str, list[dict[str, str | float]]] = {}
+        cached_rows: dict[str, dict[str, float]] = {}
         missing_symbols: list[str] = []
 
         for symbol in symbols:
@@ -364,7 +375,7 @@ class AlpacaClient:
         fetch_groups[full_fetch_key] = (full_fetch_start, [], lookback_days + 5)
 
         for symbol in symbols:
-            rows = cached_rows.get(symbol, [])
+            rows = cached_rows.get(symbol, {})
             if not rows:
                 fetch_groups[full_fetch_key][1].append(symbol)
                 continue
@@ -372,7 +383,7 @@ class AlpacaClient:
                 fetch_groups[full_fetch_key][1].append(symbol)
                 continue
 
-            last_date = str(rows[-1]["timestamp"])
+            last_date = sorted(rows)[-1]
             try:
                 next_start = (
                     datetime.strptime(last_date, "%Y-%m-%d").replace(tzinfo=UTC)
@@ -400,26 +411,46 @@ class AlpacaClient:
             )
             for symbol in group_symbols:
                 merged = self._merge_daily_bar_rows(
-                    cached_rows.get(symbol, []),
+                    cached_rows.get(symbol, {}),
                     fetched.get(symbol, []),
                     lookback_days=lookback_days,
                 )
                 if merged:
                     cached_rows[symbol] = merged
-                    write_cache(self._daily_closes_v2_cache_path(symbol), merged)
+                    write_cache(
+                        self._daily_closes_v2_cache_path(symbol),
+                        self._daily_closes_v2_payload(symbol, merged),
+                    )
 
         return self._daily_close_rows_to_close_map(cached_rows, symbols, lookback_days)
 
     def _daily_closes_v2_cache_path(self, symbol: str) -> Path:
-        return cache_path(
+        safe_symbol = "".join(
+            char if char.isalnum() else "_" for char in symbol.upper()
+        )
+        path = cache_path(
             "daily_closes_v2",
             {
                 "kind": "daily_closes_v2",
                 "symbol": symbol,
                 "adjustment": "all",
-                "feed": "iex",
+                "feed": self._alpaca_data_feed().value,
             },
         )
+        return path.with_name(f"daily_closes_v2_{safe_symbol}_{path.name.rsplit('_', 1)[-1]}")
+
+    def _daily_closes_v2_payload(
+        self,
+        symbol: str,
+        closes: dict[str, float],
+    ) -> dict[str, Any]:
+        return {
+            "symbol": symbol,
+            "source": "alpaca",
+            "feed": self._alpaca_data_feed().value,
+            "adjustment": "all",
+            "closes": {date: closes[date] for date in sorted(closes)},
+        }
 
     def _daily_bar_rows_payload(
         self,
@@ -440,7 +471,7 @@ class AlpacaClient:
                 end=end,
                 limit=limit,
                 adjustment=Adjustment.ALL,
-                feed=DataFeed.IEX,
+                feed=self._alpaca_data_feed(),
             )
             bars = cast(BarSet, self._data.get_stock_bars(request))
             for symbol, bar_list in bars.data.items():
@@ -461,7 +492,7 @@ class AlpacaClient:
                 end=end,
                 limit=limit,
                 adjustment=Adjustment.ALL,
-                feed=DataFeed.IEX,
+                feed=self._alpaca_data_feed(),
             )
             single_bars = cast(BarSet, self._data.get_stock_bars(single_req))
             if symbol in single_bars.data:
@@ -479,45 +510,35 @@ class AlpacaClient:
             return timestamp.date().isoformat()
         return str(timestamp)[:10]
 
-    def _normalize_daily_bar_rows(
-        self, payload: Any
-    ) -> list[dict[str, str | float]]:
-        if not isinstance(payload, list):
-            return []
-        rows: list[dict[str, str | float]] = []
-        for row in payload:
-            if not isinstance(row, dict):
-                continue
-            if "timestamp" not in row or "close" not in row:
-                continue
-            rows.append(
-                {
-                    "timestamp": self._bar_timestamp_date(row["timestamp"]),
-                    "close": float(row["close"]),
+    def _normalize_daily_bar_rows(self, payload: Any) -> dict[str, float]:
+        if isinstance(payload, dict):
+            closes = payload.get("closes")
+            if isinstance(closes, dict):
+                return {
+                    str(date): float(close)
+                    for date, close in closes.items()
                 }
-            )
-        return self._merge_daily_bar_rows([], rows, lookback_days=len(rows))
+        if isinstance(payload, list):
+            return self._merge_daily_bar_rows({}, payload, lookback_days=len(payload))
+        return {}
 
     def _merge_daily_bar_rows(
         self,
-        existing: list[dict[str, str | float]],
+        existing: dict[str, float],
         new: list[dict[str, str | float]],
         *,
         lookback_days: int,
-    ) -> list[dict[str, str | float]]:
-        by_date: dict[str, dict[str, str | float]] = {}
-        for row in existing + new:
+    ) -> dict[str, float]:
+        by_date = dict(existing)
+        for row in new:
             if "timestamp" not in row or "close" not in row:
                 continue
-            by_date[str(row["timestamp"])] = {
-                "timestamp": str(row["timestamp"]),
-                "close": float(row["close"]),
-            }
-        return [by_date[key] for key in sorted(by_date)][-lookback_days:]
+            by_date[str(row["timestamp"])] = float(row["close"])
+        return {key: by_date[key] for key in sorted(by_date)[-lookback_days:]}
 
     def _daily_close_rows_to_close_map(
         self,
-        rows_by_symbol: dict[str, list[dict[str, str | float]]],
+        rows_by_symbol: dict[str, dict[str, float]],
         symbols: list[str],
         lookback_days: int,
     ) -> dict[str, list[float]] | None:
@@ -527,8 +548,8 @@ class AlpacaClient:
             return None
         return {
             symbol: [
-                float(row["close"])
-                for row in rows_by_symbol[symbol][-lookback_days:]
+                float(rows_by_symbol[symbol][date])
+                for date in sorted(rows_by_symbol[symbol])[-lookback_days:]
             ]
             for symbol in symbols
         }
@@ -595,7 +616,7 @@ class AlpacaClient:
             end=end,
             limit=limit,
             adjustment=Adjustment.ALL,
-            feed=DataFeed.IEX,
+            feed=self._alpaca_data_feed(),
         )
         bars = cast(BarSet, self._data.get_stock_bars(request))
         result: list[dict[str, Any]] = []

@@ -70,6 +70,13 @@ def test_fetch_closes_use_cache_avoids_yfinance_download(monkeypatch) -> None:
         def exists(self) -> bool:
             return True
 
+        @property
+        def name(self) -> str:
+            return "dummy_hash.json"
+
+        def with_name(self, _name: str):
+            return self
+
     monkeypatch.setattr(yfinance_data, "cache_path", lambda name, payload: DummyPath())
     monkeypatch.setattr(yfinance_data, "read_cache", lambda path: cached)
     monkeypatch.setattr(
@@ -89,16 +96,26 @@ def test_fetch_closes_refresh_fetches_only_missing_tail_for_v2_cache(
     monkeypatch,
 ) -> None:
     cached = {
-        "SPY": [
-            {"timestamp": "2024-01-01", "close": 100.0},
-            {"timestamp": "2024-01-02", "close": 101.0},
-        ],
-        "QQQ": [
-            {"timestamp": "2024-01-01", "close": 200.0},
-            {"timestamp": "2024-01-02", "close": 201.0},
-        ],
+        "SPY": {
+            "symbol": "SPY",
+            "source": "yfinance",
+            "adjustment": "auto",
+            "closes": {
+                "2024-01-01": 100.0,
+                "2024-01-02": 101.0,
+            },
+        },
+        "QQQ": {
+            "symbol": "QQQ",
+            "source": "yfinance",
+            "adjustment": "auto",
+            "closes": {
+                "2024-01-01": 200.0,
+                "2024-01-02": 201.0,
+            },
+        },
     }
-    writes: dict[str, list[dict[str, str | float]]] = {}
+    writes: dict[str, dict] = {}
 
     class DummyPath:
         def __init__(self, symbol: str) -> None:
@@ -106,6 +123,13 @@ def test_fetch_closes_refresh_fetches_only_missing_tail_for_v2_cache(
 
         def exists(self) -> bool:
             return self.symbol in cached
+
+        @property
+        def name(self) -> str:
+            return f"{self.symbol}_hash.json"
+
+        def with_name(self, _name: str):
+            return self
 
     def fake_cache_path(_name, payload):
         return DummyPath(payload["symbol"])
@@ -154,5 +178,23 @@ def test_fetch_closes_refresh_fetches_only_missing_tail_for_v2_cache(
         "SPY": [100.0, 101.0, 102.0],
         "QQQ": [200.0, 201.0, 202.0],
     }
-    assert writes["SPY"][-1] == {"timestamp": "2024-01-03", "close": 102.0}
-    assert writes["QQQ"][-1] == {"timestamp": "2024-01-03", "close": 202.0}
+    assert writes["SPY"] == {
+        "symbol": "SPY",
+        "source": "yfinance",
+        "adjustment": "auto",
+        "closes": {
+            "2024-01-01": 100.0,
+            "2024-01-02": 101.0,
+            "2024-01-03": 102.0,
+        },
+    }
+    assert writes["QQQ"] == {
+        "symbol": "QQQ",
+        "source": "yfinance",
+        "adjustment": "auto",
+        "closes": {
+            "2024-01-01": 200.0,
+            "2024-01-02": 201.0,
+            "2024-01-03": 202.0,
+        },
+    }

@@ -12,6 +12,7 @@ class AlpacaConfig:
     api_secret: str
     base_url: str = "https://paper-api.alpaca.markets"
     data_url: str = "https://data.alpaca.markets"
+    data_feed: str = "iex"
 
     @classmethod
     def from_env(cls) -> "AlpacaConfig":
@@ -20,13 +21,18 @@ class AlpacaConfig:
         api_secret = getenv("APCA_API_SECRET_KEY")
         base_url = getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
         data_url = getenv("APCA_API_DATA_URL", "https://data.alpaca.markets")
+        data_feed = getenv("APCA_DATA_FEED", "iex")
         if not api_key or not api_secret:
             raise ValueError(
                 "Missing Alpaca credentials. Set APCA_API_KEY_ID and "
                 "APCA_API_SECRET_KEY in your environment or a local .env file."
             )
         return cls(
-            api_key=api_key, api_secret=api_secret, base_url=base_url, data_url=data_url
+            api_key=api_key,
+            api_secret=api_secret,
+            base_url=base_url,
+            data_url=data_url,
+            data_feed=data_feed,
         )
 
 

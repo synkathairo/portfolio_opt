@@ -489,25 +489,25 @@ def test_daily_closes_refresh_appends_only_missing_bars(monkeypatch, tmp_path) -
     cache_file = tmp_path / "spy.json"
     cache_file.write_text(
         json.dumps(
-            [
-                {"timestamp": "2026-01-01", "close": 101.0},
-                {"timestamp": "2026-01-02", "close": 102.0},
-            ]
+            {
+                "symbol": "SPY",
+                "source": "alpaca",
+                "feed": "iex",
+                "adjustment": "all",
+                "closes": {
+                    "2026-01-01": 101.0,
+                    "2026-01-02": 102.0,
+                },
+            }
         )
     )
     calls: list[tuple[list[str], datetime, int]] = []
-
-    def fake_cache_path(_name, _payload):
-        return cache_file
 
     def fake_daily_bar_rows_payload(symbols, *, start, end, limit):
         calls.append((symbols, start, limit))
         return {"SPY": [{"timestamp": "2026-01-05", "close": 103.0}]}
 
-    monkeypatch.setattr(
-        "portfolio_opt.alpaca_interface.cache_path",
-        fake_cache_path,
-    )
+    monkeypatch.setattr(client, "_daily_closes_v2_cache_path", lambda _symbol: cache_file)
     monkeypatch.setattr(client, "_daily_bar_rows_payload", fake_daily_bar_rows_payload)
     monkeypatch.setattr(
         "portfolio_opt.alpaca_interface.datetime",
@@ -530,7 +530,13 @@ def test_daily_closes_refresh_appends_only_missing_bars(monkeypatch, tmp_path) -
 
     assert closes == {"SPY": [102.0, 103.0]}
     assert calls == [(["SPY"], datetime(2026, 1, 3, tzinfo=UTC), 7)]
-    assert json.loads(cache_file.read_text()) == [
-        {"timestamp": "2026-01-02", "close": 102.0},
-        {"timestamp": "2026-01-05", "close": 103.0},
-    ]
+    assert json.loads(cache_file.read_text()) == {
+        "symbol": "SPY",
+        "source": "alpaca",
+        "feed": "iex",
+        "adjustment": "all",
+        "closes": {
+            "2026-01-02": 102.0,
+            "2026-01-05": 103.0,
+        },
+    }
