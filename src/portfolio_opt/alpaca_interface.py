@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import warnings
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
@@ -26,14 +27,18 @@ from alpaca.data.requests import (
 )
 from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import QueryOrderStatus
+from alpaca.trading.enums import OrderSide, OrderType, QueryOrderStatus, TimeInForce
 from alpaca.trading.models import Order, Position as AlpacaPosition, TradeAccount
 from alpaca.trading.models import PortfolioHistory as AlpacaPortfolioHistory
-from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest
+from alpaca.trading.requests import (
+    GetOrdersRequest,
+    MarketOrderRequest,
+    TrailingStopOrderRequest,
+)
 
 from .cache import cache_path, read_cache, write_cache
 from .config import AlpacaConfig
-from .types import AccountSnapshot, OrderPlan, Position
+from .types import AccountSnapshot, OrderPlan, Position, TrailingStopPlan
 
 
 class AlpacaClient:
@@ -641,17 +646,20 @@ class AlpacaClient:
             orders = cast(list[Order], self._trading.get_orders(req))
             return [
                 {
+                    "id": _model_value(o, "id"),
                     "symbol": o.symbol,
                     "qty": o.qty,
-                    "side": o.side,
-                    "type": o.type,
+                    "side": _model_value(o, "side"),
+                    "type": _model_value(o, "type"),
+                    "trail_percent": _model_value(o, "trail_percent"),
                 }
                 for o in orders
             ]
         except Exception:
             return []
 
-    def submit_order_plan(self, plans: list[OrderPlan]) -> None:
+    def submit_order_plan(self, plans: list[OrderPlan]) -> list[dict[str, Any]]:
+        submitted: list[dict[str, Any]] = []
         for plan in plans:
             try:
                 order_data = MarketOrderRequest(
@@ -660,11 +668,119 @@ class AlpacaClient:
                     side=plan.side,
                     time_in_force="day",
                 )
-                self._trading.submit_order(order_data)
+                order = self._trading.submit_order(order_data)
+                submitted.append(
+                    {
+                        "id": _model_value(order, "id"),
+                        "symbol": plan.symbol,
+                        "side": plan.side,
+                    }
+                )
             except Exception as exc:
                 print(
                     f"Failed to submit order for {plan.symbol}: {exc}", file=sys.stderr
                 )
+        return submitted
+
+    def cancel_open_trailing_stops(
+        self,
+        symbols: list[str],
+        *,
+        open_orders: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        symbol_set = set(symbols)
+        orders = open_orders if open_orders is not None else self.get_open_orders()
+        canceled: list[dict[str, Any]] = []
+        for order in orders:
+            order_id = order.get("id")
+            symbol = str(order.get("symbol"))
+            if symbol not in symbol_set:
+                continue
+            if order.get("type") != "trailing_stop":
+                continue
+            if order.get("side") != "sell":
+                continue
+            if order_id is None:
+                continue
+            try:
+                self._trading.cancel_order_by_id(str(order_id))
+                canceled.append({"id": order_id, "symbol": symbol})
+            except Exception as exc:
+                print(
+                    f"Failed to cancel trailing stop for {symbol}: {exc}",
+                    file=sys.stderr,
+                )
+        return canceled
+
+    def wait_for_submitted_orders(
+        self,
+        submitted_orders: list[dict[str, Any]],
+        *,
+        timeout_seconds: float = 60.0,
+        poll_seconds: float = 2.0,
+    ) -> list[dict[str, Any]]:
+        pending = {
+            str(order["id"]): dict(order)
+            for order in submitted_orders
+            if order.get("id") is not None
+        }
+        completed: list[dict[str, Any]] = []
+        deadline = time.monotonic() + timeout_seconds
+        terminal_statuses = {"filled", "canceled", "expired", "rejected"}
+
+        while pending and time.monotonic() < deadline:
+            for order_id in list(pending):
+                try:
+                    order = self._trading.get_order_by_id(order_id)
+                except Exception as exc:
+                    pending[order_id]["status"] = f"poll_failed: {exc}"
+                    completed.append(pending.pop(order_id))
+                    continue
+
+                status = str(_model_value(order, "status") or "")
+                if status in terminal_statuses:
+                    item = pending.pop(order_id)
+                    item["status"] = status
+                    item["filled_qty"] = _model_value(order, "filled_qty")
+                    completed.append(item)
+
+            if pending:
+                time.sleep(poll_seconds)
+
+        for item in pending.values():
+            item["status"] = "timeout"
+            completed.append(item)
+        return completed
+
+    def submit_trailing_stop_plan(
+        self, plans: list[TrailingStopPlan]
+    ) -> list[dict[str, Any]]:
+        submitted: list[dict[str, Any]] = []
+        for plan in plans:
+            try:
+                order_data = TrailingStopOrderRequest(
+                    symbol=plan.symbol,
+                    qty=plan.qty,
+                    side=OrderSide.SELL,
+                    type=OrderType.TRAILING_STOP,
+                    time_in_force=TimeInForce.GTC,
+                    trail_percent=plan.trail_percent,
+                )
+                order = self._trading.submit_order(order_data)
+                submitted.append(
+                    {
+                        "id": _model_value(order, "id"),
+                        "symbol": plan.symbol,
+                        "side": plan.side,
+                        "trail_percent": plan.trail_percent,
+                    }
+                )
+            except Exception as exc:
+                print(
+                    f"Failed to submit trailing stop for {plan.symbol}: {exc}",
+                    file=sys.stderr,
+                )
+        return submitted
 
     def _cached_json(
         self,
@@ -829,5 +945,14 @@ class AlpacaClient:
         return closes
 
 
-def format_order_plans(plans: list[OrderPlan]) -> str:
+def _model_value(model: Any, field: str) -> Any:
+    value = (
+        model.get(field)
+        if isinstance(model, dict)
+        else getattr(model, field, None)
+    )
+    return getattr(value, "value", value)
+
+
+def format_order_plans(plans: list[OrderPlan] | list[TrailingStopPlan]) -> str:
     return json.dumps([asdict(plan) for plan in plans], indent=2)

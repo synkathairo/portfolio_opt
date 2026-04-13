@@ -57,11 +57,8 @@ def compute_dual_momentum_weights(
     Used by the live rebalancing path to produce target weights from current
     Alpaca data, identical to the backtest logic at a single rebalance step.
     """
-    if trailing_stop is not None:
-        raise ValueError(
-            "Live dual momentum does not support trailing stops because it does not "
-            "track per-position entry peaks across runs."
-        )
+    # The live CLI handles trailing stops with broker-side protective orders.
+    # This single-period weight calculation cannot simulate an entry peak.
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
     if price_matrix.ndim != 2 or price_matrix.shape[1] < lookback_days + 1:

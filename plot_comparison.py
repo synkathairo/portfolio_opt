@@ -96,6 +96,20 @@ dm_data3 = run_backtest([
     # , "--offline"
 ])
 
+# Run Dual Momentum Backtest (Top-2, rebalance daily), trail stop 0.15
+dm_data3a = run_backtest([
+    "--model", f"{MODEL}",
+    "--data-source", f"{DATASOURCE}",
+    "--strategy", "dual-momentum",
+    "--lookback-days", f"{LOOKBACK_DAYS}",
+    "--backtest-days", f"{BACKTEST_DAYS}",
+    "--rebalance-every", "1",
+    "--top-k", "2",
+    "--trailing-stop", "0.15",
+    "--use-cache"
+    # , "--offline"
+])
+
 # 4. Run Dual Momentum Backtest (Top-1, rebalance daily)
 dm_data4 = run_backtest([
     "--model", f"{MODEL}",
@@ -125,7 +139,7 @@ dm_data_limit_volatility = run_backtest([
     "--target-vol", f"{LIMIT_VOL}", "--vol-window", "252",
 ])
 
-if not all([mv_data, dm_data, dm_data2, dm_data3, dm_data4, dm_data_limit_volatility]):
+if not all([mv_data, dm_data, dm_data2, dm_data3, dm_data3a, dm_data4, dm_data_limit_volatility]):
     print("Failed to get backtest data.")
     exit()
 
@@ -134,6 +148,7 @@ mv_curve = mv_data['backtest']['daily_values']
 dm_curve = dm_data['backtest']['daily_values']
 dm_curve2 = dm_data2['backtest']['daily_values']
 dm_curve3 = dm_data3['backtest']['daily_values']
+dm_curve3a = dm_data3a['backtest']['daily_values']
 dm_curve4 = dm_data4['backtest']['daily_values']
 dmvol_curve = dm_data_limit_volatility['backtest']['daily_values']
 
@@ -158,6 +173,7 @@ mv_curve  = [v / mv_curve[0]  for v in mv_curve[-target_len:]]
 dm_curve  = [v / dm_curve[0]  for v in dm_curve[-target_len:]]
 dm_curve2 = [v / dm_curve2[0] for v in dm_curve2[-target_len:]]
 dm_curve3 = [v / dm_curve3[0] for v in dm_curve3[-target_len:]]
+dm_curve3a = [v / dm_curve3a[0] for v in dm_curve3a[-target_len:]]
 dm_curve4 = [v / dm_curve4[0] for v in dm_curve4[-target_len:]]
 dmvol_curve= [v / dmvol_curve[0] for v in dmvol_curve[-target_len:]]
 spy_norm  = [v / spy.iloc[-target_len]  for v in spy.iloc[-target_len:].tolist()]
@@ -173,6 +189,7 @@ plt.plot(days, mv_curve, label='Mean-Variance (Momentum)', linewidth=2, color='#
 plt.plot(days, dm_curve, label='Dual Momentum (Top-5)', linewidth=2, color='#c15a00')
 plt.plot(days, dm_curve2, label='Dual Momentum (Top-2)', linewidth=2, color='#ff7f0e')
 plt.plot(days, dm_curve3, label='Dual Momentum (Top-2 daily rebalance)', linewidth=2, color='#ff9a41')
+plt.plot(days, dm_curve3a, label='Dual Momentum (Top-2 daily rebalance, trail-stop 0.15)', linewidth=2, color='#D2DE50')
 plt.plot(days, dm_curve4, label='Dual Momentum (Top-1 daily rebalance)', linewidth=2, color='#ffa85b')
 plt.plot(days, dmvol_curve, label=f'Dual Momentum (Top-2, vol {LIMIT_VOL})', linewidth=2, color='#FA5BFF')
 plt.plot(days, qqq_norm, label='QQQ (Nasdaq 100)', linestyle='--', alpha=0.7, color='#2ca02c')

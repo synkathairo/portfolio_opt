@@ -12,6 +12,8 @@ from portfolio_opt.backtest import BacktestResult, compute_dual_momentum_weights
 from portfolio_opt.config import AlpacaConfig, OptimizationConfig
 from portfolio_opt.model import ModelInputs
 from portfolio_opt.optimizer import optimize_weights
+from portfolio_opt.rebalance import build_order_plan, build_trailing_stop_plan
+from portfolio_opt.types import AccountSnapshot, Position, TrailingStopPlan
 
 
 def test_optimize_weights_aligns_asset_class_max_constraints() -> None:
@@ -136,6 +138,58 @@ def test_compute_dual_momentum_weights_uses_full_lookback_window() -> None:
     )
 
     assert weights == {"SPY": 1.0, "QQQ": 0.0, "SGOV": 0.0}
+
+
+def test_order_plan_ignores_protective_trailing_stop_orders() -> None:
+    plan = build_order_plan(
+        symbols=["SPY"],
+        target_weights=[1.0],
+        account=AccountSnapshot(equity=1000.0),
+        positions=[Position(symbol="SPY", qty=10.0, market_value=1000.0)],
+        latest_prices={"SPY": 100.0},
+        config=OptimizationConfig(rebalance_threshold=0.02),
+        open_orders=[
+            {
+                "symbol": "SPY",
+                "qty": 10.0,
+                "side": "sell",
+                "type": "trailing_stop",
+            }
+        ],
+    )
+
+    assert plan == []
+
+
+def test_build_trailing_stop_plan_skips_existing_protection() -> None:
+    plan = build_trailing_stop_plan(
+        symbols=["SPY", "QQQ"],
+        target_weights=[0.5, 0.5],
+        positions=[
+            Position(symbol="SPY", qty=10.0, market_value=1000.0),
+            Position(symbol="QQQ", qty=2.5, market_value=500.0),
+        ],
+        open_orders=[
+            {
+                "symbol": "SPY",
+                "qty": 10.0,
+                "side": "sell",
+                "type": "trailing_stop",
+            }
+        ],
+        trailing_stop=0.15,
+        rebalance_threshold=0.02,
+    )
+
+    assert plan == [
+        TrailingStopPlan(
+            symbol="QQQ",
+            qty=2.5,
+            side="sell",
+            trail_percent=15.0,
+            time_in_force="gtc",
+        )
+    ]
 
 
 def test_cli_yfinance_backtest_does_not_require_alpaca(monkeypatch, capsys) -> None:
@@ -482,6 +536,90 @@ def test_latest_prices_payload_accepts_trade_objects_and_dicts() -> None:
         "GLD": {"p": 310.0},
         "XLU": {"p": 85.75},
     }
+
+
+def test_submit_trailing_stop_plan_uses_qty_and_percent() -> None:
+    class FakeTrading:
+        def __init__(self) -> None:
+            self.submitted = None
+
+        def submit_order(self, order_data):
+            self.submitted = order_data
+            return Namespace(id="order-1")
+
+    fake_trading = FakeTrading()
+    client = object.__new__(AlpacaClient)
+    client._trading = fake_trading
+
+    submitted = client.submit_trailing_stop_plan(
+        [
+            TrailingStopPlan(
+                symbol="SPY",
+                qty=12.345678,
+                side="sell",
+                trail_percent=15.0,
+                time_in_force="gtc",
+            )
+        ]
+    )
+
+    assert submitted == [
+        {
+            "id": "order-1",
+            "symbol": "SPY",
+            "side": "sell",
+            "trail_percent": 15.0,
+        }
+    ]
+    assert fake_trading.submitted.symbol == "SPY"
+    assert fake_trading.submitted.qty == 12.345678
+    assert fake_trading.submitted.notional is None
+    assert fake_trading.submitted.trail_percent == 15.0
+    assert fake_trading.submitted.type.value == "trailing_stop"
+    assert fake_trading.submitted.time_in_force.value == "gtc"
+
+
+def test_cancel_open_trailing_stops_only_cancels_matching_symbols() -> None:
+    class FakeTrading:
+        def __init__(self) -> None:
+            self.canceled: list[str] = []
+
+        def cancel_order_by_id(self, order_id: str) -> None:
+            self.canceled.append(order_id)
+
+    fake_trading = FakeTrading()
+    client = object.__new__(AlpacaClient)
+    client._trading = fake_trading
+
+    canceled = client.cancel_open_trailing_stops(
+        ["SPY"],
+        open_orders=[
+            {
+                "id": "stop-1",
+                "symbol": "SPY",
+                "qty": 10,
+                "side": "sell",
+                "type": "trailing_stop",
+            },
+            {
+                "id": "limit-1",
+                "symbol": "SPY",
+                "qty": 1,
+                "side": "sell",
+                "type": "limit",
+            },
+            {
+                "id": "stop-2",
+                "symbol": "QQQ",
+                "qty": 2,
+                "side": "sell",
+                "type": "trailing_stop",
+            },
+        ],
+    )
+
+    assert canceled == [{"id": "stop-1", "symbol": "SPY"}]
+    assert fake_trading.canceled == ["stop-1"]
 
 
 def test_daily_closes_refresh_appends_only_missing_bars(monkeypatch, tmp_path) -> None:

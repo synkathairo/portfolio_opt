@@ -28,7 +28,7 @@ from .black_litterman import estimate_inputs_from_black_litterman
 from .risk_parity import estimate_inputs_risk_parity
 from .model import ModelInputs, load_model_inputs
 from .optimizer import effective_turnover_penalty, optimize_weights, project_weights
-from .rebalance import build_order_plan, current_weights
+from .rebalance import build_order_plan, build_trailing_stop_plan, current_weights
 from .runtime import configure_local_cache_dirs
 from .yfinance_data import fetch_closes as yf_fetch_closes
 from utils.fetch_tickers import fetch_ticker_dict, filter_tickers_before
@@ -429,6 +429,8 @@ def main() -> None:
     alpaca: AlpacaClient | None = None
     yfinance_max_workers = getattr(args, "yfinance_max_workers", 10)
     yfinance_retry_delay = getattr(args, "yfinance_retry_delay", 1.0)
+    if args.trailing_stop is not None and args.trailing_stop <= 0:
+        raise ValueError("--trailing-stop must be greater than 0.")
 
     # Dynamic universe is only useful for live/dry-run trading, not backtesting
     if args.dynamic_universe and args.backtest_days > 0:
@@ -874,7 +876,7 @@ def main() -> None:
                 target_vol=args.target_vol,
                 max_single_weight=args.max_single_weight,
                 vol_window=args.vol_window,
-                trailing_stop=args.trailing_stop,
+                trailing_stop=None,
             )
             target_weights = np.array(
                 [dm_weights[s] for s in model.symbols], dtype=float
@@ -1018,6 +1020,35 @@ def main() -> None:
         config=opt_config,
         open_orders=open_orders,
     )
+    changed_symbols = [item.symbol for item in plan]
+    trailing_stop_cancellations = (
+        [
+            {
+                "id": order.get("id"),
+                "symbol": order.get("symbol"),
+                "qty": order.get("qty"),
+                "trail_percent": order.get("trail_percent"),
+            }
+            for order in open_orders
+            if order.get("symbol") in changed_symbols
+            and order.get("type") == "trailing_stop"
+            and order.get("side") == "sell"
+        ]
+        if args.trailing_stop is not None
+        else []
+    )
+    trailing_stop_plan = (
+        build_trailing_stop_plan(
+            symbols=model.symbols,
+            target_weights=target_weights.tolist(),
+            positions=positions,
+            open_orders=open_orders,
+            trailing_stop=args.trailing_stop,
+            rebalance_threshold=args.rebalance_threshold,
+        )
+        if args.trailing_stop is not None
+        else []
+    )
 
     result = {
         "symbols": model.symbols,
@@ -1073,12 +1104,50 @@ def main() -> None:
             "max_allowed": args.max_turnover,
         },
         "orders": [asdict(item) for item in plan],
+        "trailing_stop_cancellations": trailing_stop_cancellations,
+        "trailing_stop_orders": [asdict(item) for item in trailing_stop_plan],
     }
     print(json.dumps(result, indent=2))
 
     if args.submit:
-        alpaca.submit_order_plan(plan)
+        canceled_trailing_stops = (
+            alpaca.cancel_open_trailing_stops(changed_symbols, open_orders=open_orders)
+            if args.trailing_stop is not None
+            else []
+        )
+        submitted_orders = alpaca.submit_order_plan(plan)
+        fill_statuses: list[dict] = []
+        submitted_trailing_stops: list[dict] = []
+        if args.trailing_stop is not None:
+            fill_statuses = alpaca.wait_for_submitted_orders(submitted_orders)
+            refreshed_positions = alpaca.get_positions()
+            refreshed_open_orders = alpaca.get_open_orders()
+            trailing_stop_plan = build_trailing_stop_plan(
+                symbols=model.symbols,
+                target_weights=target_weights.tolist(),
+                positions=refreshed_positions,
+                open_orders=refreshed_open_orders,
+                trailing_stop=args.trailing_stop,
+                rebalance_threshold=args.rebalance_threshold,
+            )
+            submitted_trailing_stops = alpaca.submit_trailing_stop_plan(
+                trailing_stop_plan
+            )
         print(format_order_plans(plan))
+        if args.trailing_stop is not None:
+            print(
+                json.dumps(
+                    {
+                        "order_fill_statuses": fill_statuses,
+                        "canceled_trailing_stops": canceled_trailing_stops,
+                        "trailing_stop_orders": [
+                            asdict(item) for item in trailing_stop_plan
+                        ],
+                        "submitted_trailing_stops": submitted_trailing_stops,
+                    },
+                    indent=2,
+                )
+            )
 
 
 if __name__ == "__main__":

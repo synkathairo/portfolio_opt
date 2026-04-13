@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .config import OptimizationConfig
-from .types import AccountSnapshot, OrderPlan, Position
+from .types import AccountSnapshot, OrderPlan, Position, TrailingStopPlan
 
 
 def current_weights(
@@ -40,6 +40,8 @@ def build_order_plan(
         for order in open_orders:
             symbol = order.get("symbol")
             if symbol in symbols:
+                if _order_value(order.get("type")) == "trailing_stop":
+                    continue
                 # Calculate notional value of the open order
                 qty = float(order.get("qty", 0) or 0)
                 if order.get("side") == "sell":
@@ -73,3 +75,51 @@ def build_order_plan(
             )
         )
     return plans
+
+
+def build_trailing_stop_plan(
+    *,
+    symbols: list[str],
+    target_weights: list[float],
+    positions: list[Position],
+    open_orders: list[dict] | None,
+    trailing_stop: float,
+    rebalance_threshold: float,
+) -> list[TrailingStopPlan]:
+    target_by_symbol = {
+        symbol: float(weight)
+        for symbol, weight in zip(symbols, target_weights, strict=True)
+    }
+    protected_symbols = {
+        str(order.get("symbol"))
+        for order in open_orders or []
+        if _order_value(order.get("type")) == "trailing_stop"
+        and _order_value(order.get("side")) == "sell"
+    }
+
+    trail_percent = round(float(trailing_stop) * 100.0, 6)
+    plans: list[TrailingStopPlan] = []
+    for position in positions:
+        if position.symbol not in target_by_symbol:
+            continue
+        if float(position.qty) <= 0.0:
+            continue
+        if target_by_symbol[position.symbol] < rebalance_threshold:
+            continue
+        if position.symbol in protected_symbols:
+            continue
+        plans.append(
+            TrailingStopPlan(
+                symbol=position.symbol,
+                qty=round(float(position.qty), 6),
+                side="sell",
+                trail_percent=trail_percent,
+                time_in_force="gtc",
+            )
+        )
+    return plans
+
+
+def _order_value(value: object) -> str:
+    raw = getattr(value, "value", value)
+    return str(raw)

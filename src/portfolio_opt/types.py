@@ -23,3 +23,12 @@ class OrderPlan:
     delta_weight: float
     side: str
     notional_usd: float
+
+
+@dataclass(frozen=True)
+class TrailingStopPlan:
+    symbol: str
+    qty: float
+    side: str
+    trail_percent: float
+    time_in_force: str
