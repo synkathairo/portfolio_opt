@@ -453,3 +453,30 @@ def test_offline_close_fallback_reuses_cached_superset_in_requested_order(
         "TLT": [301.0, 302.0, 303.0],
         "SPY": [101.0, 102.0, 103.0],
     }
+
+
+def test_latest_prices_payload_accepts_trade_objects_and_dicts() -> None:
+    class FakeTrade:
+        def __init__(self, price: float) -> None:
+            self.price = price
+
+    class FakeDataClient:
+        def get_stock_latest_trade(self, _request):
+            return Namespace(
+                data={
+                    "APP": FakeTrade(510.25),
+                    "SNDK": [FakeTrade(72.5)],
+                    "GLD": {"p": 310.0},
+                    "XLU": {"price": 85.75},
+                }
+            )
+
+    client = object.__new__(AlpacaClient)
+    client._data = FakeDataClient()
+
+    assert client._latest_prices_payload(["APP", "SNDK", "GLD", "XLU"]) == {
+        "APP": {"p": 510.25},
+        "SNDK": {"p": 72.5},
+        "GLD": {"p": 310.0},
+        "XLU": {"p": 85.75},
+    }

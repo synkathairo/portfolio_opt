@@ -18,7 +18,7 @@ warnings.filterwarnings(
 from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.models.bars import Bar, BarSet
-from alpaca.data.models.trades import Trade, TradeSet
+from alpaca.data.models.trades import TradeSet
 from alpaca.data.requests import (
     StockBarsRequest,
     StockLatestTradeRequest,
@@ -179,10 +179,21 @@ class AlpacaClient:
         # Handle both TradeSet object and dict return types
         data = result.data if hasattr(result, "data") else result
         if isinstance(data, dict):
-            for symbol, trade_list in data.items():
-                if isinstance(trade_list, list) and trade_list:
-                    trade = cast(Trade, trade_list[0])
-                    trades[symbol] = {"p": trade.price}
+            for symbol, trade_data in data.items():
+                trade = (
+                    trade_data[0]
+                    if isinstance(trade_data, list) and trade_data
+                    else trade_data
+                )
+                if isinstance(trade, dict):
+                    trade_payload = cast(dict[str, Any], trade)
+                    price = trade_payload.get("p")
+                    if price is None:
+                        price = trade_payload.get("price")
+                else:
+                    price = getattr(trade, "price", None)
+                if price is not None:
+                    trades[symbol] = {"p": float(price)}
         return trades
 
     def _daily_bars_payload(

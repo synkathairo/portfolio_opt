@@ -807,9 +807,14 @@ def main() -> None:
     target_weights: np.ndarray | None = None
 
     if args.estimate_from_history:
+        history_days = args.lookback_days
+        if args.strategy == "dual-momentum":
+            history_days = max(history_days, args.lookback_days + 1)
+            if args.target_vol is not None:
+                history_days = max(history_days, args.vol_window + 1)
         closes_by_symbol = alpaca.get_daily_closes(
             model.symbols,
-            args.lookback_days,
+            history_days,
             use_cache=args.use_cache,
             refresh_cache=args.refresh_cache,
             offline=args.offline,
@@ -822,13 +827,13 @@ def main() -> None:
         closes_by_symbol = {
             s: bars
             for s, bars in closes_by_symbol.items()
-            if len(bars) >= args.lookback_days
+            if len(bars) >= history_days
         }
         dropped_count = original_count - len(closes_by_symbol)
         if dropped_count > 0:
             print(
                 f"Warning: Dropped {dropped_count} symbols with insufficient history "
-                f"(< {args.lookback_days} days).",
+                f"(< {history_days} prices).",
                 file=sys.stderr,
             )
             # Update model to match available data
@@ -974,17 +979,35 @@ def main() -> None:
     realized_turnover = float(np.abs(target_weights - existing_weights).sum())
     current_weights_clean = clean_weights(existing_weights)
 
-    # Convert target weights into dollar notional orders using the latest
-    # available prices and a minimum rebalance threshold.
-    latest_prices = alpaca.get_latest_prices(
-        model.symbols,
-        use_cache=args.use_cache,
-        refresh_cache=args.refresh_cache,
-        offline=args.offline,
-    )
-
     # Fetch open orders to prevent double-submission
     open_orders = alpaca.get_open_orders()
+    symbols_with_open_orders = {
+        str(order.get("symbol"))
+        for order in open_orders
+        if order.get("symbol") in model.symbols
+    }
+    symbols_needing_prices = [
+        symbol
+        for symbol, target_weight, current_weight in zip(
+            model.symbols, target_weights, existing_weights, strict=True
+        )
+        if abs(float(target_weight - current_weight)) >= args.rebalance_threshold
+        or symbol in symbols_with_open_orders
+    ]
+
+    # Convert target weights into dollar notional orders using latest prices.
+    # Only request symbols that could actually produce an order; refreshing a
+    # 500-symbol dynamic universe can otherwise timeout on one slow quote.
+    latest_prices = (
+        alpaca.get_latest_prices(
+            symbols_needing_prices,
+            use_cache=args.use_cache,
+            refresh_cache=args.refresh_cache,
+            offline=args.offline,
+        )
+        if symbols_needing_prices
+        else {}
+    )
 
     plan = build_order_plan(
         symbols=model.symbols,
