@@ -406,6 +406,123 @@ def test_cli_dual_momentum_backtest_passes_vol_window(monkeypatch, capsys) -> No
     assert '"vol_window": 21' in capsys.readouterr().out
 
 
+def test_cli_yfinance_backtest_supports_external_benchmark(
+    monkeypatch,
+    capsys,
+) -> None:
+    args = Namespace(
+        model="dummy.json",
+        dynamic_universe=False,
+        filter_before=None,
+        ticker_basket=[],
+        risk_aversion=4.0,
+        min_weight=0.0,
+        max_weight=0.35,
+        rebalance_threshold=0.02,
+        turnover_penalty=0.02,
+        allow_cash=False,
+        min_cash_weight=0.0,
+        max_turnover=None,
+        min_invested_weight=0.0,
+        estimate_from_history=True,
+        lookback_days=2,
+        mean_shrinkage=0.75,
+        return_model="sample-mean",
+        strategy="dual-momentum",
+        momentum_window=2,
+        top_k=1,
+        dual_momentum_weighting="equal",
+        softmax_temperature=0.05,
+        absolute_momentum_threshold=0.0,
+        target_vol=None,
+        vol_window=21,
+        max_single_weight=None,
+        trailing_stop=None,
+        basket_opt=None,
+        basket_risk_aversion=1.0,
+        data_source="yfinance",
+        yfinance_max_workers=10,
+        yfinance_retry_delay=1.0,
+        benchmark=["^HSI"],
+        backtest_days=3,
+        rebalance_every=1,
+        rolling_window_days=0,
+        rolling_step_days=1,
+        sweep=False,
+        top_n=5,
+        submit=False,
+        use_cache=False,
+        refresh_cache=False,
+        offline=False,
+        dry_run=True,
+    )
+    fetched_symbols: list[list[str]] = []
+    benchmark_calls: list[dict[str, float]] = []
+
+    monkeypatch.setattr(cli, "parse_args", lambda: args)
+    monkeypatch.setattr(
+        cli,
+        "load_model_inputs",
+        lambda _path: ModelInputs(
+            symbols=["0005.HK", "0700.HK"],
+            expected_returns=None,
+            covariance=None,
+            asset_classes={"0005.HK": "equity", "0700.HK": "equity"},
+            class_min_weights={},
+            class_max_weights={},
+        ),
+    )
+
+    def fake_fetch_closes(symbols, period="max", **_kwargs):
+        fetched_symbols.append(list(symbols))
+        return {
+            "0005.HK": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0],
+            "0700.HK": [100.0, 100.5, 101.0, 101.5, 102.0, 102.5],
+            "^HSI": [200.0, 201.0, 202.0, 203.0, 204.0, 205.0],
+        }
+
+    def fake_dual_momentum_backtest(**_kwargs):
+        return BacktestResult(
+            final_value=1.1,
+            total_return=0.1,
+            annualized_return=0.12,
+            annualized_volatility=0.08,
+            max_drawdown=0.03,
+            rebalance_count=2,
+            average_turnover=0.1,
+            latest_weights=np.array([1.0, 0.0], dtype=float),
+            daily_values=(1.0, 1.05, 1.1),
+        )
+
+    def fake_benchmark(**kwargs):
+        if kwargs["weights_by_symbol"] == {"^HSI": 1.0}:
+            benchmark_calls.append(kwargs["weights_by_symbol"])
+        return {
+            "final_value": 1.0,
+            "total_return": 0.0,
+            "annualized_return": 0.0,
+            "annualized_volatility": 0.0,
+            "max_drawdown": 0.0,
+        }
+
+    monkeypatch.setattr(cli, "yf_fetch_closes", fake_fetch_closes)
+    monkeypatch.setattr(cli, "run_dual_momentum_backtest", fake_dual_momentum_backtest)
+    monkeypatch.setattr(cli, "run_fixed_weight_benchmark", fake_benchmark)
+    monkeypatch.setattr(
+        cli,
+        "AlpacaClient",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Alpaca should not be constructed for yfinance backtests")
+        ),
+    )
+
+    cli.main()
+
+    assert fetched_symbols == [["0005.HK", "0700.HK", "^HSI"]]
+    assert benchmark_calls == [{"^HSI": 1.0}]
+    assert '"benchmark_hsi"' in capsys.readouterr().out
+
+
 def test_cli_rejects_backtest_when_common_history_is_too_short(monkeypatch) -> None:
     args = Namespace(
         model="dummy.json",

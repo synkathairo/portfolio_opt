@@ -1,3 +1,4 @@
+import re
 import time
 import requests
 import yfinance as yf
@@ -9,6 +10,35 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from portfolio_opt.cache import cache_path, read_cache, write_cache
 
 _TICKER_INFO_MEMORY_CACHE: dict[str, dict[str, Any]] = {}
+
+YFIUA_INDEX_STARTS: dict[str, tuple[int, int]] = {
+    "csi300": (2023, 7),
+    "csi500": (2024, 1),
+    "csi1000": (2024, 1),
+    "sse": (2023, 7),
+    "szse": (2023, 7),
+    "nasdaq100": (2023, 7),
+    "sp500": (2023, 7),
+    "dowjones": (2023, 7),
+    "dax": (2023, 7),
+    "hsi": (2023, 7),
+    "ftse100": (2023, 7),
+    "ibex35": (2024, 3),
+    "ftsemib": (2024, 3),
+    "nifty50": (2024, 3),
+    "asx200": (2024, 3),
+}
+
+YFIUA_BASKET_PREFIX = "yfiua:"
+_NON_YFIUA_BUILTIN_BASKETS = {
+    "nasdaq100",
+    "sp500",
+    "sectors",
+    "indexes",
+    "cashlike",
+    "commodities",
+    "realestate",
+}
 
 
 # present a json-like dict object(?)
@@ -107,6 +137,93 @@ def fetch_sp500_tickers(retries: int = 3, backoff: float = 1.5) -> list[str]:
     return symbols
 
 
+def fetch_yfiua_index_constituents(
+    code: str,
+    *,
+    year: int | None = None,
+    month: int | None = None,
+) -> list[str]:
+    if (year is None) != (month is None):
+        raise ValueError("year and month must be provided together.")
+    if year is None and month is None:
+        url = f"https://yfiua.github.io/index-constituents/constituents-{code}.json"
+    else:
+        url = (
+            "https://yfiua.github.io/index-constituents/"
+            f"{year:04d}/{month:02d}/constituents-{code}.json"
+        )
+    response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
+    response.raise_for_status()
+    payload = response.json()
+    return _extract_yfiua_symbols(payload)
+
+
+def fetch_ftse_tickers() -> list[str]:
+    return fetch_yfiua_index_constituents("ftse100")
+
+
+def _yfiua_codes_from_basket(ticker_basket: list[str]) -> list[str]:
+    codes: list[str] = []
+    for basket in ticker_basket:
+        if basket.startswith(YFIUA_BASKET_PREFIX):
+            code = basket.removeprefix(YFIUA_BASKET_PREFIX)
+        elif basket in YFIUA_INDEX_STARTS and basket not in _NON_YFIUA_BUILTIN_BASKETS:
+            code = basket
+        else:
+            continue
+        if code not in YFIUA_INDEX_STARTS:
+            raise ValueError(
+                f"Unsupported yfiua index code {code!r}. "
+                f"Supported codes: {', '.join(sorted(YFIUA_INDEX_STARTS))}"
+            )
+        codes.append(code)
+    return codes
+
+
+def _extract_yfiua_symbols(payload: Any) -> list[str]:
+    if isinstance(payload, list):
+        values = payload
+    elif isinstance(payload, dict):
+        values = (
+            payload.get("symbols")
+            or payload.get("constituents")
+            or payload.get("data")
+            or payload.get("tickers")
+        )
+    else:
+        values = None
+
+    if not isinstance(values, list):
+        raise ValueError("Unexpected index constituent payload format.")
+
+    symbols: list[str] = []
+    for item in values:
+        if isinstance(item, str):
+            symbol = item
+        elif isinstance(item, dict):
+            raw_symbol = (
+                item.get("symbol")
+                or item.get("ticker")
+                or item.get("Symbol")
+                or item.get("Ticker")
+            )
+            if raw_symbol is None:
+                continue
+            symbol = str(raw_symbol)
+        else:
+            continue
+        symbol = symbol.strip()
+        if symbol:
+            symbols.append(_normalize_yfiua_symbol(symbol))
+    return symbols
+
+
+def _normalize_yfiua_symbol(symbol: str) -> str:
+    symbol = symbol.replace("/.", ".")
+    symbol = re.sub(r"/([A-Z]{2,3})$", r".\1", symbol)
+    return symbol.replace("/", "-")
+
+
 # a basket of tickers as needed, customizable from ticker_selection
 # notes: this can be slow with all options! but results perhaps can be cached,
 # nasdaq100 and sp500 are updated on fixed basis
@@ -127,6 +244,8 @@ def fetch_ticker_dict(
         tickers |= set(fetch_nasdaq100_tickers())
     if "sp500" in ticker_basket:
         tickers |= set(fetch_sp500_tickers())
+    for code in _yfiua_codes_from_basket(ticker_basket):
+        tickers |= set(fetch_yfiua_index_constituents(code))
     # note: below were statically coded, so need to be mindful of when the ETFs were created when querying
     if "sectors" in ticker_basket:
         tickers |= {"XLK", "XLF", "XLE", "XLV", "XLI", "XLP", "XLU"}

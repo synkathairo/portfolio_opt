@@ -25,16 +25,12 @@ except ImportError as exc:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 
-def _to_yahoo_symbol(symbol: str) -> str:
-    """Convert a standard ticker symbol to Yahoo Finance format.
-
-    Yahoo Finance uses ``-`` instead of ``.`` for share class suffixes
-    (e.g. ``BRK.B`` → ``BRK-B``, ``BF.B`` → ``BF-B``).
-    """
-    parts = symbol.split(".")
-    if len(parts) == 2 and len(parts[1]) <= 2:
-        return f"{parts[0]}-{parts[1]}"
-    return symbol
+def _yahoo_symbol_candidates(symbol: str) -> list[str]:
+    candidates = [symbol]
+    if "." in symbol:
+        fallback = symbol.replace(".", "-")
+        candidates.append(fallback)
+    return list(dict.fromkeys(candidates))
 
 
 def _fetch_single_symbol(
@@ -44,25 +40,27 @@ def _fetch_single_symbol(
     retry_delay: float,
 ) -> tuple[str, pd.Series]:
     """Fetch daily adjusted closes for a single symbol from Yahoo Finance."""
-    yahoo_sym = _to_yahoo_symbol(symbol)
     last_err: Exception | None = None
     for attempt in range(1, retries + 1):
-        try:
-            ticker = yf.Ticker(yahoo_sym)
-            hist = ticker.history(period=period, auto_adjust=True)
-            if hist.empty or "Close" not in hist.columns:
-                raise ValueError(f"No close data for {symbol}")
-            closes = hist["Close"].astype(float).dropna()
-            if closes.empty:
-                raise ValueError(f"Empty close series for {symbol}")
-            closes.index = pd.to_datetime(closes.index).tz_localize(None).normalize()
-            closes = closes[~closes.index.duplicated(keep="last")].sort_index()
-            return symbol, closes
-        except Exception as exc:
-            last_err = exc
-            if attempt < retries:
-                logger.debug("Retry %d/%d for %s: %s", attempt, retries, symbol, exc)
-                time.sleep(retry_delay)
+        for yahoo_sym in _yahoo_symbol_candidates(symbol):
+            try:
+                ticker = yf.Ticker(yahoo_sym)
+                hist = ticker.history(period=period, auto_adjust=True)
+                if hist.empty or "Close" not in hist.columns:
+                    raise ValueError(f"No close data for {symbol}")
+                closes = hist["Close"].astype(float).dropna()
+                if closes.empty:
+                    raise ValueError(f"Empty close series for {symbol}")
+                closes.index = pd.to_datetime(closes.index).tz_localize(None).normalize()
+                closes = closes[~closes.index.duplicated(keep="last")].sort_index()
+                return symbol, closes
+            except Exception as exc:
+                last_err = exc
+                logger.debug("Failed to fetch %s as %s: %s", symbol, yahoo_sym, exc)
+                continue
+        if attempt < retries:
+            logger.debug("Retry %d/%d for %s: %s", attempt, retries, symbol, last_err)
+            time.sleep(retry_delay)
     raise RuntimeError(f"Failed to fetch {symbol} after {retries} retries: {last_err}")
 
 
@@ -72,25 +70,27 @@ def _fetch_single_symbol_from(
     retries: int,
     retry_delay: float,
 ) -> tuple[str, pd.Series]:
-    yahoo_sym = _to_yahoo_symbol(symbol)
     last_err: Exception | None = None
     for attempt in range(1, retries + 1):
-        try:
-            ticker = yf.Ticker(yahoo_sym)
-            hist = ticker.history(start=start.date().isoformat(), auto_adjust=True)
-            if hist.empty or "Close" not in hist.columns:
-                return symbol, pd.Series(dtype=float)
-            closes = hist["Close"].astype(float).dropna()
-            if closes.empty:
-                return symbol, pd.Series(dtype=float)
-            closes.index = pd.to_datetime(closes.index).tz_localize(None).normalize()
-            closes = closes[~closes.index.duplicated(keep="last")].sort_index()
-            return symbol, closes
-        except Exception as exc:
-            last_err = exc
-            if attempt < retries:
-                logger.debug("Retry %d/%d for %s: %s", attempt, retries, symbol, exc)
-                time.sleep(retry_delay)
+        for yahoo_sym in _yahoo_symbol_candidates(symbol):
+            try:
+                ticker = yf.Ticker(yahoo_sym)
+                hist = ticker.history(start=start.date().isoformat(), auto_adjust=True)
+                if hist.empty or "Close" not in hist.columns:
+                    return symbol, pd.Series(dtype=float)
+                closes = hist["Close"].astype(float).dropna()
+                if closes.empty:
+                    return symbol, pd.Series(dtype=float)
+                closes.index = pd.to_datetime(closes.index).tz_localize(None).normalize()
+                closes = closes[~closes.index.duplicated(keep="last")].sort_index()
+                return symbol, closes
+            except Exception as exc:
+                last_err = exc
+                logger.debug("Failed to fetch %s as %s: %s", symbol, yahoo_sym, exc)
+                continue
+        if attempt < retries:
+            logger.debug("Retry %d/%d for %s: %s", attempt, retries, symbol, last_err)
+            time.sleep(retry_delay)
     raise RuntimeError(f"Failed to fetch {symbol} after {retries} retries: {last_err}")
 
 

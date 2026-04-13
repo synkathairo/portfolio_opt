@@ -206,6 +206,10 @@ def _validate_backtest_history(
     )
 
 
+def _json_key(value: str) -> str:
+    return "".join(char.lower() if char.isalnum() else "_" for char in value).strip("_")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a mean-variance rebalance against Alpaca."
@@ -366,6 +370,15 @@ def parse_args() -> argparse.Namespace:
         help="Seconds to wait between yfinance retry attempts.",
     )
     parser.add_argument(
+        "--benchmark",
+        action="append",
+        default=[],
+        help=(
+            "Additional benchmark ticker to compare in backtest mode. "
+            "Can be repeated, e.g. --benchmark ^HSI."
+        ),
+    )
+    parser.add_argument(
         "--backtest-days",
         type=int,
         default=0,
@@ -513,9 +526,17 @@ def main() -> None:
 
     if args.backtest_days > 0:
         total_days = args.lookback_days + args.backtest_days + 1
+        benchmark_symbols = [
+            symbol for symbol in getattr(args, "benchmark", []) if symbol
+        ]
+        closes_for_benchmarks: dict[str, list[float]] = {}
+        symbols_for_benchmarks = model.symbols
         if args.data_source == "yfinance":
+            yfinance_symbols = list(
+                dict.fromkeys([*model.symbols, *benchmark_symbols])
+            )
             closes_by_symbol = yf_fetch_closes(
-                model.symbols,
+                yfinance_symbols,
                 period="max",
                 use_cache=args.use_cache,
                 refresh_cache=args.refresh_cache,
@@ -526,7 +547,16 @@ def main() -> None:
             # Trim to the requested total_days from the most recent
             for s in closes_by_symbol:
                 closes_by_symbol[s] = closes_by_symbol[s][-total_days:]
+            closes_for_benchmarks = closes_by_symbol
+            symbols_for_benchmarks = yfinance_symbols
+            closes_by_symbol = {
+                symbol: closes_by_symbol[symbol] for symbol in model.symbols
+            }
         else:
+            if benchmark_symbols:
+                raise ValueError(
+                    "--benchmark is only supported with --data-source yfinance."
+                )
             if alpaca is None:
                 alpaca = AlpacaClient(AlpacaConfig.from_env())
             closes_by_symbol = alpaca.get_daily_closes_for_period(
@@ -742,6 +772,14 @@ def main() -> None:
                 start_day=args.lookback_days,
             ),
         }
+        for symbol in benchmark_symbols:
+            key = f"benchmark_{_json_key(symbol)}"
+            benchmark_results[key] = run_fixed_weight_benchmark(
+                symbols=symbols_for_benchmarks,
+                closes_by_symbol=closes_for_benchmarks,
+                weights_by_symbol={symbol: 1.0},
+                start_day=args.lookback_days,
+            )
         result = {
             "symbols": model.symbols,
             "backtest": {

@@ -5,6 +5,15 @@ import pandas as pd
 from portfolio_opt import yfinance_data
 
 
+def test_yahoo_symbol_candidates_try_original_before_dash_fallback() -> None:
+    assert yfinance_data._yahoo_symbol_candidates("BRK.B") == ["BRK.B", "BRK-B"]
+    assert yfinance_data._yahoo_symbol_candidates("AZN.L") == ["AZN.L", "AZN-L"]
+    assert yfinance_data._yahoo_symbol_candidates("BT-A.L") == [
+        "BT-A.L",
+        "BT-A-L",
+    ]
+
+
 def test_fetch_closes_aligns_symbols_by_actual_dates(monkeypatch) -> None:
     series_by_symbol = {
         "ACTIVE": pd.Series(
