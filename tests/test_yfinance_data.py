@@ -7,11 +7,10 @@ from portfolio_opt import yfinance_data
 
 def test_yahoo_symbol_candidates_try_original_before_dash_fallback() -> None:
     assert yfinance_data._yahoo_symbol_candidates("BRK.B") == ["BRK.B", "BRK-B"]
-    assert yfinance_data._yahoo_symbol_candidates("AZN.L") == ["AZN.L", "AZN-L"]
-    assert yfinance_data._yahoo_symbol_candidates("BT-A.L") == [
-        "BT-A.L",
-        "BT-A-L",
-    ]
+    assert yfinance_data._yahoo_symbol_candidates("AZN.L") == ["AZN.L"]
+    assert yfinance_data._yahoo_symbol_candidates("BT-A.L") == ["BT-A.L"]
+    assert yfinance_data._yahoo_symbol_candidates("600519.SS") == ["600519.SS"]
+    assert yfinance_data._yahoo_symbol_candidates("300750.SZ") == ["300750.SZ"]
 
 
 def test_fetch_closes_aligns_symbols_by_actual_dates(monkeypatch) -> None:
@@ -72,22 +71,122 @@ def test_fetch_closes_does_not_pair_stale_history_with_recent_prices(
     assert "Not enough date-aligned common history" in message
 
 
+def test_fetch_closes_symbol_delay_paces_single_worker_downloads(monkeypatch) -> None:
+    calls: list[str] = []
+    sleeps: list[float] = []
+    series_by_symbol = {
+        "AAA": pd.Series(
+            [10.0, 11.0],
+            index=pd.to_datetime(["2024-01-01", "2024-01-02"]),
+        ),
+        "BBB": pd.Series(
+            [20.0, 21.0],
+            index=pd.to_datetime(["2024-01-01", "2024-01-02"]),
+        ),
+        "CCC": pd.Series(
+            [30.0, 31.0],
+            index=pd.to_datetime(["2024-01-01", "2024-01-02"]),
+        ),
+    }
+
+    def fake_fetch_single_symbol(symbol, period, retries, retry_delay):
+        calls.append(symbol)
+        return symbol, series_by_symbol[symbol]
+
+    monkeypatch.setattr(yfinance_data, "_fetch_single_symbol", fake_fetch_single_symbol)
+    monkeypatch.setattr(yfinance_data.time, "sleep", sleeps.append)
+
+    closes = yfinance_data.fetch_closes(
+        ["AAA", "BBB", "CCC"],
+        max_workers=1,
+        symbol_delay=2.5,
+    )
+
+    assert calls == ["AAA", "BBB", "CCC"]
+    assert sleeps == [2.5, 2.5]
+    assert closes == {
+        "AAA": [10.0, 11.0],
+        "BBB": [20.0, 21.0],
+        "CCC": [30.0, 31.0],
+    }
+
+
+def test_fetch_symbols_calls_success_callback_before_later_failure(monkeypatch) -> None:
+    series = pd.Series(
+        [10.0, 11.0],
+        index=pd.to_datetime(["2024-01-01", "2024-01-02"]),
+    )
+    writes: dict[str, pd.Series] = {}
+
+    def fake_fetch_single_symbol(symbol, period, retries, retry_delay):
+        if symbol == "BBB":
+            raise RuntimeError("rate limited")
+        return symbol, series
+
+    monkeypatch.setattr(yfinance_data, "_fetch_single_symbol", fake_fetch_single_symbol)
+
+    try:
+        yfinance_data._fetch_symbols(
+            ["AAA", "BBB"],
+            period="max",
+            retries=1,
+            retry_delay=0,
+            max_workers=1,
+            symbol_delay=0,
+            on_success=lambda symbol, closes: writes.__setitem__(symbol, closes),
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("fetch should report the later failed symbol")
+
+    assert "Failed to fetch 1/2 symbols: BBB" in message
+    assert list(writes) == ["AAA"]
+    assert writes["AAA"].equals(series)
+
+
 def test_fetch_closes_use_cache_avoids_yfinance_download(monkeypatch) -> None:
-    cached = {"SPY": [100.0, 101.0], "QQQ": [200.0, 201.0]}
+    cached = {
+        "SPY": {
+            "symbol": "SPY",
+            "source": "yfinance",
+            "adjustment": "auto",
+            "closes": {
+                "2024-01-01": 100.0,
+                "2024-01-02": 101.0,
+            },
+        },
+        "QQQ": {
+            "symbol": "QQQ",
+            "source": "yfinance",
+            "adjustment": "auto",
+            "closes": {
+                "2024-01-01": 200.0,
+                "2024-01-02": 201.0,
+            },
+        },
+    }
 
     class DummyPath:
+        def __init__(self, symbol: str) -> None:
+            self.symbol = symbol
+
         def exists(self) -> bool:
             return True
 
         @property
         def name(self) -> str:
-            return "dummy_hash.json"
+            return f"{self.symbol}_hash.json"
 
         def with_name(self, _name: str):
             return self
 
-    monkeypatch.setattr(yfinance_data, "cache_path", lambda name, payload: DummyPath())
-    monkeypatch.setattr(yfinance_data, "read_cache", lambda path: cached)
+    monkeypatch.setattr(
+        yfinance_data,
+        "cache_path",
+        lambda _name, payload: DummyPath(payload["symbol"]),
+    )
+    monkeypatch.setattr(yfinance_data, "read_cache", lambda path: cached[path.symbol])
     monkeypatch.setattr(
         yfinance_data,
         "_fetch_single_symbol",
@@ -98,7 +197,10 @@ def test_fetch_closes_use_cache_avoids_yfinance_download(monkeypatch) -> None:
 
     closes = yfinance_data.fetch_closes(["SPY", "QQQ"], use_cache=True)
 
-    assert closes == cached
+    assert closes == {
+        "SPY": [100.0, 101.0],
+        "QQQ": [200.0, 201.0],
+    }
 
 
 def test_fetch_closes_refresh_fetches_only_missing_tail_for_v2_cache(
@@ -152,7 +254,7 @@ def test_fetch_closes_refresh_fetches_only_missing_tail_for_v2_cache(
             "SPY": pd.Timestamp("2024-01-03"),
             "QQQ": pd.Timestamp("2024-01-03"),
         }
-        return {
+        fetched = {
             "SPY": pd.Series(
                 [102.0],
                 index=pd.to_datetime(["2024-01-03"]),
@@ -162,6 +264,11 @@ def test_fetch_closes_refresh_fetches_only_missing_tail_for_v2_cache(
                 index=pd.to_datetime(["2024-01-03"]),
             ),
         }
+        on_success = _kwargs.get("on_success")
+        if on_success is not None:
+            for symbol, series in fetched.items():
+                on_success(symbol, series)
+        return fetched
 
     monkeypatch.setattr(yfinance_data, "cache_path", fake_cache_path)
     monkeypatch.setattr(
@@ -205,5 +312,87 @@ def test_fetch_closes_refresh_fetches_only_missing_tail_for_v2_cache(
             "2024-01-01": 200.0,
             "2024-01-02": 201.0,
             "2024-01-03": 202.0,
+        },
+    }
+
+
+def test_fetch_closes_use_cache_fetches_only_missing_v2_symbols(monkeypatch) -> None:
+    cached = {
+        "SPY": {
+            "symbol": "SPY",
+            "source": "yfinance",
+            "adjustment": "auto",
+            "closes": {
+                "2024-01-01": 100.0,
+                "2024-01-02": 101.0,
+            },
+        },
+    }
+    writes: dict[str, dict] = {}
+
+    class DummyPath:
+        def __init__(self, symbol: str) -> None:
+            self.symbol = symbol
+
+        def exists(self) -> bool:
+            return self.symbol in cached
+
+        @property
+        def name(self) -> str:
+            return f"{self.symbol}_hash.json"
+
+        def with_name(self, _name: str):
+            return self
+
+    def fake_cache_path(_name, payload):
+        return DummyPath(payload["symbol"])
+
+    def fake_fetch_symbols(symbols, **_kwargs):
+        assert symbols == ["QQQ"]
+        fetched = {
+            "QQQ": pd.Series(
+                [200.0, 201.0],
+                index=pd.to_datetime(["2024-01-01", "2024-01-02"]),
+            )
+        }
+        on_success = _kwargs.get("on_success")
+        if on_success is not None:
+            for symbol, series in fetched.items():
+                on_success(symbol, series)
+        return fetched
+
+    monkeypatch.setattr(yfinance_data, "cache_path", fake_cache_path)
+    monkeypatch.setattr(
+        yfinance_data,
+        "read_cache",
+        lambda path: cached[path.symbol],
+    )
+    monkeypatch.setattr(
+        yfinance_data,
+        "write_cache",
+        lambda path, payload: writes.__setitem__(path.symbol, payload),
+    )
+    monkeypatch.setattr(yfinance_data, "_fetch_symbols", fake_fetch_symbols)
+    monkeypatch.setattr(
+        yfinance_data,
+        "_fetch_symbols_since",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("tail refresh should not run without refresh_cache")
+        ),
+    )
+
+    closes = yfinance_data.fetch_closes(["SPY", "QQQ"], use_cache=True)
+
+    assert closes == {
+        "SPY": [100.0, 101.0],
+        "QQQ": [200.0, 201.0],
+    }
+    assert writes["QQQ"] == {
+        "symbol": "QQQ",
+        "source": "yfinance",
+        "adjustment": "auto",
+        "closes": {
+            "2024-01-01": 200.0,
+            "2024-01-02": 201.0,
         },
     }

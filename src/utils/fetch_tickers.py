@@ -3,8 +3,11 @@ import time
 import requests
 import yfinance as yf
 import pandas as pd
+from io import StringIO
 from datetime import datetime
-from typing import Any, Optional
+from dataclasses import dataclass
+from html.parser import HTMLParser
+from typing import Any, Optional, cast
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from portfolio_opt.cache import cache_path, read_cache, write_cache
@@ -13,8 +16,8 @@ _TICKER_INFO_MEMORY_CACHE: dict[str, dict[str, Any]] = {}
 
 YFIUA_INDEX_STARTS: dict[str, tuple[int, int]] = {
     "csi300": (2023, 7),
-    "csi500": (2024, 1),
-    "csi1000": (2024, 1),
+    "csi500": (2024, 2),
+    "csi1000": (2024, 2),
     "sse": (2023, 7),
     "szse": (2023, 7),
     "nasdaq100": (2023, 7),
@@ -30,15 +33,31 @@ YFIUA_INDEX_STARTS: dict[str, tuple[int, int]] = {
 }
 
 YFIUA_BASKET_PREFIX = "yfiua:"
+NIKKEI225_BASKET = "nikkei225"
+NIKKEI225_COMPONENTS_URL = (
+    "https://indexes.nikkei.co.jp/en/nkave/index/component?idx=nk225"
+)
+SP500_HISTORICAL_COMPONENTS_URL = (
+    "https://raw.githubusercontent.com/fja05680/sp500/master/"
+    "S%26P%20500%20Historical%20Components%20%26%20Changes%2801-17-2026%29.csv"
+)
 _NON_YFIUA_BUILTIN_BASKETS = {
     "nasdaq100",
     "sp500",
+    NIKKEI225_BASKET,
     "sectors",
     "indexes",
     "cashlike",
     "commodities",
     "realestate",
 }
+
+
+@dataclass(frozen=True)
+class NikkeiConstituent:
+    symbol: str
+    name: str
+    sector: str
 
 
 # present a json-like dict object(?)
@@ -137,12 +156,115 @@ def fetch_sp500_tickers(retries: int = 3, backoff: float = 1.5) -> list[str]:
     return symbols
 
 
+def fetch_historical_sp500_tickers(
+    snapshot_date: str | datetime,
+    *,
+    use_cache: bool = True,
+    refresh_cache: bool = False,
+) -> list[str]:
+    """Fetch S&P 500 constituents for the latest available row on/before a date."""
+    snapshot = cast(pd.Timestamp, pd.Timestamp(snapshot_date))
+    if pd.isna(snapshot):
+        raise ValueError(f"Invalid snapshot date: {snapshot_date!r}")
+    snapshot = snapshot.normalize()
+    path = cache_path(
+        "sp500_historical_components",
+        {"source": SP500_HISTORICAL_COMPONENTS_URL, "format": 1},
+    )
+    if use_cache and not refresh_cache and path.exists():
+        payload = read_cache(path)
+        if isinstance(payload, dict):
+            return _historical_sp500_symbols_from_payload(payload, snapshot)
+
+    response = requests.get(
+        SP500_HISTORICAL_COMPONENTS_URL,
+        headers={"User-Agent": "Mozilla/5.0"},
+    )
+    response.raise_for_status()
+    frame = pd.read_csv(StringIO(response.text))
+    payload = {
+        "source": SP500_HISTORICAL_COMPONENTS_URL,
+        "rows": [
+            {"date": str(row["date"])[:10], "tickers": str(row["tickers"])}
+            for _, row in frame.iterrows()
+        ],
+    }
+    if use_cache or refresh_cache:
+        write_cache(path, payload)
+    return _historical_sp500_symbols_from_payload(payload, snapshot)
+
+
+def _historical_sp500_symbols_from_payload(
+    payload: dict[str, Any],
+    snapshot: pd.Timestamp,
+) -> list[str]:
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        raise ValueError("Unexpected historical S&P 500 payload format.")
+
+    selected: dict[str, Any] | None = None
+    selected_date: pd.Timestamp | None = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        raw_date = row.get("date")
+        if raw_date is None:
+            continue
+        row_date = cast(pd.Timestamp, pd.Timestamp(str(raw_date)))
+        if pd.isna(row_date):
+            continue
+        row_date = row_date.normalize()
+        if row_date <= snapshot and (selected_date is None or row_date > selected_date):
+            selected = row
+            selected_date = row_date
+
+    if selected is None:
+        raise ValueError(f"No historical S&P 500 data on or before {snapshot.date()}.")
+    tickers = selected.get("tickers")
+    if not isinstance(tickers, str):
+        raise ValueError("Unexpected historical S&P 500 ticker row format.")
+    return [ticker.strip() for ticker in tickers.split(",") if ticker.strip()]
+
+
 def fetch_yfiua_index_constituents(
     code: str,
     *,
     year: int | None = None,
     month: int | None = None,
 ) -> list[str]:
+    payload = _fetch_yfiua_index_payload(code, year=year, month=month)
+    return _extract_yfiua_symbols(payload)
+
+
+def fetch_yfiua_index_constituent_names(
+    code: str,
+    *,
+    year: int | None = None,
+    month: int | None = None,
+) -> dict[str, str]:
+    payload = _fetch_yfiua_index_payload(code, year=year, month=month)
+    return _extract_yfiua_symbol_names(payload)
+
+
+def fetch_yfiua_index_constituents_with_names(
+    code: str,
+    *,
+    year: int | None = None,
+    month: int | None = None,
+) -> tuple[list[str], dict[str, str]]:
+    payload = _fetch_yfiua_index_payload(code, year=year, month=month)
+    records = _extract_yfiua_symbol_records(payload)
+    symbols = [symbol for symbol, _name in records]
+    names = {symbol: name for symbol, name in records if name}
+    return symbols, names
+
+
+def _fetch_yfiua_index_payload(
+    code: str,
+    *,
+    year: int | None = None,
+    month: int | None = None,
+) -> Any:
     if (year is None) != (month is None):
         raise ValueError("year and month must be provided together.")
     if year is None and month is None:
@@ -154,12 +276,186 @@ def fetch_yfiua_index_constituents(
         )
     response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
     response.raise_for_status()
-    payload = response.json()
-    return _extract_yfiua_symbols(payload)
+    return response.json()
 
 
 def fetch_ftse_tickers() -> list[str]:
     return fetch_yfiua_index_constituents("ftse100")
+
+
+def fetch_nikkei225_tickers(
+    *,
+    use_cache: bool = True,
+    refresh_cache: bool = False,
+) -> list[str]:
+    constituents = fetch_nikkei225_constituents(
+        use_cache=use_cache,
+        refresh_cache=refresh_cache,
+    )
+    return [constituent.symbol for constituent in constituents]
+
+
+def fetch_nikkei225_constituents(
+    *,
+    use_cache: bool = True,
+    refresh_cache: bool = False,
+) -> list[NikkeiConstituent]:
+    path = cache_path(
+        "nikkei225_constituents",
+        {"source": NIKKEI225_COMPONENTS_URL, "format": 1},
+    )
+    if use_cache and not refresh_cache and path.exists():
+        return _nikkei_constituents_from_cache(read_cache(path))
+
+    response = requests.get(
+        NIKKEI225_COMPONENTS_URL,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    if "idx-index-components" not in response.text:
+        raise ValueError("Unexpected Nikkei 225 component page format.")
+
+    constituents = _parse_nikkei225_component_html(response.text)
+    if not constituents:
+        raise ValueError("No Nikkei 225 constituents were found.")
+
+    if use_cache:
+        write_cache(
+            path,
+            {
+                "source": NIKKEI225_COMPONENTS_URL,
+                "symbols": [constituent.symbol for constituent in constituents],
+                "constituents": [
+                    {
+                        "symbol": constituent.symbol,
+                        "name": constituent.name,
+                        "sector": constituent.sector,
+                    }
+                    for constituent in constituents
+                ],
+            },
+        )
+    return constituents
+
+
+def _nikkei_constituents_from_cache(payload: Any) -> list[NikkeiConstituent]:
+    if not isinstance(payload, dict):
+        raise ValueError("Unexpected cached Nikkei 225 payload format.")
+    records = payload.get("constituents")
+    if not isinstance(records, list):
+        raise ValueError("Unexpected cached Nikkei 225 constituents format.")
+    constituents: list[NikkeiConstituent] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        symbol = record.get("symbol")
+        name = record.get("name")
+        sector = record.get("sector")
+        if symbol is None or name is None or sector is None:
+            continue
+        constituents.append(
+            NikkeiConstituent(
+                symbol=str(symbol),
+                name=str(name),
+                sector=str(sector),
+            )
+        )
+    return constituents
+
+
+class _Nikkei225ComponentParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.records: list[tuple[str, str, str]] = []
+        self._in_component_div = False
+        self._component_div_depth = 0
+        self._in_heading = False
+        self._in_row = False
+        self._in_cell = False
+        self._current_sector = ""
+        self._current_row: list[str] = []
+        self._cell_text: list[str] = []
+        self._heading_text: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_map = dict(attrs)
+        classes = set((attr_map.get("class") or "").split())
+        if tag == "div" and "idx-index-components" in classes:
+            self._in_component_div = True
+            self._component_div_depth = 1
+            return
+        if self._in_component_div and tag == "div":
+            self._component_div_depth += 1
+        if not self._in_component_div:
+            return
+        if tag == "h3":
+            self._in_heading = True
+            self._heading_text = []
+        elif tag == "tr":
+            self._in_row = True
+            self._current_row = []
+        elif tag == "td" and self._in_row:
+            self._in_cell = True
+            self._cell_text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._in_heading:
+            self._heading_text.append(data)
+        if self._in_cell:
+            self._cell_text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._in_heading and tag == "h3":
+            self._current_sector = " ".join("".join(self._heading_text).split())
+            self._in_heading = False
+        elif self._in_cell and tag == "td":
+            self._current_row.append(" ".join("".join(self._cell_text).split()))
+            self._in_cell = False
+        elif self._in_row and tag == "tr":
+            if len(self._current_row) >= 2 and re.fullmatch(
+                r"[0-9A-Z]{4}",
+                self._current_row[0],
+            ):
+                self.records.append(
+                    (
+                        self._current_row[0],
+                        self._current_row[1],
+                        self._current_sector,
+                    )
+                )
+            self._in_row = False
+        if self._in_component_div and tag == "div":
+            self._component_div_depth -= 1
+            if self._component_div_depth == 0:
+                self._in_component_div = False
+
+
+def _parse_nikkei225_component_html(html: str) -> list[NikkeiConstituent]:
+    parser = _Nikkei225ComponentParser()
+    parser.feed(html)
+    seen: set[str] = set()
+    constituents: list[NikkeiConstituent] = []
+    for code, name, sector in parser.records:
+        symbol = f"{code}.T"
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        constituents.append(
+            NikkeiConstituent(
+                symbol=symbol,
+                name=name,
+                sector=sector or "Unknown",
+            )
+        )
+    return constituents
 
 
 def _yfiua_codes_from_basket(ticker_basket: list[str]) -> list[str]:
@@ -181,6 +477,18 @@ def _yfiua_codes_from_basket(ticker_basket: list[str]) -> list[str]:
 
 
 def _extract_yfiua_symbols(payload: Any) -> list[str]:
+    return [symbol for symbol, _name in _extract_yfiua_symbol_records(payload)]
+
+
+def _extract_yfiua_symbol_names(payload: Any) -> dict[str, str]:
+    return {
+        symbol: name
+        for symbol, name in _extract_yfiua_symbol_records(payload)
+        if name
+    }
+
+
+def _extract_yfiua_symbol_records(payload: Any) -> list[tuple[str, str | None]]:
     if isinstance(payload, list):
         values = payload
     elif isinstance(payload, dict):
@@ -196,8 +504,9 @@ def _extract_yfiua_symbols(payload: Any) -> list[str]:
     if not isinstance(values, list):
         raise ValueError("Unexpected index constituent payload format.")
 
-    symbols: list[str] = []
+    records: list[tuple[str, str | None]] = []
     for item in values:
+        name: str | None = None
         if isinstance(item, str):
             symbol = item
         elif isinstance(item, dict):
@@ -210,12 +519,15 @@ def _extract_yfiua_symbols(payload: Any) -> list[str]:
             if raw_symbol is None:
                 continue
             symbol = str(raw_symbol)
+            raw_name = item.get("name") or item.get("Name") or item.get("security")
+            if raw_name is not None:
+                name = str(raw_name).strip() or None
         else:
             continue
         symbol = symbol.strip()
         if symbol:
-            symbols.append(_normalize_yfiua_symbol(symbol))
-    return symbols
+            records.append((_normalize_yfiua_symbol(symbol), name))
+    return records
 
 
 def _normalize_yfiua_symbol(symbol: str) -> str:
@@ -244,6 +556,8 @@ def fetch_ticker_dict(
         tickers |= set(fetch_nasdaq100_tickers())
     if "sp500" in ticker_basket:
         tickers |= set(fetch_sp500_tickers())
+    if NIKKEI225_BASKET in ticker_basket:
+        tickers |= set(fetch_nikkei225_tickers())
     for code in _yfiua_codes_from_basket(ticker_basket):
         tickers |= set(fetch_yfiua_index_constituents(code))
     # note: below were statically coded, so need to be mindful of when the ETFs were created when querying

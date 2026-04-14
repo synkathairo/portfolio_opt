@@ -13,7 +13,11 @@ import requests
 import yfinance as yf
 
 from portfolio_opt.yfinance_data import _fetch_single_symbol_from, _yahoo_symbol_candidates
-from utils.fetch_tickers import YFIUA_INDEX_STARTS, fetch_yfiua_index_constituents
+from utils.fetch_tickers import (
+    YFIUA_INDEX_STARTS,
+    fetch_yfiua_index_constituents,
+    fetch_yfiua_index_constituents_with_names,
+)
 
 YFIUA_EXCHANGE_SUFFIXES = {"AX", "DE", "HK", "L", "MC", "MI", "NS", "SS", "SZ"}
 
@@ -35,6 +39,18 @@ def main() -> None:
         help="Subset of yfiua index codes to generate.",
     )
     parser.add_argument(
+        "--year",
+        type=int,
+        default=None,
+        help="Optional historical snapshot year override for all selected codes.",
+    )
+    parser.add_argument(
+        "--month",
+        type=int,
+        default=None,
+        help="Optional historical snapshot month override for all selected codes.",
+    )
+    parser.add_argument(
         "--max-workers",
         type=int,
         default=12,
@@ -52,7 +68,17 @@ def main() -> None:
         default=14,
         help="Calendar-day window used to decide whether yfinance still has a current quote.",
     )
+    parser.add_argument(
+        "--refresh-current-valid",
+        action="store_true",
+        help=(
+            "Revalidate current-valid historical universes against yfinance. "
+            "By default, existing current-valid files are reused to avoid rate limits."
+        ),
+    )
     args = parser.parse_args()
+    if (args.year is None) != (args.month is None):
+        raise SystemExit("--year and --month must be provided together.")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     today = cast(pd.Timestamp, pd.Timestamp(datetime.now()))
@@ -65,36 +91,49 @@ def main() -> None:
         if code not in YFIUA_INDEX_STARTS:
             raise SystemExit(f"Unsupported yfiua code: {code}")
 
-        year, month = YFIUA_INDEX_STARTS[code]
+        default_year, default_month = YFIUA_INDEX_STARTS[code]
+        year = args.year if args.year is not None else default_year
+        month = args.month if args.month is not None else default_month
         try:
-            historical_symbols = fetch_yfiua_index_constituents(
+            historical_symbols, historical_names = fetch_yfiua_index_constituents_with_names(
                 code,
                 year=year,
                 month=month,
             )
-            current_symbols = fetch_yfiua_index_constituents(code)
+            current_symbols, current_names = fetch_yfiua_index_constituents_with_names(
+                code
+            )
         except requests.HTTPError as exc:
             print(f"{code}: skipped unavailable yfiua data ({exc})")
             continue
-        current_valid_symbols = _filter_current_valid_symbols(
-            historical_symbols,
-            start=start_check,
-            max_workers=args.max_workers,
-            batch_size=args.batch_size,
+        current_valid_path = (
+            args.output_dir
+            / f"yfiua_{code}_{year:04d}{month:02d}_current_valid_universe.json"
         )
+        current_valid_symbols = None
+        if not args.refresh_current_valid and current_valid_path.exists():
+            current_valid_symbols = _read_existing_symbols(current_valid_path)
+        if current_valid_symbols is None:
+            current_valid_symbols = _filter_current_valid_symbols(
+                historical_symbols,
+                start=start_check,
+                max_workers=args.max_workers,
+                batch_size=args.batch_size,
+            )
 
         _write_universe(
             args.output_dir / f"yfiua_{code}_{year:04d}{month:02d}_universe.json",
             code=code,
             symbols=historical_symbols,
+            names=historical_names,
             snapshot=f"{year:04d}-{month:02d}",
             filtered_for_current_yfinance_data=False,
         )
         _write_universe(
-            args.output_dir
-            / f"yfiua_{code}_{year:04d}{month:02d}_current_valid_universe.json",
+            current_valid_path,
             code=code,
             symbols=current_valid_symbols,
+            names=historical_names,
             snapshot=f"{year:04d}-{month:02d}",
             filtered_for_current_yfinance_data=True,
         )
@@ -102,6 +141,7 @@ def main() -> None:
             args.output_dir / f"yfiua_{code}_current_universe.json",
             code=code,
             symbols=current_symbols,
+            names=current_names,
             snapshot="current",
             filtered_for_current_yfinance_data=False,
         )
@@ -152,6 +192,14 @@ def _filter_current_valid_symbols(
             if future.result():
                 valid.add(symbol)
     return [symbol for symbol in symbols if symbol in valid]
+
+
+def _read_existing_symbols(path: Path) -> list[str]:
+    payload = json.loads(path.read_text())
+    symbols = payload.get("symbols")
+    if not isinstance(symbols, list):
+        raise ValueError(f"Existing universe symbols must be a list: {path}")
+    return [str(symbol) for symbol in symbols]
 
 
 def _yfiua_yahoo_validation_candidates(symbol: str) -> list[str]:
@@ -210,6 +258,7 @@ def _write_universe(
     *,
     code: str,
     symbols: list[str],
+    names: dict[str, str],
     snapshot: str,
     filtered_for_current_yfinance_data: bool,
 ) -> None:
@@ -220,10 +269,11 @@ def _write_universe(
         "filtered_for_current_yfinance_data": filtered_for_current_yfinance_data,
         "symbols": symbols,
         "asset_classes": {
-            symbol: f"{symbol} (yfiua:{code})" for symbol in symbols
+            symbol: f"{names.get(symbol, symbol)} (yfiua:{code})"
+            for symbol in symbols
         },
     }
-    path.write_text(json.dumps(payload, indent=2) + "\n")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 
 
 if __name__ == "__main__":

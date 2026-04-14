@@ -17,12 +17,19 @@ import pandas as pd
 from .alpaca_interface import AlpacaClient, format_order_plans
 from .backtest import (
     compute_dual_momentum_weights,
+    compute_factor_momentum_weights,
     rolling_window_comparison,
     run_backtest,
     run_dual_momentum_backtest,
+    run_factor_momentum_backtest,
     run_fixed_weight_benchmark,
 )
 from .config import AlpacaConfig, OptimizationConfig
+from .csv_data import (
+    fetch_closes as csv_fetch_closes,
+    write_json_caches as csv_write_json_caches,
+    write_yfinance_compatible_caches as csv_write_yfinance_compatible_caches,
+)
 from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
 from .black_litterman import estimate_inputs_from_black_litterman
 from .risk_parity import estimate_inputs_risk_parity
@@ -30,6 +37,7 @@ from .model import ModelInputs, load_model_inputs
 from .optimizer import effective_turnover_penalty, optimize_weights, project_weights
 from .rebalance import build_order_plan, build_trailing_stop_plan, current_weights
 from .runtime import configure_local_cache_dirs
+from .stockanalysis_data import fetch_closes as stockanalysis_fetch_closes
 from .yfinance_data import fetch_closes as yf_fetch_closes
 from utils.fetch_tickers import fetch_ticker_dict, filter_tickers_before
 
@@ -281,9 +289,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--strategy",
-        choices=("mean-variance", "dual-momentum"),
+        choices=("mean-variance", "dual-momentum", "factor-momentum"),
         default="mean-variance",
-        help="Strategy for live or backtest rebalancing. Dual momentum uses live prices when --estimate-from-history is set.",
+        help="Strategy for live or backtest rebalancing. Momentum strategies use live prices when --estimate-from-history is set.",
     )
     parser.add_argument(
         "--momentum-window",
@@ -296,6 +304,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=3,
         help="Number of assets to hold in dual momentum mode.",
+    )
+    parser.add_argument(
+        "--factor-top-k",
+        type=int,
+        default=1,
+        help="Number of top factor/sleeve groups to search in factor momentum mode.",
     )
     parser.add_argument(
         "--dual-momentum-weighting",
@@ -353,9 +367,32 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--data-source",
-        choices=("alpaca", "yfinance"),
+        choices=("alpaca", "yfinance", "csv", "csv+yfinance", "stockanalysis"),
         default="alpaca",
         help="Source for historical price data in backtest mode.",
+    )
+    parser.add_argument(
+        "--csv-dir",
+        default=".cache/csv",
+        help=(
+            "Directory of local OHLCV CSV files when --data-source csv is used. "
+            "Rows must be symbol,date,open,high,low,close,volume."
+        ),
+    )
+    parser.add_argument(
+        "--csv-write-json-cache",
+        action="store_true",
+        help="Write provider-neutral JSON close caches from --csv-dir before running.",
+    )
+    parser.add_argument(
+        "--stockanalysis-start",
+        default="1980-01-01",
+        help="Start date for --data-source stockanalysis chart JSON.",
+    )
+    parser.add_argument(
+        "--stockanalysis-end",
+        default=None,
+        help="End date for --data-source stockanalysis chart JSON. Defaults to today.",
     )
     parser.add_argument(
         "--yfinance-max-workers",
@@ -368,6 +405,15 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=1.0,
         help="Seconds to wait between yfinance retry attempts.",
+    )
+    parser.add_argument(
+        "--yfinance-symbol-delay",
+        type=float,
+        default=0.02,
+        help=(
+            "Seconds to wait between yfinance symbol downloads when "
+            "--yfinance-max-workers is 1."
+        ),
     )
     parser.add_argument(
         "--benchmark",
@@ -442,8 +488,21 @@ def main() -> None:
     alpaca: AlpacaClient | None = None
     yfinance_max_workers = getattr(args, "yfinance_max_workers", 10)
     yfinance_retry_delay = getattr(args, "yfinance_retry_delay", 1.0)
+    yfinance_symbol_delay = getattr(args, "yfinance_symbol_delay", 0.02)
+    csv_dir = getattr(args, "csv_dir", ".cache/csv")
+    stockanalysis_start = getattr(args, "stockanalysis_start", "1980-01-01")
+    stockanalysis_end = getattr(args, "stockanalysis_end", None)
+    factor_top_k = getattr(args, "factor_top_k", 1)
     if args.trailing_stop is not None and args.trailing_stop <= 0:
         raise ValueError("--trailing-stop must be greater than 0.")
+    if factor_top_k <= 0:
+        raise ValueError("--factor-top-k must be greater than 0.")
+    if yfinance_max_workers < 1:
+        raise ValueError("--yfinance-max-workers must be at least 1.")
+    if yfinance_retry_delay < 0:
+        raise ValueError("--yfinance-retry-delay cannot be negative.")
+    if yfinance_symbol_delay < 0:
+        raise ValueError("--yfinance-symbol-delay cannot be negative.")
 
     # Dynamic universe is only useful for live/dry-run trading, not backtesting
     if args.dynamic_universe and args.backtest_days > 0:
@@ -531,31 +590,57 @@ def main() -> None:
         ]
         closes_for_benchmarks: dict[str, list[float]] = {}
         symbols_for_benchmarks = model.symbols
-        if args.data_source == "yfinance":
-            yfinance_symbols = list(
-                dict.fromkeys([*model.symbols, *benchmark_symbols])
-            )
-            closes_by_symbol = yf_fetch_closes(
-                yfinance_symbols,
-                period="max",
-                use_cache=args.use_cache,
-                refresh_cache=args.refresh_cache,
-                offline=args.offline,
-                max_workers=yfinance_max_workers,
-                retry_delay=yfinance_retry_delay,
-            )
+        if args.data_source in {"yfinance", "csv", "csv+yfinance", "stockanalysis"}:
+            requested_symbols = list(dict.fromkeys([*model.symbols, *benchmark_symbols]))
+            if args.data_source == "csv+yfinance":
+                csv_write_yfinance_compatible_caches(
+                    csv_dir=csv_dir,
+                    symbols=requested_symbols,
+                )
+            if args.data_source in {"yfinance", "csv+yfinance"}:
+                closes_by_symbol = yf_fetch_closes(
+                    requested_symbols,
+                    period="max",
+                    use_cache=args.use_cache or args.data_source == "csv+yfinance",
+                    refresh_cache=(
+                        args.refresh_cache and args.data_source != "csv+yfinance"
+                    ),
+                    offline=args.offline,
+                    max_workers=yfinance_max_workers,
+                    retry_delay=yfinance_retry_delay,
+                    symbol_delay=yfinance_symbol_delay,
+                )
+            else:
+                if args.data_source == "stockanalysis":
+                    closes_by_symbol = stockanalysis_fetch_closes(
+                        requested_symbols,
+                        start=stockanalysis_start,
+                        end=stockanalysis_end,
+                        use_cache=args.use_cache,
+                        refresh_cache=args.refresh_cache,
+                        offline=args.offline,
+                    )
+                elif getattr(args, "csv_write_json_cache", False):
+                    csv_write_json_caches(csv_dir=csv_dir, symbols=requested_symbols)
+                    closes_by_symbol = csv_fetch_closes(
+                        requested_symbols, csv_dir=csv_dir
+                    )
+                else:
+                    closes_by_symbol = csv_fetch_closes(
+                        requested_symbols, csv_dir=csv_dir
+                    )
             # Trim to the requested total_days from the most recent
             for s in closes_by_symbol:
                 closes_by_symbol[s] = closes_by_symbol[s][-total_days:]
             closes_for_benchmarks = closes_by_symbol
-            symbols_for_benchmarks = yfinance_symbols
+            symbols_for_benchmarks = requested_symbols
             closes_by_symbol = {
                 symbol: closes_by_symbol[symbol] for symbol in model.symbols
             }
         else:
             if benchmark_symbols:
                 raise ValueError(
-                    "--benchmark is only supported with --data-source yfinance."
+                    "--benchmark is only supported with --data-source yfinance, csv, or stockanalysis."
                 )
             if alpaca is None:
                 alpaca = AlpacaClient(AlpacaConfig.from_env())
@@ -572,7 +657,7 @@ def main() -> None:
             backtest_days=args.backtest_days,
         )
         if args.sweep:
-            if args.strategy == "dual-momentum":
+            if args.strategy in {"dual-momentum", "factor-momentum"}:
                 raise ValueError(
                     "Sweep mode is only implemented for the mean-variance path."
                 )
@@ -679,6 +764,7 @@ def main() -> None:
                         },
                     },
                     indent=2,
+                    ensure_ascii=False,
                 )
             )
             return
@@ -690,6 +776,25 @@ def main() -> None:
                 lookback_days=args.lookback_days,
                 rebalance_every=args.rebalance_every,
                 top_k=args.top_k,
+                absolute_threshold=args.absolute_momentum_threshold,
+                weighting=args.dual_momentum_weighting,
+                softmax_temperature=args.softmax_temperature,
+                target_vol=args.target_vol,
+                max_single_weight=args.max_single_weight,
+                vol_window=args.vol_window,
+                trailing_stop=args.trailing_stop,
+                basket_opt=args.basket_opt,
+                basket_risk_aversion=args.basket_risk_aversion,
+            )
+        elif args.strategy == "factor-momentum":
+            backtest = run_factor_momentum_backtest(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                asset_classes=model.asset_classes,
+                lookback_days=args.lookback_days,
+                rebalance_every=args.rebalance_every,
+                top_k=args.top_k,
+                factor_top_k=factor_top_k,
                 absolute_threshold=args.absolute_momentum_threshold,
                 weighting=args.dual_momentum_weighting,
                 softmax_temperature=args.softmax_temperature,
@@ -734,6 +839,7 @@ def main() -> None:
                     asset_class_matrix if constrained_class_names else None
                 ),
                 top_k=args.top_k,
+                factor_top_k=factor_top_k,
                 absolute_threshold=args.absolute_momentum_threshold,
                 weighting=args.dual_momentum_weighting,
                 softmax_temperature=args.softmax_temperature,
@@ -786,16 +892,24 @@ def main() -> None:
                 "strategy": args.strategy,
                 "dual_momentum_weighting": (
                     args.dual_momentum_weighting
-                    if args.strategy == "dual-momentum"
+                    if args.strategy in {"dual-momentum", "factor-momentum"}
                     else None
                 ),
+                "factor_top_k": (
+                    factor_top_k if args.strategy == "factor-momentum" else None
+                ),
                 "target_vol": args.target_vol,
-                "vol_window": args.vol_window if args.strategy == "dual-momentum" else None,
+                "vol_window": (
+                    args.vol_window
+                    if args.strategy in {"dual-momentum", "factor-momentum"}
+                    else None
+                ),
                 "max_single_weight": args.max_single_weight,
                 "basket_opt": args.basket_opt,
                 "basket_risk_aversion": (
                     args.basket_risk_aversion
-                    if args.strategy == "dual-momentum" and args.basket_opt
+                    if args.strategy in {"dual-momentum", "factor-momentum"}
+                    and args.basket_opt
                     else None
                 ),
                 "days": args.backtest_days,
@@ -825,7 +939,7 @@ def main() -> None:
         }
         if rolling_comparison is not None:
             result["rolling_vs_spy"] = rolling_comparison
-        print(json.dumps(result, indent=2))
+        print(json.dumps(result, indent=2, ensure_ascii=False))
         return
 
     if alpaca is None:
@@ -848,7 +962,7 @@ def main() -> None:
 
     if args.estimate_from_history:
         history_days = args.lookback_days
-        if args.strategy == "dual-momentum":
+        if args.strategy in {"dual-momentum", "factor-momentum"}:
             history_days = max(history_days, args.lookback_days + 1)
             if args.target_vol is not None:
                 history_days = max(history_days, args.vol_window + 1)
@@ -923,6 +1037,34 @@ def main() -> None:
                 "method": "dual_momentum",
                 "lookback_days": args.lookback_days,
                 "top_k": args.top_k,
+                "weighting": args.dual_momentum_weighting,
+                "vol_window": args.vol_window,
+            }
+        elif args.strategy == "factor-momentum":
+            fm_weights = compute_factor_momentum_weights(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                asset_classes=model.asset_classes,
+                lookback_days=args.lookback_days,
+                top_k=args.top_k,
+                factor_top_k=factor_top_k,
+                weighting=args.dual_momentum_weighting,
+                softmax_temperature=args.softmax_temperature,
+                absolute_threshold=args.absolute_momentum_threshold,
+                basket_opt=args.basket_opt,
+                basket_risk_aversion=args.basket_risk_aversion,
+                target_vol=args.target_vol,
+                max_single_weight=args.max_single_weight,
+                vol_window=args.vol_window,
+            )
+            target_weights = np.array(
+                [fm_weights[s] for s in model.symbols], dtype=float
+            )
+            estimation_metadata = {
+                "method": "factor_momentum",
+                "lookback_days": args.lookback_days,
+                "top_k": args.top_k,
+                "factor_top_k": factor_top_k,
                 "weighting": args.dual_momentum_weighting,
                 "vol_window": args.vol_window,
             }
@@ -1003,7 +1145,7 @@ def main() -> None:
         covariance = model.covariance
         estimation_metadata = {"method": "model_file"}
 
-    if args.strategy != "dual-momentum" and target_weights is None:
+    if args.strategy not in {"dual-momentum", "factor-momentum"} and target_weights is None:
         target_weights = optimize_weights(
             expected_returns=expected_returns,
             covariance=covariance,
@@ -1119,6 +1261,7 @@ def main() -> None:
                 for symbol, value in zip(model.symbols, expected_returns, strict=True)
             }
             if args.strategy != "dual-momentum"
+            and args.strategy != "factor-momentum"
             else None
         ),
         "cash": {
@@ -1145,7 +1288,7 @@ def main() -> None:
         "trailing_stop_cancellations": trailing_stop_cancellations,
         "trailing_stop_orders": [asdict(item) for item in trailing_stop_plan],
     }
-    print(json.dumps(result, indent=2))
+    print(json.dumps(result, indent=2, ensure_ascii=False))
 
     if args.submit:
         canceled_trailing_stops = (
@@ -1184,6 +1327,7 @@ def main() -> None:
                         "submitted_trailing_stops": submitted_trailing_stops,
                     },
                     indent=2,
+                    ensure_ascii=False,
                 )
             )
 

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from portfolio_opt.backtest import rolling_window_comparison, run_dual_momentum_backtest
+from portfolio_opt.backtest import (
+    rolling_window_comparison,
+    run_dual_momentum_backtest,
+    run_factor_momentum_backtest,
+)
 from portfolio_opt.config import OptimizationConfig
 
 
@@ -149,3 +153,33 @@ def test_dual_momentum_inverse_vol_weighting_tilts_toward_lower_vol_asset() -> N
     assert result.latest_weights[1] > result.latest_weights[0]
     assert result.latest_weights[2] == 0.0
     assert round(float(result.latest_weights.sum()), 6) == 1.0
+
+
+def test_factor_momentum_selects_names_inside_top_factor_sleeve() -> None:
+    closes_by_symbol = {
+        "A_FAST": [100.0, 105.0, 111.0, 118.0, 126.0],
+        "A_SLOW": [100.0, 101.0, 102.0, 103.0, 104.0],
+        "B_FAST": [100.0, 110.0, 120.0, 130.0, 140.0],
+        "B_BAD": [100.0, 80.0, 70.0, 65.0, 60.0],
+        "SGOV": [100.0, 100.1, 100.2, 100.3, 100.4],
+    }
+    asset_classes = {
+        "A_FAST": "Alpha Corp (factor_a)",
+        "A_SLOW": "Alpha Slow (factor_a)",
+        "B_FAST": "Beta Fast (factor_b)",
+        "B_BAD": "Beta Bad (factor_b)",
+        "SGOV": "cash_like",
+    }
+
+    result = run_factor_momentum_backtest(
+        symbols=["A_FAST", "A_SLOW", "B_FAST", "B_BAD", "SGOV"],
+        closes_by_symbol=closes_by_symbol,
+        asset_classes=asset_classes,
+        lookback_days=2,
+        rebalance_every=1,
+        top_k=1,
+        factor_top_k=1,
+        absolute_threshold=0.0,
+    )
+
+    assert result.latest_weights.tolist() == [1.0, 0.0, 0.0, 0.0, 0.0]

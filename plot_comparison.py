@@ -9,8 +9,14 @@ today = str(date.today())
 # MODEL_NAME = "Nasdaq 100"
 # MODEL_NAME = "Nasdaq100+SP500+sectors"
 # MODEL_NAME = "nasdaq100_sp500_sector_universe_b2016filtered"
-MODEL_NAME = "yfiua_hsi_202307_current_valid_universe"
+# MODEL_NAME = "yfiua_hsi_202307_current_valid_universe"
 # MODEL_NAME = "yfiua_ftse100_202307_current_valid_universe"
+# MODEL_NAME = "yfiua_csi300_202307_current_valid_universe"
+# MODEL_NAME = "yfiua_csi500_202402_current_valid_universe"
+# MODEL_NAME = "yfiua_csi1000_202402_current_valid_universe"
+# MODEL_NAME = "yfiua_csi_combined_202402_current_valid_with_benchmarks_universe"
+# MODEL_NAME = "yfiua_sse_202307_current_valid_universe"
+MODEL_NAME = "nikkei225_current_backtest_valid_universe"
 # MODEL_NAME = "sector_universe"
 # MODEL_NAME = "nasdaq100_universe"
 # MODEL = "examples/nasdaq100_universe.json"
@@ -19,7 +25,12 @@ MODEL = f"examples/{MODEL_NAME}.json"
 # LOOKBACK_DAYS = 60
 LOOKBACK_DAYS = 252
 # BACKTEST_DAYS = 252*9
-BACKTEST_DAYS = 680
+# BACKTEST_DAYS = 680
+# BACKTEST_DAYS = 675
+# BACKTEST_DAYS = 470
+# BACKTEST_DAYS = 408
+# BACKTEST_DAYS = 402
+BACKTEST_DAYS = 604
 MOMENTUM_WINDOW = 40
 MODEL_FILENAME = f"{MODEL_NAME}_{BACKTEST_DAYS}_{LOOKBACK_DAYS}_{today}"
 INDEX_PERIOD = "10y"
@@ -30,11 +41,11 @@ DATASOURCE = "yfinance"
 #     ("IWM", "IWM (Russell 2000)"),
 #     ("TLT", "TLT (20+Yr Treasury)"),
 # ]
-BENCHMARKS = [
-    # ("^HSI", "Hang Seng Index"),
-    ("2800.HK", "Tracker Fund of Hong Kong"),
-    ("2819.HK", "ABF Hong Kong Bond"),
-]
+# BENCHMARKS = [
+#     # ("^HSI", "Hang Seng Index"),
+#     ("2800.HK", "Tracker Fund of Hong Kong"),
+#     ("2819.HK", "ABF Hong Kong Bond"),
+# ]
 # BENCHMARKS = [
 #     # ("^FTSE", "FTSE 100"),
 #     ("ISF.L", "iShares Core FTSE 100"),
@@ -42,11 +53,22 @@ BENCHMARKS = [
 #     ("IGLS.L", "iShares UK Gilts 0-5yr"),
 # ]
 # BENCHMARKS = [
-#     # ("^N225", "Nikkei 225"),
-#     ("1321.T", "NEXT FUNDS Nikkei 225 ETF"),
-#     ("1306.T", "NEXT FUNDS TOPIX ETF"),
-#     ("2561.T", "iShares Japan Government Bond ETF"),
+#     ("510300.SS", "Huatai-PB CSI 300 ETF"),
+#     ("510500.SS", "China CSI 500 ETF"),
+#     # ("512100.SS", "China Southern CSI 1000 ETF"),
+#     # ("000852.SS", "CSI 1000 Index"),
+#     ("511010.SS", "Guotai 5Y China Treasury ETF"),
+#     ("000001.SS", "SSE Composite"),
+#     ("399001.SZ", "SZSE Component"),
+#     ("510050.SS", "SSE 50 ETF"),
+#     ("159915.SZ", "ChiNext ETF")
 # ]
+BENCHMARKS = [
+    # ("^N225", "Nikkei 225"),
+    ("1321.T", "NEXT FUNDS Nikkei 225 ETF"),
+    ("1306.T", "NEXT FUNDS TOPIX ETF"),
+    ("2561.T", "iShares Japan Government Bond ETF"),
+]
 
 def run_backtest(args):
     print(f"Running: {args[1]} ...")
@@ -258,4 +280,4 @@ plt.legend(fontsize=10)
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.savefig(f'plots/strategy_comparison_{MODEL_FILENAME}.png', dpi=150)
-print(f"Saved strategy_comparison_{MODEL_FILENAME}.png")
+print(f"Saved plots/strategy_comparison_{MODEL_FILENAME}.png")

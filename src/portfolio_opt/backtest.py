@@ -51,6 +51,7 @@ def compute_dual_momentum_weights(
     max_single_weight: float | None = None,
     vol_window: int = 63,
     trailing_stop: float | None = None,
+    factor_top_k: int | None = None,
 ) -> dict[str, float]:
     """Compute dual-momentum target weights for a single point in time.
 
@@ -94,10 +95,18 @@ def compute_dual_momentum_weights(
         if cash_like_index is not None
         else absolute_threshold
     )
+    candidate_risky_indices = _factor_momentum_candidate_indices(
+        risky_indices=risky_indices,
+        asset_classes=asset_classes,
+        symbols=symbols,
+        trailing_returns=trailing_returns,
+        factor_top_k=factor_top_k,
+        threshold=max(absolute_threshold, defensive_floor),
+    )
     risky_ranked = sorted(
         (
             (idx, float(trailing_returns[idx]))
-            for idx in risky_indices
+            for idx in candidate_risky_indices
             if float(trailing_returns[idx]) > max(absolute_threshold, defensive_floor)
         ),
         key=lambda item: item[1],
@@ -180,6 +189,83 @@ def compute_dual_momentum_weights(
             target_weights[index] = weight
 
     return {s: float(target_weights[i]) for i, s in enumerate(symbols)}
+
+
+def compute_factor_momentum_weights(
+    symbols: list[str],
+    closes_by_symbol: dict[str, list[float]],
+    asset_classes: dict[str, str],
+    lookback_days: int,
+    top_k: int,
+    factor_top_k: int = 1,
+    weighting: str = "equal",
+    softmax_temperature: float = 0.05,
+    absolute_threshold: float = 0.0,
+    basket_opt: str | None = None,
+    basket_risk_aversion: float = 1.0,
+    target_vol: float | None = None,
+    max_single_weight: float | None = None,
+    vol_window: int = 63,
+) -> dict[str, float]:
+    return compute_dual_momentum_weights(
+        symbols=symbols,
+        closes_by_symbol=closes_by_symbol,
+        asset_classes=asset_classes,
+        lookback_days=lookback_days,
+        top_k=top_k,
+        weighting=weighting,
+        softmax_temperature=softmax_temperature,
+        absolute_threshold=absolute_threshold,
+        basket_opt=basket_opt,
+        basket_risk_aversion=basket_risk_aversion,
+        target_vol=target_vol,
+        max_single_weight=max_single_weight,
+        vol_window=vol_window,
+        factor_top_k=factor_top_k,
+    )
+
+
+def _factor_label(asset_class: str) -> str:
+    text = asset_class.strip()
+    if text.endswith(")") and "(" in text:
+        return text.rsplit("(", 1)[1][:-1].strip()
+    return text
+
+
+def _factor_momentum_candidate_indices(
+    *,
+    risky_indices: list[int],
+    asset_classes: dict[str, str],
+    symbols: list[str],
+    trailing_returns: np.ndarray,
+    factor_top_k: int | None,
+    threshold: float,
+) -> list[int]:
+    if factor_top_k is None:
+        return risky_indices
+    if factor_top_k <= 0:
+        raise ValueError("factor_top_k must be positive.")
+
+    groups: dict[str, list[int]] = {}
+    for index in risky_indices:
+        factor = _factor_label(asset_classes.get(symbols[index], ""))
+        groups.setdefault(factor, []).append(index)
+
+    ranked = sorted(
+        (
+            (factor, float(np.mean(trailing_returns[indices])))
+            for factor, indices in groups.items()
+            if indices and float(np.mean(trailing_returns[indices])) > threshold
+        ),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    selected_factors = {factor for factor, _score in ranked[:factor_top_k]}
+    return [
+        index
+        for index in risky_indices
+        if _factor_label(asset_classes.get(symbols[index], "")) in selected_factors
+    ]
 
 
 def _normalize_positive(values: np.ndarray) -> np.ndarray:
@@ -441,6 +527,7 @@ def run_dual_momentum_backtest(
     basket_opt: str | None = None,
     basket_risk_aversion: float = 1.0,
     trailing_stop: float | None = None,
+    factor_top_k: int | None = None,
 ) -> BacktestResult:
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
@@ -509,10 +596,18 @@ def run_dual_momentum_backtest(
                 if cash_like_index is not None
                 else absolute_threshold
             )
+            candidate_risky_indices = _factor_momentum_candidate_indices(
+                risky_indices=risky_indices,
+                asset_classes=asset_classes,
+                symbols=symbols,
+                trailing_returns=trailing_returns,
+                factor_top_k=factor_top_k,
+                threshold=max(absolute_threshold, defensive_floor),
+            )
             risky_ranked = sorted(
                 (
                     (index, float(trailing_returns[index]))
-                    for index in risky_indices
+                    for index in candidate_risky_indices
                     if float(trailing_returns[index])
                     > max(absolute_threshold, defensive_floor)
                 ),
@@ -654,6 +749,45 @@ def run_dual_momentum_backtest(
     )
 
 
+def run_factor_momentum_backtest(
+    *,
+    symbols: list[str],
+    closes_by_symbol: dict[str, list[float]],
+    asset_classes: dict[str, str],
+    lookback_days: int,
+    rebalance_every: int,
+    top_k: int,
+    factor_top_k: int,
+    absolute_threshold: float,
+    weighting: str = "equal",
+    softmax_temperature: float = 0.05,
+    target_vol: float | None = None,
+    max_single_weight: float | None = None,
+    vol_window: int = 63,
+    basket_opt: str | None = None,
+    basket_risk_aversion: float = 1.0,
+    trailing_stop: float | None = None,
+) -> BacktestResult:
+    return run_dual_momentum_backtest(
+        symbols=symbols,
+        closes_by_symbol=closes_by_symbol,
+        asset_classes=asset_classes,
+        lookback_days=lookback_days,
+        rebalance_every=rebalance_every,
+        top_k=top_k,
+        absolute_threshold=absolute_threshold,
+        weighting=weighting,
+        softmax_temperature=softmax_temperature,
+        target_vol=target_vol,
+        max_single_weight=max_single_weight,
+        vol_window=vol_window,
+        basket_opt=basket_opt,
+        basket_risk_aversion=basket_risk_aversion,
+        trailing_stop=trailing_stop,
+        factor_top_k=factor_top_k,
+    )
+
+
 def _run_single_window(
     *,
     strategy: str,
@@ -668,6 +802,7 @@ def _run_single_window(
     opt_config: OptimizationConfig,
     asset_class_matrix: np.ndarray | None,
     top_k: int,
+    factor_top_k: int,
     absolute_threshold: float,
     weighting: str,
     softmax_temperature: float,
@@ -681,6 +816,19 @@ def _run_single_window(
             lookback_days=lookback_days,
             rebalance_every=rebalance_every,
             top_k=top_k,
+            absolute_threshold=absolute_threshold,
+            weighting=weighting,
+            softmax_temperature=softmax_temperature,
+        )
+    elif strategy == "factor-momentum":
+        backtest = run_factor_momentum_backtest(
+            symbols=symbols,
+            closes_by_symbol=window_closes,
+            asset_classes=asset_classes,
+            lookback_days=lookback_days,
+            rebalance_every=rebalance_every,
+            top_k=top_k,
+            factor_top_k=factor_top_k,
             absolute_threshold=absolute_threshold,
             weighting=weighting,
             softmax_temperature=softmax_temperature,
@@ -743,6 +891,7 @@ def rolling_window_comparison(
     absolute_threshold: float,
     weighting: str,
     softmax_temperature: float,
+    factor_top_k: int = 1,
 ) -> dict[str, float | int]:
     if window_days <= 0 or step_days <= 0:
         raise ValueError("window_days and step_days must be positive.")
@@ -783,6 +932,7 @@ def rolling_window_comparison(
                     opt_config=opt_config,
                     asset_class_matrix=asset_class_matrix,
                     top_k=top_k,
+                    factor_top_k=factor_top_k,
                     absolute_threshold=absolute_threshold,
                     weighting=weighting,
                     softmax_temperature=softmax_temperature,
@@ -807,6 +957,7 @@ def rolling_window_comparison(
                     opt_config=opt_config,
                     asset_class_matrix=asset_class_matrix,
                     top_k=top_k,
+                    factor_top_k=factor_top_k,
                     absolute_threshold=absolute_threshold,
                     weighting=weighting,
                     softmax_temperature=softmax_temperature,

@@ -7,9 +7,10 @@ custom backtest can reach back to ETF inception (e.g. the 2008 crisis).
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -24,9 +25,19 @@ except ImportError as exc:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
+_YAHOO_EXCHANGE_SUFFIXES = {"HK", "L", "SS", "SZ"}
+
+
+def _report_fetch_progress(label: str | None, index: int, total: int, symbol: str) -> None:
+    if label is None or total <= 1:
+        return
+    print(f"{label} {index}/{total}: {symbol}", file=sys.stderr, flush=True)
+
 
 def _yahoo_symbol_candidates(symbol: str) -> list[str]:
     candidates = [symbol]
+    if "." in symbol and symbol.rsplit(".", 1)[1].upper() in _YAHOO_EXCHANGE_SUFFIXES:
+        return candidates
     if "." in symbol:
         fallback = symbol.replace(".", "-")
         candidates.append(fallback)
@@ -100,6 +111,7 @@ def fetch_closes(
     retries: int = 3,
     retry_delay: float = 1.0,
     max_workers: int = 10,
+    symbol_delay: float = 0.02,
     use_cache: bool = False,
     refresh_cache: bool = False,
     offline: bool = False,
@@ -118,6 +130,8 @@ def fetch_closes(
         Seconds to wait between retries.
     max_workers : int
         Maximum number of concurrent threads for fetching symbols.
+    symbol_delay : float
+        Seconds to wait between symbol downloads when max_workers is 1.
     use_cache : bool
         Reuse a cached yfinance result when available, otherwise fetch and write it.
     refresh_cache : bool
@@ -142,6 +156,7 @@ def fetch_closes(
             retries=retries,
             retry_delay=retry_delay,
             max_workers=max_workers,
+            symbol_delay=symbol_delay,
             refresh_cache=refresh_cache,
             offline=offline,
         )
@@ -165,28 +180,14 @@ def fetch_closes(
             for symbol, values in read_cache(path).items()
         }
 
-    closes_by_symbol: dict[str, pd.Series] = {}
-    failed: list[str] = []
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(_fetch_single_symbol, s, period, retries, retry_delay): s
-            for s in symbols
-        }
-        for future in as_completed(futures):
-            symbol = futures[future]
-            try:
-                fetched_symbol, closes = future.result()
-                closes_by_symbol[fetched_symbol] = closes
-            except RuntimeError as exc:
-                failed.append(symbol)
-                logger.warning("Failed to fetch %s: %s", symbol, exc)
-
-    if failed:
-        raise RuntimeError(
-            f"Failed to fetch {len(failed)}/{len(symbols)} symbols: "
-            f"{', '.join(failed[:10])}{'...' if len(failed) > 10 else ''}"
-        )
+    closes_by_symbol = _fetch_symbols(
+        symbols,
+        period=period,
+        retries=retries,
+        retry_delay=retry_delay,
+        max_workers=max_workers,
+        symbol_delay=symbol_delay,
+    )
 
     close_frame = pd.concat(
         [closes_by_symbol[symbol].rename(symbol) for symbol in symbols],
@@ -217,6 +218,7 @@ def _incremental_fetch_closes(
     retries: int,
     retry_delay: float,
     max_workers: int,
+    symbol_delay: float,
     refresh_cache: bool,
     offline: bool,
 ) -> dict[str, list[float]] | None:
@@ -240,15 +242,46 @@ def _incremental_fetch_closes(
 
     if not refresh_cache:
         if missing_symbols:
-            return None
+            def cache_symbol(symbol: str, series: pd.Series) -> None:
+                cached_by_symbol[symbol] = series
+                write_cache(
+                    _symbol_closes_cache_path(symbol),
+                    _series_to_cached_rows(symbol, series),
+                )
+
+            _fetch_symbols(
+                missing_symbols,
+                period=period,
+                retries=retries,
+                retry_delay=retry_delay,
+                max_workers=max_workers,
+                symbol_delay=symbol_delay,
+                on_success=cache_symbol,
+                progress_label="Fetching missing yfinance cache",
+            )
+            if any(symbol not in cached_by_symbol for symbol in symbols):
+                return None
         return _align_close_series(symbols, cached_by_symbol)
 
-    refreshed = _fetch_symbols(
+    def cache_merged_symbol(symbol: str, series: pd.Series) -> None:
+        if series.empty and symbol in cached_by_symbol:
+            return
+        merged = _merge_close_series(cached_by_symbol.get(symbol), series)
+        cached_by_symbol[symbol] = merged
+        write_cache(
+            _symbol_closes_cache_path(symbol),
+            _series_to_cached_rows(symbol, merged),
+        )
+
+    _fetch_symbols(
         missing_symbols,
         period=period,
         retries=retries,
         retry_delay=retry_delay,
         max_workers=max_workers,
+        symbol_delay=symbol_delay,
+        on_success=cache_merged_symbol,
+        progress_label="Fetching missing yfinance cache",
     )
     today = pd.Timestamp.today().normalize()
     starts_by_symbol: dict[str, pd.Timestamp] = {}
@@ -258,20 +291,15 @@ def _incremental_fetch_closes(
         next_start = series.index[-1] + pd.Timedelta(days=1)
         if next_start <= today:
             starts_by_symbol[symbol] = next_start
-    refreshed.update(
-        _fetch_symbols_since(
-            starts_by_symbol,
-            retries=retries,
-            retry_delay=retry_delay,
-            max_workers=max_workers,
-        )
+    _fetch_symbols_since(
+        starts_by_symbol,
+        retries=retries,
+        retry_delay=retry_delay,
+        max_workers=max_workers,
+        symbol_delay=symbol_delay,
+        on_success=cache_merged_symbol,
+        progress_label="Refreshing yfinance cache",
     )
-    for symbol, series in refreshed.items():
-        if series.empty and symbol in cached_by_symbol:
-            continue
-        merged = _merge_close_series(cached_by_symbol.get(symbol), series)
-        cached_by_symbol[symbol] = merged
-        write_cache(_symbol_closes_cache_path(symbol), _series_to_cached_rows(symbol, merged))
 
     if any(symbol not in cached_by_symbol for symbol in symbols):
         return None
@@ -285,11 +313,39 @@ def _fetch_symbols(
     retries: int,
     retry_delay: float,
     max_workers: int,
+    symbol_delay: float = 0.0,
+    on_success: Callable[[str, pd.Series], None] | None = None,
+    progress_label: str | None = None,
 ) -> dict[str, pd.Series]:
     if not symbols:
         return {}
     closes_by_symbol: dict[str, pd.Series] = {}
     failed: list[str] = []
+    if max_workers <= 1:
+        for index, symbol in enumerate(symbols, start=1):
+            _report_fetch_progress(progress_label, index, len(symbols), symbol)
+            try:
+                fetched_symbol, closes = _fetch_single_symbol(
+                    symbol,
+                    period,
+                    retries,
+                    retry_delay,
+                )
+                closes_by_symbol[fetched_symbol] = closes
+                if on_success is not None:
+                    on_success(fetched_symbol, closes)
+            except RuntimeError as exc:
+                failed.append(symbol)
+                logger.warning("Failed to fetch %s: %s", symbol, exc)
+            if symbol_delay > 0 and index < len(symbols):
+                time.sleep(symbol_delay)
+        if failed:
+            raise RuntimeError(
+                f"Failed to fetch {len(failed)}/{len(symbols)} symbols: "
+                f"{', '.join(failed[:10])}{'...' if len(failed) > 10 else ''}"
+            )
+        return closes_by_symbol
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(_fetch_single_symbol, s, period, retries, retry_delay): s
@@ -300,6 +356,8 @@ def _fetch_symbols(
             try:
                 fetched_symbol, closes = future.result()
                 closes_by_symbol[fetched_symbol] = closes
+                if on_success is not None:
+                    on_success(fetched_symbol, closes)
             except RuntimeError as exc:
                 failed.append(symbol)
                 logger.warning("Failed to fetch %s: %s", symbol, exc)
@@ -318,11 +376,40 @@ def _fetch_symbols_since(
     retries: int,
     retry_delay: float,
     max_workers: int,
+    symbol_delay: float = 0.0,
+    on_success: Callable[[str, pd.Series], None] | None = None,
+    progress_label: str | None = None,
 ) -> dict[str, pd.Series]:
     if not starts_by_symbol:
         return {}
     closes_by_symbol: dict[str, pd.Series] = {}
     failed: list[str] = []
+    if max_workers <= 1:
+        starts = list(starts_by_symbol.items())
+        for index, (symbol, start) in enumerate(starts, start=1):
+            _report_fetch_progress(progress_label, index, len(starts), symbol)
+            try:
+                fetched_symbol, closes = _fetch_single_symbol_from(
+                    symbol,
+                    start,
+                    retries,
+                    retry_delay,
+                )
+                closes_by_symbol[fetched_symbol] = closes
+                if on_success is not None:
+                    on_success(fetched_symbol, closes)
+            except RuntimeError as exc:
+                failed.append(symbol)
+                logger.warning("Failed to fetch %s: %s", symbol, exc)
+            if symbol_delay > 0 and index < len(starts):
+                time.sleep(symbol_delay)
+        if failed:
+            raise RuntimeError(
+                f"Failed to fetch {len(failed)}/{len(starts_by_symbol)} symbols: "
+                f"{', '.join(failed[:10])}{'...' if len(failed) > 10 else ''}"
+            )
+        return closes_by_symbol
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
@@ -339,6 +426,8 @@ def _fetch_symbols_since(
             try:
                 fetched_symbol, closes = future.result()
                 closes_by_symbol[fetched_symbol] = closes
+                if on_success is not None:
+                    on_success(fetched_symbol, closes)
             except RuntimeError as exc:
                 failed.append(symbol)
                 logger.warning("Failed to fetch %s: %s", symbol, exc)

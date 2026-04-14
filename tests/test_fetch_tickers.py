@@ -61,15 +61,15 @@ def test_fetch_yfiua_index_constituents_uses_monthly_json(monkeypatch) -> None:
             return {
                 "constituents": [
                     {"symbol": "AAPL"},
-                    {"ticker": "MSFT"},
+                    {"ticker": "MSFT", "Name": "Microsoft"},
                     {"symbol": "BA/.L"},
                     {"ticker": "BT/A.L"},
                     {"symbol": "ABC/.TO"},
                     {"ticker": "XYZ/A.TO"},
-                    {"symbol": "000333/SZ"},
-                    {"symbol": "600519/SS"},
-                    {"symbol": "0700/HK"},
-                    {"symbol": "SAP/DE"},
+                    {"symbol": "000333/SZ", "name": "Midea"},
+                    {"symbol": "600519/SS", "Name": "Kweichow Moutai"},
+                    {"symbol": "0700/HK", "Name": "Tencent"},
+                    {"symbol": "SAP/DE", "Name": "SAP"},
                 ]
             }
 
@@ -101,6 +101,42 @@ def test_fetch_yfiua_index_constituents_uses_monthly_json(monkeypatch) -> None:
             {"User-Agent": "Mozilla/5.0"},
         )
     ]
+    assert fetch_tickers.fetch_yfiua_index_constituent_names(
+        "nasdaq100",
+        year=2026,
+        month=4,
+    ) == {
+        "MSFT": "Microsoft",
+        "000333.SZ": "Midea",
+        "600519.SS": "Kweichow Moutai",
+        "0700.HK": "Tencent",
+        "SAP.DE": "SAP",
+    }
+    assert fetch_tickers.fetch_yfiua_index_constituents_with_names(
+        "nasdaq100",
+        year=2026,
+        month=4,
+    ) == (
+        [
+            "AAPL",
+            "MSFT",
+            "BA.L",
+            "BT-A.L",
+            "ABC.TO",
+            "XYZ-A.TO",
+            "000333.SZ",
+            "600519.SS",
+            "0700.HK",
+            "SAP.DE",
+        ],
+        {
+            "MSFT": "Microsoft",
+            "000333.SZ": "Midea",
+            "600519.SS": "Kweichow Moutai",
+            "0700.HK": "Tencent",
+            "SAP.DE": "SAP",
+        },
+    )
 
 
 def test_fetch_yfiua_index_constituents_uses_current_json_by_default(
@@ -151,6 +187,182 @@ def test_fetch_ftse_tickers_uses_yfiua_constituents(monkeypatch) -> None:
     assert called == ["ftse100"]
 
 
+def test_fetch_historical_sp500_tickers_selects_latest_prior_row(monkeypatch) -> None:
+    csv = "\n".join(
+        [
+            "date,tickers",
+            '2015-12-31,"AAA,BBB"',
+            '2016-01-05,"AAA,CCC"',
+        ]
+    )
+    requested: list[str] = []
+
+    class FakeResponse:
+        text = csv
+
+        def raise_for_status(self) -> None:
+            pass
+
+    def fake_get(url: str, *, headers: dict[str, str]):
+        requested.append(url)
+        return FakeResponse()
+
+    monkeypatch.setattr(fetch_tickers.requests, "get", fake_get)
+    monkeypatch.setattr(
+        fetch_tickers,
+        "cache_path",
+        lambda _name, _payload: type("MissingPath", (), {"exists": lambda self: False})(),
+    )
+    monkeypatch.setattr(fetch_tickers, "write_cache", lambda _path, _payload: None)
+
+    assert fetch_tickers.fetch_historical_sp500_tickers("2016-01-04") == [
+        "AAA",
+        "BBB",
+    ]
+    assert requested == [fetch_tickers.SP500_HISTORICAL_COMPONENTS_URL]
+
+
+def test_fetch_historical_sp500_tickers_reuses_cache(monkeypatch) -> None:
+    payload = {
+        "rows": [
+            {"date": "2015-12-31", "tickers": "AAA,BBB"},
+            {"date": "2016-01-05", "tickers": "AAA,CCC"},
+        ]
+    }
+
+    class ExistingPath:
+        def exists(self) -> bool:
+            return True
+
+    monkeypatch.setattr(
+        fetch_tickers,
+        "cache_path",
+        lambda _name, _payload: ExistingPath(),
+    )
+    monkeypatch.setattr(fetch_tickers, "read_cache", lambda _path: payload)
+    monkeypatch.setattr(
+        fetch_tickers.requests,
+        "get",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("network should not be used on cache hit")
+        ),
+    )
+
+    assert fetch_tickers.fetch_historical_sp500_tickers("2016-01-06") == [
+        "AAA",
+        "CCC",
+    ]
+
+
+def test_fetch_historical_sp500_tickers_errors_before_first_row() -> None:
+    payload = {"rows": [{"date": "2015-12-31", "tickers": "AAA,BBB"}]}
+
+    try:
+        fetch_tickers._historical_sp500_symbols_from_payload(
+            payload,
+            fetch_tickers.pd.Timestamp("2015-01-01"),
+        )
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("date before first historical S&P row should fail")
+
+    assert "No historical S&P 500 data" in message
+
+
+def test_parse_nikkei225_component_html() -> None:
+    html = """
+    <div class="idx-index-components table-responsive-md">
+      <h3 class="idx-section-subheading">Automobiles</h3>
+      <table><tbody>
+        <tr><td>543A</td><td>ARCHION CORP.</td></tr>
+        <tr><td>7203</td><td>TOYOTA MOTOR CORP.</td></tr>
+        <tr><td>7267</td><td>HONDA MOTOR CO., LTD.</td></tr>
+      </tbody></table>
+    </div>
+    <div class="idx-index-components table-responsive-md">
+      <h3 class="idx-section-subheading">Banks</h3>
+      <table><tbody>
+        <tr><td>8306</td><td>MITSUBISHI UFJ FINANCIAL GROUP, INC.</td></tr>
+      </tbody></table>
+    </div>
+    """
+
+    assert fetch_tickers._parse_nikkei225_component_html(html) == [
+        fetch_tickers.NikkeiConstituent(
+            symbol="543A.T",
+            name="ARCHION CORP.",
+            sector="Automobiles",
+        ),
+        fetch_tickers.NikkeiConstituent(
+            symbol="7203.T",
+            name="TOYOTA MOTOR CORP.",
+            sector="Automobiles",
+        ),
+        fetch_tickers.NikkeiConstituent(
+            symbol="7267.T",
+            name="HONDA MOTOR CO., LTD.",
+            sector="Automobiles",
+        ),
+        fetch_tickers.NikkeiConstituent(
+            symbol="8306.T",
+            name="MITSUBISHI UFJ FINANCIAL GROUP, INC.",
+            sector="Banks",
+        ),
+    ]
+
+
+def test_fetch_nikkei225_constituents_writes_and_reuses_cache(monkeypatch) -> None:
+    class DummyPath:
+        def __init__(self) -> None:
+            self.exists_value = False
+
+        def exists(self) -> bool:
+            return self.exists_value
+
+    class FakeResponse:
+        text = """
+        <div class="idx-index-components table-responsive-md">
+          <h3 class="idx-section-subheading">Automobiles</h3>
+          <table><tbody><tr><td>7203</td><td>TOYOTA MOTOR CORP.</td></tr></tbody></table>
+        </div>
+        """
+
+        def raise_for_status(self) -> None:
+            pass
+
+    path = DummyPath()
+    cache: dict[str, Any] = {}
+    requested: list[tuple[str, dict[str, str], int]] = []
+
+    def fake_get(url: str, *, headers: dict[str, str], timeout: int):
+        requested.append((url, headers, timeout))
+        return FakeResponse()
+
+    def fake_write_cache(_path: DummyPath, payload: dict[str, Any]) -> None:
+        cache["payload"] = payload
+        path.exists_value = True
+
+    monkeypatch.setattr(fetch_tickers, "cache_path", lambda _name, _payload: path)
+    monkeypatch.setattr(fetch_tickers, "read_cache", lambda _path: cache["payload"])
+    monkeypatch.setattr(fetch_tickers, "write_cache", fake_write_cache)
+    monkeypatch.setattr(fetch_tickers.requests, "get", fake_get)
+
+    expected = [
+        fetch_tickers.NikkeiConstituent(
+            symbol="7203.T",
+            name="TOYOTA MOTOR CORP.",
+            sector="Automobiles",
+        )
+    ]
+    assert fetch_tickers.fetch_nikkei225_constituents() == expected
+    assert fetch_tickers.fetch_nikkei225_constituents() == expected
+    assert len(requested) == 1
+    assert requested[0][0] == fetch_tickers.NIKKEI225_COMPONENTS_URL
+    assert "Chrome" in requested[0][1]["User-Agent"]
+    assert requested[0][2] == 20
+
+
 def test_fetch_ticker_dict_supports_opt_in_ftse100(monkeypatch) -> None:
     called: list[str] = []
 
@@ -170,6 +382,20 @@ def test_fetch_ticker_dict_supports_opt_in_ftse100(monkeypatch) -> None:
         "asset_classes": {},
     }
     assert called == ["ftse100"]
+
+
+def test_fetch_ticker_dict_supports_nikkei225(monkeypatch) -> None:
+    monkeypatch.setattr(fetch_tickers, "fetch_nikkei225_tickers", lambda: ["7203.T"])
+    monkeypatch.setattr(
+        fetch_tickers,
+        "_format_ticker_dict",
+        lambda tickers: {"symbols": tickers, "asset_classes": {}},
+    )
+
+    assert fetch_tickers.fetch_ticker_dict(ticker_basket=["nikkei225"]) == {
+        "symbols": ["7203.T"],
+        "asset_classes": {},
+    }
 
 
 def test_fetch_ticker_dict_supports_yfiua_prefixed_builtin(monkeypatch) -> None:
