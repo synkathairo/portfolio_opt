@@ -37,7 +37,9 @@ def _read_ohlcv_csv(path: Path) -> pd.DataFrame:
     return frame
 
 
-def load_close_series_by_symbol(csv_dir: str | Path = ".cache/csv") -> dict[str, pd.Series]:
+def load_close_series_by_symbol(
+    csv_dir: str | Path = ".cache/csv",
+) -> dict[str, pd.Series]:
     csv_dir = Path(csv_dir)
     if not csv_dir.exists():
         raise FileNotFoundError(f"CSV directory does not exist: {csv_dir}")
@@ -96,7 +98,9 @@ def _csv_closes_cache_path(symbol: str) -> Path:
             "columns": CSV_COLUMNS,
         },
     )
-    return path.with_name(f"csv_closes_v2_{_safe_symbol(symbol)}_{path.name.rsplit('_', 1)[-1]}")
+    return path.with_name(
+        f"csv_closes_v2_{_safe_symbol(symbol)}_{path.name.rsplit('_', 1)[-1]}"
+    )
 
 
 def _yfinance_compatible_cache_path(symbol: str) -> Path:

@@ -163,6 +163,54 @@ def test_fetch_yfiua_index_constituents_uses_current_json_by_default(
     ]
 
 
+def test_fetch_nasdaq100_tickers_retries_malformed_json(monkeypatch) -> None:
+    responses = [
+        {
+            "data": {
+                "data": None,
+            }
+        },
+        {
+            "data": {
+                "data": {
+                    "rows": [
+                        {"symbol": "AAPL"},
+                        {"symbol": "MSFT"},
+                        {"symbol": ""},
+                        {"companyName": "Missing Symbol"},
+                    ]
+                }
+            }
+        },
+    ]
+    requested: list[tuple[str, dict[str, str], int]] = []
+    sleeps: list[float] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self._payload = payload
+
+        def json(self) -> dict[str, Any]:
+            return self._payload
+
+    def fake_get(url: str, *, headers: dict[str, str], timeout: int):
+        requested.append((url, headers, timeout))
+        return FakeResponse(responses.pop(0))
+
+    monkeypatch.setattr(fetch_tickers.requests, "get", fake_get)
+    monkeypatch.setattr(fetch_tickers.time, "sleep", lambda delay: sleeps.append(delay))
+
+    assert fetch_tickers.fetch_nasdaq100_tickers(retries=2, backoff=0.1) == [
+        "AAPL",
+        "MSFT",
+    ]
+    assert len(requested) == 2
+    assert requested[0][2] == 20
+    assert sleeps == [0.1]
+
+
 def test_fetch_yfiua_index_constituents_requires_complete_date() -> None:
     try:
         fetch_tickers.fetch_yfiua_index_constituents("nasdaq100", year=2026)
@@ -439,3 +487,16 @@ def test_fetch_ticker_dict_preserves_builtin_nasdaq_provider(monkeypatch) -> Non
         "symbols": ["NVDA"],
         "asset_classes": {},
     }
+
+
+def test_fetch_ticker_dict_rejects_empty_builtin_basket(monkeypatch) -> None:
+    monkeypatch.setattr(fetch_tickers, "fetch_nasdaq100_tickers", lambda: [])
+
+    try:
+        fetch_tickers.fetch_ticker_dict(ticker_basket=["nasdaq100"])
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("empty builtin basket should fail")
+
+    assert "nasdaq100" in message

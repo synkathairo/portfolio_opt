@@ -51,6 +51,15 @@ _NON_YFIUA_BUILTIN_BASKETS = {
     "commodities",
     "realestate",
 }
+DEFAULT_TICKER_BASKET: tuple[str, ...] = (
+    "nasdaq100",
+    "sp500",
+    "sectors",
+    "indexes",
+    "cashlike",
+    "commodities",
+    "realestate",
+)
 
 
 @dataclass(frozen=True)
@@ -120,7 +129,7 @@ def _format_ticker_dict(tickers: list[str], max_workers: int = 3) -> dict:
 
         # Small delay between batches to avoid Yahoo rate limits
         if i + batch_size < len(tickers):
-            time.sleep(1.0)
+            time.sleep(0.02)
 
     result = {"symbols": tickers, "asset_classes": asset_classes}
     return result
@@ -134,17 +143,31 @@ def fetch_nasdaq100_tickers(retries: int = 3, backoff: float = 1.5) -> list[str]
     }
 
     for i in range(retries):
-        r = requests.get(url, headers=headers)
+        r = requests.get(url, headers=headers, timeout=20)
         if r.status_code == 200:
-            # success
             data = r.json()
-            return [row["symbol"] for row in data["data"]["data"]["rows"]]
+            if isinstance(data, dict):
+                outer_data = data.get("data")
+                if isinstance(outer_data, dict):
+                    inner_data = outer_data.get("data")
+                    if isinstance(inner_data, dict):
+                        rows = inner_data.get("rows")
+                        if isinstance(rows, list):
+                            return [
+                                symbol
+                                for row in rows
+                                if isinstance(row, dict)
+                                and isinstance(symbol := row.get("symbol"), str)
+                                and symbol
+                            ]
         elif r.status_code in (429, 500, 502, 503, 504):
             # retryable errors
             pass
         else:
             # permanent error, don't retry
             r.raise_for_status()
+        if i + 1 < retries:
+            time.sleep(backoff)
     return []
 
 
@@ -482,9 +505,7 @@ def _extract_yfiua_symbols(payload: Any) -> list[str]:
 
 def _extract_yfiua_symbol_names(payload: Any) -> dict[str, str]:
     return {
-        symbol: name
-        for symbol, name in _extract_yfiua_symbol_records(payload)
-        if name
+        symbol: name for symbol, name in _extract_yfiua_symbol_records(payload) if name
     }
 
 
@@ -536,30 +557,41 @@ def _normalize_yfiua_symbol(symbol: str) -> str:
     return symbol.replace("/", "-")
 
 
+def _require_tickers(source: str, tickers: list[str]) -> list[str]:
+    if not tickers:
+        raise RuntimeError(f"No tickers were fetched for {source}.")
+    return tickers
+
+
 # a basket of tickers as needed, customizable from ticker_selection
 # notes: this can be slow with all options! but results perhaps can be cached,
 # nasdaq100 and sp500 are updated on fixed basis
 def fetch_ticker_dict(
-    preexisting: list[str] = [],
-    ticker_basket: list[str] = [
-        "nasdaq100",
-        "sp500",
-        "sectors",
-        "indexes",
-        "cashlike",
-        "commodities",
-        "realestate",
-    ],
+    preexisting: list[str] | None = None,
+    ticker_basket: list[str] | tuple[str, ...] | None = None,
 ) -> dict:
+    if preexisting is None:
+        preexisting = []
+    if ticker_basket is None:
+        ticker_basket = list(DEFAULT_TICKER_BASKET)
+    else:
+        ticker_basket = list(ticker_basket)
     tickers = set()
     if "nasdaq100" in ticker_basket:
-        tickers |= set(fetch_nasdaq100_tickers())
+        tickers |= set(_require_tickers("nasdaq100", fetch_nasdaq100_tickers()))
     if "sp500" in ticker_basket:
-        tickers |= set(fetch_sp500_tickers())
+        tickers |= set(_require_tickers("sp500", fetch_sp500_tickers()))
     if NIKKEI225_BASKET in ticker_basket:
-        tickers |= set(fetch_nikkei225_tickers())
+        tickers |= set(
+            _require_tickers(NIKKEI225_BASKET, fetch_nikkei225_tickers())
+        )
     for code in _yfiua_codes_from_basket(ticker_basket):
-        tickers |= set(fetch_yfiua_index_constituents(code))
+        tickers |= set(
+            _require_tickers(
+                f"{YFIUA_BASKET_PREFIX}{code}",
+                fetch_yfiua_index_constituents(code),
+            )
+        )
     # note: below were statically coded, so need to be mindful of when the ETFs were created when querying
     if "sectors" in ticker_basket:
         tickers |= {"XLK", "XLF", "XLE", "XLV", "XLI", "XLP", "XLU"}

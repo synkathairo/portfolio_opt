@@ -42,7 +42,9 @@ def load_model_inputs(path: str | Path) -> ModelInputs:
                 "Missing expected_returns entries for symbols: "
                 f"{missing_expected_returns}"
             )
-        expected_returns = np.array([float(expected_returns_map[s]) for s in symbols], dtype=float)
+        expected_returns = np.array(
+            [float(expected_returns_map[s]) for s in symbols], dtype=float
+        )
 
     if "covariance" in raw:
         covariance = np.array(raw["covariance"], dtype=float)

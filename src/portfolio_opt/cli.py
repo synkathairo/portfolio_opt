@@ -8,7 +8,9 @@ import sys
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from hashlib import sha256
+from pathlib import Path
+from typing import Any, cast
 
 import exchange_calendars as xcals
 import numpy as np
@@ -39,9 +41,114 @@ from .rebalance import build_order_plan, build_trailing_stop_plan, current_weigh
 from .runtime import configure_local_cache_dirs
 from .stockanalysis_data import fetch_closes as stockanalysis_fetch_closes
 from .yfinance_data import fetch_closes as yf_fetch_closes
-from utils.fetch_tickers import fetch_ticker_dict, filter_tickers_before
+from utils.fetch_tickers import (
+    DEFAULT_TICKER_BASKET,
+    fetch_ticker_dict,
+    filter_tickers_before,
+)
 
 configure_local_cache_dirs()
+
+_DYNAMIC_UNIVERSE_CACHE_FORMAT = 1
+
+
+def _dynamic_universe_cache_paths(
+    ticker_basket: list[str],
+    cache_dir: str | Path,
+) -> tuple[Path, Path]:
+    key_payload = {
+        "format": _DYNAMIC_UNIVERSE_CACHE_FORMAT,
+        "ticker_basket": ticker_basket,
+    }
+    digest = sha256(
+        json.dumps(key_payload, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:16]
+    model_path = Path(cache_dir) / f"dynamic_universe-{digest}.json"
+    meta_path = model_path.with_name(f"{model_path.stem}.meta.json")
+    return model_path, meta_path
+
+
+def _dynamic_universe_payload(fetched: dict[str, Any]) -> dict[str, Any]:
+    symbols = fetched.get("symbols")
+    asset_classes = fetched.get("asset_classes", {})
+    if not isinstance(symbols, list) or not symbols:
+        raise ValueError("Dynamic universe fetch returned no symbols.")
+    if any(not isinstance(symbol, str) or not symbol for symbol in symbols):
+        raise ValueError("Dynamic universe fetch returned invalid symbols.")
+    if len(set(symbols)) != len(symbols):
+        raise ValueError("Dynamic universe fetch returned duplicate symbols.")
+    if not isinstance(asset_classes, dict):
+        raise ValueError("Dynamic universe fetch returned invalid asset classes.")
+    unknown_asset_class_symbols = sorted(set(asset_classes) - set(symbols))
+    if unknown_asset_class_symbols:
+        raise ValueError(
+            "Dynamic universe asset classes reference unknown symbols: "
+            f"{unknown_asset_class_symbols}"
+        )
+    return {
+        "symbols": list(symbols),
+        "asset_classes": dict(asset_classes),
+    }
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2) + "\n")
+    tmp_path.replace(path)
+
+
+def _write_dynamic_universe_cache(
+    fetched: dict[str, Any],
+    *,
+    ticker_basket: list[str],
+    cache_dir: str | Path,
+) -> None:
+    model_payload = _dynamic_universe_payload(fetched)
+    model_path, meta_path = _dynamic_universe_cache_paths(ticker_basket, cache_dir)
+    fetched_at = datetime.now(UTC).isoformat()
+    meta_payload: dict[str, Any] = {
+        "kind": "dynamic_universe_cache",
+        "format": _DYNAMIC_UNIVERSE_CACHE_FORMAT,
+        "fetched_at": fetched_at,
+        "ticker_basket": ticker_basket,
+        "symbol_count": len(model_payload["symbols"]),
+    }
+    _write_json_atomic(model_path, model_payload)
+    _write_json_atomic(meta_path, meta_payload)
+
+
+def _read_dynamic_universe_cache(
+    *,
+    ticker_basket: list[str],
+    cache_dir: str | Path,
+    max_age_days: float,
+) -> dict[str, Any]:
+    model_path, meta_path = _dynamic_universe_cache_paths(ticker_basket, cache_dir)
+    if not model_path.exists() or not meta_path.exists():
+        raise FileNotFoundError(f"No cached dynamic universe exists at {model_path}")
+
+    meta = json.loads(meta_path.read_text())
+    fetched_at_raw = meta.get("fetched_at") if isinstance(meta, dict) else None
+    if not isinstance(fetched_at_raw, str):
+        raise ValueError(
+            f"Cached dynamic universe metadata is missing fetched_at: {meta_path}"
+        )
+    fetched_at = datetime.fromisoformat(fetched_at_raw)
+    if fetched_at.tzinfo is None:
+        fetched_at = fetched_at.replace(tzinfo=UTC)
+    age = datetime.now(UTC) - fetched_at.astimezone(UTC)
+    if age > timedelta(days=max_age_days):
+        raise ValueError(
+            f"Cached dynamic universe is {age.days} days old, exceeding "
+            f"--max-stale-dynamic-universe-days={max_age_days}."
+        )
+
+    cached_model = load_model_inputs(model_path)
+    return {
+        "symbols": cached_model.symbols,
+        "asset_classes": cached_model.asset_classes,
+    }
 
 
 def _calculate_trading_date_offset(trading_days: int) -> datetime:
@@ -240,6 +347,22 @@ def parse_args() -> argparse.Namespace:
         nargs="*",
         default=[],
         help="Universe components for --dynamic-universe (uses fetch_ticker_dict defaults if empty).",
+    )
+    parser.add_argument(
+        "--dynamic-universe-cache-dir",
+        default=".cache/models",
+        help="Directory for latest-known-good generated dynamic universe model caches.",
+    )
+    parser.add_argument(
+        "--allow-stale-dynamic-universe",
+        action="store_true",
+        help="Use the previous cached dynamic universe if a fresh fetch fails.",
+    )
+    parser.add_argument(
+        "--max-stale-dynamic-universe-days",
+        type=float,
+        default=14.0,
+        help="Maximum age in days for --allow-stale-dynamic-universe fallback.",
     )
     parser.add_argument("--risk-aversion", type=float, default=4.0)
     parser.add_argument("--min-weight", type=float, default=0.0)
@@ -493,6 +616,21 @@ def main() -> None:
     stockanalysis_start = getattr(args, "stockanalysis_start", "1980-01-01")
     stockanalysis_end = getattr(args, "stockanalysis_end", None)
     factor_top_k = getattr(args, "factor_top_k", 1)
+    dynamic_universe_cache_dir = getattr(
+        args,
+        "dynamic_universe_cache_dir",
+        ".cache/models",
+    )
+    allow_stale_dynamic_universe = getattr(
+        args,
+        "allow_stale_dynamic_universe",
+        False,
+    )
+    max_stale_dynamic_universe_days = getattr(
+        args,
+        "max_stale_dynamic_universe_days",
+        14.0,
+    )
     if args.trailing_stop is not None and args.trailing_stop <= 0:
         raise ValueError("--trailing-stop must be greater than 0.")
     if factor_top_k <= 0:
@@ -503,6 +641,8 @@ def main() -> None:
         raise ValueError("--yfinance-retry-delay cannot be negative.")
     if yfinance_symbol_delay < 0:
         raise ValueError("--yfinance-symbol-delay cannot be negative.")
+    if max_stale_dynamic_universe_days < 0:
+        raise ValueError("--max-stale-dynamic-universe-days cannot be negative.")
 
     # Dynamic universe is only useful for live/dry-run trading, not backtesting
     if args.dynamic_universe and args.backtest_days > 0:
@@ -512,10 +652,36 @@ def main() -> None:
 
     # Build model inputs from either a static file or a dynamic universe
     if args.dynamic_universe:
-        kwargs = {}
-        if args.ticker_basket:
-            kwargs["ticker_basket"] = args.ticker_basket
-        fetched = fetch_ticker_dict(**kwargs)
+        ticker_basket = (
+            list(args.ticker_basket)
+            if args.ticker_basket
+            else list(DEFAULT_TICKER_BASKET)
+        )
+        try:
+            fetched = fetch_ticker_dict(ticker_basket=ticker_basket)
+            _write_dynamic_universe_cache(
+                fetched,
+                ticker_basket=ticker_basket,
+                cache_dir=dynamic_universe_cache_dir,
+            )
+        except Exception as exc:
+            if not allow_stale_dynamic_universe:
+                raise
+            try:
+                fetched = _read_dynamic_universe_cache(
+                    ticker_basket=ticker_basket,
+                    cache_dir=dynamic_universe_cache_dir,
+                    max_age_days=max_stale_dynamic_universe_days,
+                )
+            except Exception as cache_exc:
+                raise RuntimeError(
+                    "Dynamic universe fetch failed and no usable stale cache was found."
+                ) from cache_exc
+            print(
+                "WARNING: using stale dynamic universe cache after fresh fetch failed: "
+                f"{exc}",
+                file=sys.stderr,
+            )
         dynamic_symbols = set(fetched["symbols"])
         asset_classes = dict(fetched["asset_classes"])
 
@@ -591,7 +757,9 @@ def main() -> None:
         closes_for_benchmarks: dict[str, list[float]] = {}
         symbols_for_benchmarks = model.symbols
         if args.data_source in {"yfinance", "csv", "csv+yfinance", "stockanalysis"}:
-            requested_symbols = list(dict.fromkeys([*model.symbols, *benchmark_symbols]))
+            requested_symbols = list(
+                dict.fromkeys([*model.symbols, *benchmark_symbols])
+            )
             if args.data_source == "csv+yfinance":
                 csv_write_yfinance_compatible_caches(
                     csv_dir=csv_dir,
@@ -979,9 +1147,7 @@ def main() -> None:
         # or stocks are new IPOs/SPACs with limited history.
         original_count = len(closes_by_symbol)
         closes_by_symbol = {
-            s: bars
-            for s, bars in closes_by_symbol.items()
-            if len(bars) >= history_days
+            s: bars for s, bars in closes_by_symbol.items() if len(bars) >= history_days
         }
         dropped_count = original_count - len(closes_by_symbol)
         if dropped_count > 0:
@@ -1145,7 +1311,10 @@ def main() -> None:
         covariance = model.covariance
         estimation_metadata = {"method": "model_file"}
 
-    if args.strategy not in {"dual-momentum", "factor-momentum"} and target_weights is None:
+    if (
+        args.strategy not in {"dual-momentum", "factor-momentum"}
+        and target_weights is None
+    ):
         target_weights = optimize_weights(
             expected_returns=expected_returns,
             covariance=covariance,
@@ -1154,7 +1323,9 @@ def main() -> None:
             asset_class_matrix=asset_class_matrix if constrained_class_names else None,
         )
     if target_weights is None:
-        raise RuntimeError("Failed to produce target weights for the requested strategy.")
+        raise RuntimeError(
+            "Failed to produce target weights for the requested strategy."
+        )
     target_weights = clean_weights(target_weights)
     target_cash_weight = max(0.0, 1.0 - float(target_weights.sum()))
     current_cash_weight = max(0.0, 1.0 - float(existing_weights.sum()))
@@ -1260,8 +1431,7 @@ def main() -> None:
                 symbol: round(float(value), 6)
                 for symbol, value in zip(model.symbols, expected_returns, strict=True)
             }
-            if args.strategy != "dual-momentum"
-            and args.strategy != "factor-momentum"
+            if args.strategy != "dual-momentum" and args.strategy != "factor-momentum"
             else None
         ),
         "cash": {

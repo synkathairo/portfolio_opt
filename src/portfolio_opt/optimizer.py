@@ -17,7 +17,9 @@ SOLVER = cp.CLARABEL
 
 def _class_constraint_names(config: OptimizationConfig) -> list[str]:
     return list(config.class_min_weights) + [
-        name for name in config.class_max_weights if name not in config.class_min_weights
+        name
+        for name in config.class_max_weights
+        if name not in config.class_min_weights
     ]
 
 

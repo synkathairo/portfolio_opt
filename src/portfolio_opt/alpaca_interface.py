@@ -9,27 +9,21 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-warnings.filterwarnings(
-    "ignore",
-    message="websockets\\.legacy is deprecated.*",
-    category=DeprecationWarning,
-    module="websockets\\.legacy",
-)
-
 from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.models.bars import Bar, BarSet
 from alpaca.data.models.trades import TradeSet
 from alpaca.data.requests import (
     StockBarsRequest,
-    StockLatestTradeRequest,
     StockLatestQuoteRequest,
+    StockLatestTradeRequest,
 )
 from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, OrderType, QueryOrderStatus, TimeInForce
-from alpaca.trading.models import Order, Position as AlpacaPosition, TradeAccount
+from alpaca.trading.models import Order, TradeAccount
 from alpaca.trading.models import PortfolioHistory as AlpacaPortfolioHistory
+from alpaca.trading.models import Position as AlpacaPosition
 from alpaca.trading.requests import (
     GetOrdersRequest,
     MarketOrderRequest,
@@ -39,6 +33,13 @@ from alpaca.trading.requests import (
 from .cache import cache_path, read_cache, write_cache
 from .config import AlpacaConfig
 from .types import AccountSnapshot, OrderPlan, Position, TrailingStopPlan
+
+warnings.filterwarnings(
+    "ignore",
+    message="websockets\\.legacy is deprecated.*",
+    category=DeprecationWarning,
+    module="websockets\\.legacy",
+)
 
 
 class AlpacaClient:
@@ -390,10 +391,9 @@ class AlpacaClient:
 
             last_date = sorted(rows)[-1]
             try:
-                next_start = (
-                    datetime.strptime(last_date, "%Y-%m-%d").replace(tzinfo=UTC)
-                    + timedelta(days=1)
-                )
+                next_start = datetime.strptime(last_date, "%Y-%m-%d").replace(
+                    tzinfo=UTC
+                ) + timedelta(days=1)
             except ValueError:
                 fetch_groups[full_fetch_key][1].append(symbol)
                 continue
@@ -442,7 +442,9 @@ class AlpacaClient:
                 "feed": self._alpaca_data_feed().value,
             },
         )
-        return path.with_name(f"daily_closes_v2_{safe_symbol}_{path.name.rsplit('_', 1)[-1]}")
+        return path.with_name(
+            f"daily_closes_v2_{safe_symbol}_{path.name.rsplit('_', 1)[-1]}"
+        )
 
     def _daily_closes_v2_payload(
         self,
@@ -519,10 +521,7 @@ class AlpacaClient:
         if isinstance(payload, dict):
             closes = payload.get("closes")
             if isinstance(closes, dict):
-                return {
-                    str(date): float(close)
-                    for date, close in closes.items()
-                }
+                return {str(date): float(close) for date, close in closes.items()}
         if isinstance(payload, list):
             return self._merge_daily_bar_rows({}, payload, lookback_days=len(payload))
         return {}
@@ -863,9 +862,7 @@ class AlpacaClient:
             return None
         selected = {symbol: payload[symbol] for symbol in symbols}
         lengths = [
-            len(values)
-            for values in selected.values()
-            if isinstance(values, list)
+            len(values) for values in selected.values() if isinstance(values, list)
         ]
         if len(lengths) != len(symbols) or min(lengths, default=0) < lookback_days:
             return None
@@ -900,9 +897,7 @@ class AlpacaClient:
             return None
         selected = {symbol: payload[symbol] for symbol in symbols}
         lengths = [
-            len(values)
-            for values in selected.values()
-            if isinstance(values, list)
+            len(values) for values in selected.values() if isinstance(values, list)
         ]
         if len(lengths) != len(symbols) or min(lengths, default=0) < lookback_days:
             return None
@@ -946,11 +941,7 @@ class AlpacaClient:
 
 
 def _model_value(model: Any, field: str) -> Any:
-    value = (
-        model.get(field)
-        if isinstance(model, dict)
-        else getattr(model, field, None)
-    )
+    value = model.get(field) if isinstance(model, dict) else getattr(model, field, None)
     return getattr(value, "value", value)
 
 

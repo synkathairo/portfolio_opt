@@ -12,7 +12,10 @@ import pandas as pd
 import requests
 import yfinance as yf
 
-from portfolio_opt.yfinance_data import _fetch_single_symbol_from, _yahoo_symbol_candidates
+from portfolio_opt.yfinance_data import (
+    _fetch_single_symbol_from,
+    _yahoo_symbol_candidates,
+)
 from utils.fetch_tickers import (
     YFIUA_INDEX_STARTS,
     fetch_yfiua_index_constituents,
@@ -95,10 +98,12 @@ def main() -> None:
         year = args.year if args.year is not None else default_year
         month = args.month if args.month is not None else default_month
         try:
-            historical_symbols, historical_names = fetch_yfiua_index_constituents_with_names(
-                code,
-                year=year,
-                month=month,
+            historical_symbols, historical_names = (
+                fetch_yfiua_index_constituents_with_names(
+                    code,
+                    year=year,
+                    month=month,
+                )
             )
             current_symbols, current_names = fetch_yfiua_index_constituents_with_names(
                 code
@@ -269,8 +274,7 @@ def _write_universe(
         "filtered_for_current_yfinance_data": filtered_for_current_yfinance_data,
         "symbols": symbols,
         "asset_classes": {
-            symbol: f"{names.get(symbol, symbol)} (yfiua:{code})"
-            for symbol in symbols
+            symbol: f"{names.get(symbol, symbol)} (yfiua:{code})" for symbol in symbols
         },
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")

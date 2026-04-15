@@ -28,7 +28,9 @@ logger = logging.getLogger(__name__)
 _YAHOO_EXCHANGE_SUFFIXES = {"HK", "L", "SS", "SZ"}
 
 
-def _report_fetch_progress(label: str | None, index: int, total: int, symbol: str) -> None:
+def _report_fetch_progress(
+    label: str | None, index: int, total: int, symbol: str
+) -> None:
     if label is None or total <= 1:
         return
     print(f"{label} {index}/{total}: {symbol}", file=sys.stderr, flush=True)
@@ -62,7 +64,9 @@ def _fetch_single_symbol(
                 closes = hist["Close"].astype(float).dropna()
                 if closes.empty:
                     raise ValueError(f"Empty close series for {symbol}")
-                closes.index = pd.to_datetime(closes.index).tz_localize(None).normalize()
+                closes.index = (
+                    pd.to_datetime(closes.index).tz_localize(None).normalize()
+                )
                 closes = closes[~closes.index.duplicated(keep="last")].sort_index()
                 return symbol, closes
             except Exception as exc:
@@ -92,7 +96,9 @@ def _fetch_single_symbol_from(
                 closes = hist["Close"].astype(float).dropna()
                 if closes.empty:
                     return symbol, pd.Series(dtype=float)
-                closes.index = pd.to_datetime(closes.index).tz_localize(None).normalize()
+                closes.index = (
+                    pd.to_datetime(closes.index).tz_localize(None).normalize()
+                )
                 closes = closes[~closes.index.duplicated(keep="last")].sort_index()
                 return symbol, closes
             except Exception as exc:
@@ -242,6 +248,7 @@ def _incremental_fetch_closes(
 
     if not refresh_cache:
         if missing_symbols:
+
             def cache_symbol(symbol: str, series: pd.Series) -> None:
                 cached_by_symbol[symbol] = series
                 write_cache(
@@ -450,7 +457,9 @@ def _symbol_closes_cache_path(symbol: str):
             "adjustment": "auto",
         },
     )
-    return path.with_name(f"yfinance_closes_v2_{safe_symbol}_{path.name.rsplit('_', 1)[-1]}")
+    return path.with_name(
+        f"yfinance_closes_v2_{safe_symbol}_{path.name.rsplit('_', 1)[-1]}"
+    )
 
 
 def _series_from_cached_rows(payload: Any) -> pd.Series:
@@ -458,8 +467,7 @@ def _series_from_cached_rows(payload: Any) -> pd.Series:
         closes = payload.get("closes")
         if isinstance(closes, dict):
             payload = [
-                {"timestamp": date, "close": close}
-                for date, close in closes.items()
+                {"timestamp": date, "close": close} for date, close in closes.items()
             ]
     if not isinstance(payload, list):
         return pd.Series(dtype=float)

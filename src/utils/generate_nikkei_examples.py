@@ -82,7 +82,9 @@ def main() -> None:
         symbol_delay=args.symbol_delay,
     )
     valid_constituents = [
-        constituent for constituent in constituents if constituent.symbol in valid_symbols
+        constituent
+        for constituent in constituents
+        if constituent.symbol in valid_symbols
     ]
     _write_universe(
         args.output_dir / "nikkei225_current_backtest_valid_universe.json",

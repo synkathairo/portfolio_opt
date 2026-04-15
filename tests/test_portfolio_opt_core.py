@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 
 import numpy as np
@@ -36,6 +36,69 @@ def test_optimize_weights_aligns_asset_class_max_constraints() -> None:
 
     assert round(float(weights[0]), 6) == 0.4
     assert round(float(weights[1]), 6) == 0.6
+
+
+def test_dynamic_universe_cache_writes_model_and_sidecar(tmp_path) -> None:
+    ticker_basket = ["nasdaq100", "sp500"]
+    fetched = {
+        "symbols": ["AAPL", "MSFT"],
+        "asset_classes": {
+            "AAPL": "Apple Inc. Common Stock",
+            "MSFT": "Microsoft Corporation",
+        },
+    }
+
+    cli._write_dynamic_universe_cache(
+        fetched,
+        ticker_basket=ticker_basket,
+        cache_dir=tmp_path,
+    )
+    model_path, meta_path = cli._dynamic_universe_cache_paths(ticker_basket, tmp_path)
+
+    assert json.loads(model_path.read_text()) == fetched
+    meta = json.loads(meta_path.read_text())
+    assert meta["kind"] == "dynamic_universe_cache"
+    assert meta["ticker_basket"] == ticker_basket
+    assert meta["symbol_count"] == 2
+    assert cli._read_dynamic_universe_cache(
+        ticker_basket=ticker_basket,
+        cache_dir=tmp_path,
+        max_age_days=1,
+    ) == fetched
+
+
+def test_dynamic_universe_cache_rejects_too_stale_sidecar(tmp_path) -> None:
+    ticker_basket = ["nasdaq100"]
+    fetched = {
+        "symbols": ["AAPL"],
+        "asset_classes": {"AAPL": "Apple Inc. Common Stock"},
+    }
+
+    cli._write_dynamic_universe_cache(
+        fetched,
+        ticker_basket=ticker_basket,
+        cache_dir=tmp_path,
+    )
+    _model_path, meta_path = cli._dynamic_universe_cache_paths(
+        ticker_basket,
+        tmp_path,
+    )
+    meta = json.loads(meta_path.read_text())
+    meta["fetched_at"] = (datetime.now(UTC) - timedelta(days=3)).isoformat()
+    meta_path.write_text(json.dumps(meta))
+
+    try:
+        cli._read_dynamic_universe_cache(
+            ticker_basket=ticker_basket,
+            cache_dir=tmp_path,
+            max_age_days=1,
+        )
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("stale dynamic universe cache should fail")
+
+    assert "exceeding" in message
 
 
 def test_run_backtest_dispatches_black_litterman(monkeypatch) -> None:
