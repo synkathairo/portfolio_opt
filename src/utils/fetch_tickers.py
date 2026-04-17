@@ -582,9 +582,7 @@ def fetch_ticker_dict(
     if "sp500" in ticker_basket:
         tickers |= set(_require_tickers("sp500", fetch_sp500_tickers()))
     if NIKKEI225_BASKET in ticker_basket:
-        tickers |= set(
-            _require_tickers(NIKKEI225_BASKET, fetch_nikkei225_tickers())
-        )
+        tickers |= set(_require_tickers(NIKKEI225_BASKET, fetch_nikkei225_tickers()))
     for code in _yfiua_codes_from_basket(ticker_basket):
         tickers |= set(
             _require_tickers(

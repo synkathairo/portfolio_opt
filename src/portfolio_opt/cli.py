@@ -1388,7 +1388,7 @@ def main() -> None:
         if args.trailing_stop is not None
         else []
     )
-    trailing_stop_plan = (
+    trailing_stop_plan_result = (
         build_trailing_stop_plan(
             symbols=model.symbols,
             target_weights=target_weights.tolist(),
@@ -1398,6 +1398,16 @@ def main() -> None:
             rebalance_threshold=args.rebalance_threshold,
         )
         if args.trailing_stop is not None
+        else None
+    )
+    trailing_stop_plan = (
+        trailing_stop_plan_result.orders
+        if trailing_stop_plan_result is not None
+        else []
+    )
+    unprotected_trailing_stop_qty = (
+        trailing_stop_plan_result.unprotected_qty
+        if trailing_stop_plan_result is not None
         else []
     )
 
@@ -1457,6 +1467,9 @@ def main() -> None:
         "orders": [asdict(item) for item in plan],
         "trailing_stop_cancellations": trailing_stop_cancellations,
         "trailing_stop_orders": [asdict(item) for item in trailing_stop_plan],
+        "unprotected_fractional_trailing_stop_qty": [
+            asdict(item) for item in unprotected_trailing_stop_qty
+        ],
     }
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
@@ -1473,7 +1486,7 @@ def main() -> None:
             fill_statuses = alpaca.wait_for_submitted_orders(submitted_orders)
             refreshed_positions = alpaca.get_positions()
             refreshed_open_orders = alpaca.get_open_orders()
-            trailing_stop_plan = build_trailing_stop_plan(
+            trailing_stop_plan_result = build_trailing_stop_plan(
                 symbols=model.symbols,
                 target_weights=target_weights.tolist(),
                 positions=refreshed_positions,
@@ -1481,6 +1494,8 @@ def main() -> None:
                 trailing_stop=args.trailing_stop,
                 rebalance_threshold=args.rebalance_threshold,
             )
+            trailing_stop_plan = trailing_stop_plan_result.orders
+            unprotected_trailing_stop_qty = trailing_stop_plan_result.unprotected_qty
             submitted_trailing_stops = alpaca.submit_trailing_stop_plan(
                 trailing_stop_plan
             )
@@ -1493,6 +1508,9 @@ def main() -> None:
                         "canceled_trailing_stops": canceled_trailing_stops,
                         "trailing_stop_orders": [
                             asdict(item) for item in trailing_stop_plan
+                        ],
+                        "unprotected_fractional_trailing_stop_qty": [
+                            asdict(item) for item in unprotected_trailing_stop_qty
                         ],
                         "submitted_trailing_stops": submitted_trailing_stops,
                     },

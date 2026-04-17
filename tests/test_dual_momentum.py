@@ -35,7 +35,9 @@ def test_dual_momentum_prefers_top_risky_asset_when_it_beats_cash() -> None:
     assert result.latest_weights.tolist() == [1.0, 0.0, 0.0, 0.0]
 
 
-def test_dual_momentum_falls_back_to_defensive_assets_when_risk_assets_fail_filter() -> None:
+def test_dual_momentum_falls_back_to_defensive_assets_when_risk_assets_fail_filter() -> (
+    None
+):
     closes_by_symbol = {
         "SPY": [100.0, 99.0, 98.0, 97.0, 96.0],
         "QQQ": [100.0, 99.5, 99.0, 98.5, 98.0],

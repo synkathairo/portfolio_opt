@@ -9,7 +9,14 @@ def _payload(closes: list[tuple[str, float]]) -> dict:
     return {
         "status": 200,
         "data": [
-            {"t": day, "o": close - 1, "h": close + 1, "l": close - 2, "c": close, "v": 1000}
+            {
+                "t": day,
+                "o": close - 1,
+                "h": close + 1,
+                "l": close - 2,
+                "c": close,
+                "v": 1000,
+            }
             for day, close in closes
         ],
     }
@@ -114,7 +121,9 @@ def test_fetch_closes_reports_empty_symbol(tmp_path, monkeypatch) -> None:
         def json(self) -> dict:
             return {"status": 200, "data": []}
 
-    monkeypatch.setattr(stockanalysis_data.requests, "get", lambda *_args, **_kwargs: FakeResponse())
+    monkeypatch.setattr(
+        stockanalysis_data.requests, "get", lambda *_args, **_kwargs: FakeResponse()
+    )
     monkeypatch.setattr(
         stockanalysis_data,
         "cache_path",

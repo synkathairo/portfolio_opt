@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+from math import floor
+
 from .config import OptimizationConfig
-from .types import AccountSnapshot, OrderPlan, Position, TrailingStopPlan
+from .types import (
+    AccountSnapshot,
+    OrderPlan,
+    Position,
+    TrailingStopPlan,
+    TrailingStopPlanResult,
+    UnprotectedTrailingStopQty,
+)
 
 
 def current_weights(
@@ -85,7 +94,7 @@ def build_trailing_stop_plan(
     open_orders: list[dict] | None,
     trailing_stop: float,
     rebalance_threshold: float,
-) -> list[TrailingStopPlan]:
+) -> TrailingStopPlanResult:
     target_by_symbol = {
         symbol: float(weight)
         for symbol, weight in zip(symbols, target_weights, strict=True)
@@ -99,25 +108,38 @@ def build_trailing_stop_plan(
 
     trail_percent = round(float(trailing_stop) * 100.0, 6)
     plans: list[TrailingStopPlan] = []
+    unprotected_qty: list[UnprotectedTrailingStopQty] = []
     for position in positions:
         if position.symbol not in target_by_symbol:
             continue
-        if float(position.qty) <= 0.0:
+        position_qty = float(position.qty)
+        if position_qty <= 0.0:
             continue
         if target_by_symbol[position.symbol] < rebalance_threshold:
             continue
         if position.symbol in protected_symbols:
             continue
-        plans.append(
-            TrailingStopPlan(
-                symbol=position.symbol,
-                qty=round(float(position.qty), 6),
-                side="sell",
-                trail_percent=trail_percent,
-                time_in_force="gtc",
+        whole_share_qty = float(floor(position_qty))
+        remainder_qty = round(position_qty - whole_share_qty, 6)
+        if remainder_qty > 0.0:
+            unprotected_qty.append(
+                UnprotectedTrailingStopQty(
+                    symbol=position.symbol,
+                    position_qty=round(position_qty, 6),
+                    unprotected_qty=remainder_qty,
+                )
             )
-        )
-    return plans
+        if whole_share_qty >= 1.0:
+            plans.append(
+                TrailingStopPlan(
+                    symbol=position.symbol,
+                    qty=whole_share_qty,
+                    side="sell",
+                    trail_percent=trail_percent,
+                    time_in_force="gtc",
+                )
+            )
+    return TrailingStopPlanResult(orders=plans, unprotected_qty=unprotected_qty)
 
 
 def _order_value(value: object) -> str:

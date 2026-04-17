@@ -32,3 +32,16 @@ class TrailingStopPlan:
     side: str
     trail_percent: float
     time_in_force: str
+
+
+@dataclass(frozen=True)
+class UnprotectedTrailingStopQty:
+    symbol: str
+    position_qty: float
+    unprotected_qty: float
+
+
+@dataclass(frozen=True)
+class TrailingStopPlanResult:
+    orders: list[TrailingStopPlan]
+    unprotected_qty: list[UnprotectedTrailingStopQty]

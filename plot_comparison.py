@@ -1,8 +1,9 @@
-import subprocess
 import json
-import yfinance as yf
-import matplotlib.pyplot as plt
+import subprocess
 from datetime import date
+
+import matplotlib.pyplot as plt
+import yfinance as yf
 
 today = str(date.today())
 
@@ -20,7 +21,7 @@ MODEL_NAME = "nikkei225_current_backtest_valid_universe"
 # MODEL_NAME = "sector_universe"
 # MODEL_NAME = "nasdaq100_universe"
 # MODEL = "examples/nasdaq100_universe.json"
-# MODEL = "examples/nasdaq100_sp500_sector_universe.json"
+# MODEL_NAME = "nasdaq100_sp500_sector_universe"
 MODEL = f"examples/{MODEL_NAME}.json"
 # LOOKBACK_DAYS = 60
 LOOKBACK_DAYS = 252
@@ -31,7 +32,9 @@ LOOKBACK_DAYS = 252
 # BACKTEST_DAYS = 408
 # BACKTEST_DAYS = 402
 BACKTEST_DAYS = 604
+# BACKTEST_DAYS = 1220
 MOMENTUM_WINDOW = 40
+LIMIT_VOL = "0.3"
 MODEL_FILENAME = f"{MODEL_NAME}_{BACKTEST_DAYS}_{LOOKBACK_DAYS}_{today}"
 INDEX_PERIOD = "10y"
 DATASOURCE = "yfinance"
@@ -39,7 +42,7 @@ DATASOURCE = "yfinance"
 #     ("SPY", "SPY (S&P 500)"),
 #     ("QQQ", "QQQ (Nasdaq 100)"),
 #     ("IWM", "IWM (Russell 2000)"),
-#     ("TLT", "TLT (20+Yr Treasury)"),
+#     ("TLT", "TLT (20+Yr Treasury)")
 # ]
 # BENCHMARKS = [
 #     # ("^HSI", "Hang Seng Index"),
@@ -70,134 +73,322 @@ BENCHMARKS = [
     ("2561.T", "iShares Japan Government Bond ETF"),
 ]
 
-def run_backtest(args):
+
+def run_backtest(label: str, args):
     print(f"Running: {args[1]} ...")
     result = subprocess.run(
-        ["uv", "run", "portfolio-opt"] + args,
-        capture_output=True, text=True
+        ["uv", "run", "portfolio-opt"] + args, capture_output=True, text=True
     )
     if result.returncode != 0:
         print(f"Error running backtest: {result.stderr}")
         return None
     try:
-        return json.loads(result.stdout)
+        data = json.loads(result.stdout)
+        data["label"] = label
+        return data
     except json.JSONDecodeError:
         print(f"Error running backtest: {result.stderr}")
         return None
 
+
 # 1. Run Mean-Variance Backtest
-mv_data = run_backtest([
-    "--model", f"{MODEL}",
-    "--data-source", f"{DATASOURCE}",
-    "--strategy", "mean-variance",
-    "--lookback-days", f"{LOOKBACK_DAYS}",
-    "--backtest-days", f"{BACKTEST_DAYS}",
-    "--rebalance-every", "5",
-    "--estimate-from-history",
-    "--return-model", "momentum",
-    "--momentum-window", f"{MOMENTUM_WINDOW}",
-    "--mean-shrinkage", "0.5",
-    "--risk-aversion", "2.0",
-    "--use-cache"
-    # , "--offline"
-    # "--use-cache", "--refresh-cache"
-    # , "--rebalance-threshold 0.1"
-])
+mv_data = run_backtest(
+    "Mean-Variance (Momentum)",
+    [
+        "--model",
+        f"{MODEL}",
+        "--data-source",
+        f"{DATASOURCE}",
+        "--strategy",
+        "mean-variance",
+        "--lookback-days",
+        f"{LOOKBACK_DAYS}",
+        "--backtest-days",
+        f"{BACKTEST_DAYS}",
+        "--rebalance-every",
+        "5",
+        "--estimate-from-history",
+        "--return-model",
+        "momentum",
+        "--momentum-window",
+        f"{MOMENTUM_WINDOW}",
+        "--mean-shrinkage",
+        "0.5",
+        "--risk-aversion",
+        "2.0",
+        "--use-cache",
+        # , "--offline"
+        # "--use-cache", "--refresh-cache"
+        # , "--rebalance-threshold 0.1"
+    ]
+)
 
 # 2. Run Dual Momentum Backtest (Top-5)
-dm_data = run_backtest([
-    "--model", f"{MODEL}",
-    "--data-source", f"{DATASOURCE}",
-    "--strategy", "dual-momentum",
-    "--lookback-days", f"{LOOKBACK_DAYS}",
-    "--backtest-days", f"{BACKTEST_DAYS}",
-    "--rebalance-every", "5",
-    "--top-k", "5",
-    "--use-cache"
-    # , "--offline"
-])
+dm_data = run_backtest(
+    "Dual Momentum (Top-5)",
+    [
+        "--model",
+        f"{MODEL}",
+        "--data-source",
+        f"{DATASOURCE}",
+        "--strategy",
+        "dual-momentum",
+        "--lookback-days",
+        f"{LOOKBACK_DAYS}",
+        "--backtest-days",
+        f"{BACKTEST_DAYS}",
+        "--rebalance-every",
+        "5",
+        "--top-k",
+        "5",
+        "--use-cache",
+        # , "--offline"
+    ]
+)
 
 # 3. Run Dual Momentum Backtest (Top-2)
-dm_data2 = run_backtest([
-    "--model", f"{MODEL}",
-    "--data-source", f"{DATASOURCE}",
-    "--strategy", "dual-momentum",
-    "--lookback-days", f"{LOOKBACK_DAYS}",
-    "--backtest-days", f"{BACKTEST_DAYS}",
-    "--rebalance-every", "5",
-    "--top-k", "2",
-    "--use-cache"
-    # , "--offline"
-])
+dm_data2 = run_backtest(
+    "Dual Momentum (Top-2)",
+    [
+        "--model",
+        f"{MODEL}",
+        "--data-source",
+        f"{DATASOURCE}",
+        "--strategy",
+        "dual-momentum",
+        "--lookback-days",
+        f"{LOOKBACK_DAYS}",
+        "--backtest-days",
+        f"{BACKTEST_DAYS}",
+        "--rebalance-every",
+        "5",
+        "--top-k",
+        "2",
+        "--use-cache",
+        # , "--offline"
+    ]
+)
+
+# Run Dual Momentum Backtest (Top-3, rebalance daily), trail stop 0.15
+dm_data2b = run_backtest(
+    "Dual Momentum (Top-3 daily rebalance, trail-stop 0.15)",
+    [
+        "--model",
+        f"{MODEL}",
+        "--data-source",
+        f"{DATASOURCE}",
+        "--strategy",
+        "dual-momentum",
+        "--lookback-days",
+        f"{LOOKBACK_DAYS}",
+        "--backtest-days",
+        f"{BACKTEST_DAYS}",
+        "--rebalance-every",
+        "1",
+        "--top-k",
+        "3",
+        "--trailing-stop",
+        "0.15",
+        "--use-cache",
+        # , "--offline"
+    ]
+)
+
+# Run Dual Momentum Backtest (Top-3, rebalance daily)
+dm_data2c = run_backtest(
+    "Dual Momentum (Top-3 daily rebalance)",
+    [
+        "--model",
+        f"{MODEL}",
+        "--data-source",
+        f"{DATASOURCE}",
+        "--strategy",
+        "dual-momentum",
+        "--lookback-days",
+        f"{LOOKBACK_DAYS}",
+        "--backtest-days",
+        f"{BACKTEST_DAYS}",
+        "--rebalance-every",
+        "1",
+        "--top-k",
+        "3",
+        "--use-cache",
+        # , "--offline"
+    ]
+)
+
+# dm_data2cb = run_backtest(
+#     f"Dual Momentum (Top-3 daily rebalance, vol {LIMIT_VOL})",
+#     [
+#         "--model",
+#         f"{MODEL}",
+#         "--data-source",
+#         f"{DATASOURCE}",
+#         "--strategy",
+#         "dual-momentum",
+#         "--lookback-days",
+#         f"{LOOKBACK_DAYS}",
+#         "--backtest-days",
+#         f"{BACKTEST_DAYS}",
+#         "--rebalance-every",
+#         "1",
+#         "--top-k",
+#         "3",
+#         "--use-cache",
+#         # , "--offline"
+#         "--target-vol",
+#         f"{LIMIT_VOL}",
+#         "--vol-window",
+#         "252"
+#     ]
+# )
 
 # 3. Run Dual Momentum Backtest (Top-2, rebalance daily)
-dm_data3 = run_backtest([
-    "--model", f"{MODEL}",
-    "--data-source", f"{DATASOURCE}",
-    "--strategy", "dual-momentum",
-    "--lookback-days", f"{LOOKBACK_DAYS}",
-    "--backtest-days", f"{BACKTEST_DAYS}",
-    "--rebalance-every", "1",
-    "--top-k", "2",
-    "--use-cache"
-    # , "--offline"
-])
+dm_data3 = run_backtest(
+    "Dual Momentum (Top-2 daily rebalance)",
+    [
+        "--model",
+        f"{MODEL}",
+        "--data-source",
+        f"{DATASOURCE}",
+        "--strategy",
+        "dual-momentum",
+        "--lookback-days",
+        f"{LOOKBACK_DAYS}",
+        "--backtest-days",
+        f"{BACKTEST_DAYS}",
+        "--rebalance-every",
+        "1",
+        "--top-k",
+        "2",
+        "--use-cache",
+        # , "--offline"
+    ]
+)
 
 # Run Dual Momentum Backtest (Top-2, rebalance daily), trail stop 0.15
-dm_data3a = run_backtest([
-    "--model", f"{MODEL}",
-    "--data-source", f"{DATASOURCE}",
-    "--strategy", "dual-momentum",
-    "--lookback-days", f"{LOOKBACK_DAYS}",
-    "--backtest-days", f"{BACKTEST_DAYS}",
-    "--rebalance-every", "1",
-    "--top-k", "2",
-    "--trailing-stop", "0.15",
-    "--use-cache"
-    # , "--offline"
-])
+dm_data3a = run_backtest(
+    "Dual Momentum (Top-2 daily rebalance, trail-stop 0.15)",
+    [
+        "--model",
+        f"{MODEL}",
+        "--data-source",
+        f"{DATASOURCE}",
+        "--strategy",
+        "dual-momentum",
+        "--lookback-days",
+        f"{LOOKBACK_DAYS}",
+        "--backtest-days",
+        f"{BACKTEST_DAYS}",
+        "--rebalance-every",
+        "1",
+        "--top-k",
+        "2",
+        "--trailing-stop",
+        "0.15",
+        "--use-cache",
+        # , "--offline"
+    ]
+)
 
 # 4. Run Dual Momentum Backtest (Top-1, rebalance daily)
-dm_data4 = run_backtest([
-    "--model", f"{MODEL}",
-    "--data-source", f"{DATASOURCE}",
-    "--strategy", "dual-momentum",
-    "--lookback-days", f"{LOOKBACK_DAYS}",
-    "--backtest-days", f"{BACKTEST_DAYS}",
-    "--rebalance-every", "1",
-    "--top-k", "1",
-    "--use-cache"
-    # , "--offline"
-])
+dm_data4 = run_backtest(
+    "Dual Momentum (Top-1 daily rebalance)",
+    [
+        "--model",
+        f"{MODEL}",
+        "--data-source",
+        f"{DATASOURCE}",
+        "--strategy",
+        "dual-momentum",
+        "--lookback-days",
+        f"{LOOKBACK_DAYS}",
+        "--backtest-days",
+        f"{BACKTEST_DAYS}",
+        "--rebalance-every",
+        "1",
+        "--top-k",
+        "1",
+        "--use-cache",
+        # , "--offline"
+    ]
+)
 
-LIMIT_VOL = "0.3"
+dm_data4b = run_backtest(
+    "Dual Momentum (Top-1 daily rebalance, trailstop0.15)",
+    [
+        "--model",
+        f"{MODEL}",
+        "--data-source",
+        f"{DATASOURCE}",
+        "--strategy",
+        "dual-momentum",
+        "--lookback-days",
+        f"{LOOKBACK_DAYS}",
+        "--backtest-days",
+        f"{BACKTEST_DAYS}",
+        "--rebalance-every",
+        "1",
+        "--top-k",
+        "1",
+        "--trailing-stop",
+        "0.15",
+        "--use-cache",
+        # , "--offline"
+    ]
+)
+
 # # Limit volatility
-dm_data_limit_volatility = run_backtest([
-    "--model", f"{MODEL}",
-    "--data-source", f"{DATASOURCE}",
-    "--strategy", "dual-momentum",
-    "--lookback-days", f"{LOOKBACK_DAYS}",
-    "--backtest-days", f"{BACKTEST_DAYS}",
-    "--rebalance-every", "5",
-    "--top-k", "2",
-    "--use-cache",
-    # "--offline",
-    # "--target-vol", "0.15"
-    "--target-vol", f"{LIMIT_VOL}", "--vol-window", "252",
-])
+dm_data_limit_volatility = run_backtest(
+    f"Dual Momentum (Top-2, vol {LIMIT_VOL})",
+    [
+        "--model",
+        f"{MODEL}",
+        "--data-source",
+        f"{DATASOURCE}",
+        "--strategy",
+        "dual-momentum",
+        "--lookback-days",
+        f"{LOOKBACK_DAYS}",
+        "--backtest-days",
+        f"{BACKTEST_DAYS}",
+        "--rebalance-every",
+        "5",
+        "--top-k",
+        "2",
+        "--use-cache",
+        # "--offline",
+        # "--target-vol", "0.15"
+        "--target-vol",
+        f"{LIMIT_VOL}",
+        "--vol-window",
+        "252",
+    ]
+)
 
-if not all([mv_data, dm_data, dm_data2, dm_data3, dm_data3a, dm_data4, dm_data_limit_volatility]):
+strategy_results = [
+    mv_data,
+    dm_data,
+    dm_data2,
+    dm_data2b,
+    dm_data2c,
+    # dm_data2cb,
+    dm_data3,
+    dm_data3a,
+    dm_data4,
+    dm_data4b,
+    dm_data_limit_volatility,
+]
+
+if not all(strategy_results):
     print("Failed to get backtest data.")
     exit()
 
 # 3. Extract Daily Values
-mv_curve = mv_data['backtest']['daily_values']
-dm_curve = dm_data['backtest']['daily_values']
-dm_curve2 = dm_data2['backtest']['daily_values']
-dm_curve3 = dm_data3['backtest']['daily_values']
-dm_curve3a = dm_data3a['backtest']['daily_values']
-dm_curve4 = dm_data4['backtest']['daily_values']
-dmvol_curve = dm_data_limit_volatility['backtest']['daily_values']
+strategy_curves = [
+    (result["label"], result["backtest"]["daily_values"])
+    for result in strategy_results
+]
 
 # 4. Fetch Benchmarks
 print("Fetching Benchmarks...")
@@ -224,60 +415,75 @@ if not benchmark_curves:
 # curve to 1.0 at the start of the trimmed window so they share a baseline.
 target_len = min(
     *[len(curve) for curve in benchmark_curves.values()],
-    len(mv_curve),
-    len(dm_curve),
-    len(dm_curve2),
-    len(dm_curve3),
-    len(dm_curve3a),
-    len(dm_curve4),
-    len(dmvol_curve),
+    *[len(curve) for _, curve in strategy_curves],
 )
+
+
 def normalize_tail(curve):
     tail = curve[-target_len:]
     return [v / tail[0] for v in tail]
 
-mv_curve = normalize_tail(mv_curve)
-dm_curve = normalize_tail(dm_curve)
-dm_curve2 = normalize_tail(dm_curve2)
-dm_curve3 = normalize_tail(dm_curve3)
-dm_curve3a = normalize_tail(dm_curve3a)
-dm_curve4 = normalize_tail(dm_curve4)
-dmvol_curve = normalize_tail(dmvol_curve)
+
+strategy_norms = [
+    (label, normalize_tail(curve)) for label, curve in strategy_curves
+]
 benchmark_norms = {
     label: [v / curve.iloc[-target_len] for v in curve.iloc[-target_len:].tolist()]
     for label, curve in benchmark_curves.items()
 }
 
 days = range(target_len)
-benchmark_colors = {
-    label: plt.cm.tab20(index % 20)
-    for index, label in enumerate(benchmark_norms, start=7)
+color_map = plt.get_cmap("tab20")
+strategy_colors = {
+    label: color_map(index % color_map.N)
+    for index, (label, _) in enumerate(strategy_norms)
 }
+benchmark_colors = {
+    label: color_map((index + len(strategy_norms)) % color_map.N)
+    for index, label in enumerate(benchmark_norms)
+}
+
+
+def line_width_for_curve_count(count):
+    if count <= 8:
+        return 2.0
+    if count <= 12:
+        return 1.6
+    if count <= 18:
+        return 1.25
+    return 1.0
+
+
+curve_count = len(strategy_norms) + len(benchmark_norms)
+strategy_line_width = line_width_for_curve_count(curve_count)
+benchmark_line_width = max(0.8, strategy_line_width - 0.2)
 
 # 6. Plot
 plt.figure(figsize=(10, 6))
-plt.plot(days, mv_curve, label='Mean-Variance (Momentum)', linewidth=2, color='#1f77b4')
-plt.plot(days, dm_curve, label='Dual Momentum (Top-5)', linewidth=2, color='#c15a00')
-plt.plot(days, dm_curve2, label='Dual Momentum (Top-2)', linewidth=2, color='#ff7f0e')
-plt.plot(days, dm_curve3, label='Dual Momentum (Top-2 daily rebalance)', linewidth=2, color='#ff9a41')
-plt.plot(days, dm_curve3a, label='Dual Momentum (Top-2 daily rebalance, trail-stop 0.15)', linewidth=2, color='#D2DE50')
-plt.plot(days, dm_curve4, label='Dual Momentum (Top-1 daily rebalance)', linewidth=2, color='#ffa85b')
-plt.plot(days, dmvol_curve, label=f'Dual Momentum (Top-2, vol {LIMIT_VOL})', linewidth=2, color='#FA5BFF')
+for label, curve in strategy_norms:
+    plt.plot(
+        days,
+        curve,
+        label=label,
+        linewidth=strategy_line_width,
+        color=strategy_colors[label],
+    )
 for label, curve in benchmark_norms.items():
     plt.plot(
         days,
         curve,
         label=label,
-        linestyle='--',
+        linewidth=benchmark_line_width,
+        linestyle="--",
         alpha=0.7,
         color=benchmark_colors[label],
     )
 
 plt.title(f"{MODEL_NAME} Strategy Comparison {today}", fontsize=14)
-plt.xlabel('Trading Days', fontsize=12)
-plt.ylabel('Growth of $1', fontsize=12)
+plt.xlabel("Trading Days", fontsize=12)
+plt.ylabel("Growth of $1", fontsize=12)
 plt.legend(fontsize=10)
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig(f'plots/strategy_comparison_{MODEL_FILENAME}.png', dpi=150)
+plt.savefig(f"plots/strategy_comparison_{MODEL_FILENAME}.png", dpi=150)
 print(f"Saved plots/strategy_comparison_{MODEL_FILENAME}.png")

@@ -259,7 +259,9 @@ def test_fetch_historical_sp500_tickers_selects_latest_prior_row(monkeypatch) ->
     monkeypatch.setattr(
         fetch_tickers,
         "cache_path",
-        lambda _name, _payload: type("MissingPath", (), {"exists": lambda self: False})(),
+        lambda _name, _payload: type(
+            "MissingPath", (), {"exists": lambda self: False}
+        )(),
     )
     monkeypatch.setattr(fetch_tickers, "write_cache", lambda _path, _payload: None)
 

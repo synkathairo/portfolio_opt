@@ -32,7 +32,9 @@ def test_fetch_closes_reads_headerless_csvs_and_aligns_dates(tmp_path) -> None:
     }
 
 
-def test_fetch_closes_reads_headered_csv_and_keeps_last_duplicate_date(tmp_path) -> None:
+def test_fetch_closes_reads_headered_csv_and_keeps_last_duplicate_date(
+    tmp_path,
+) -> None:
     (tmp_path / "prices.csv").write_text(
         "\n".join(
             [

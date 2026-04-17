@@ -8,12 +8,21 @@ import numpy as np
 
 from portfolio_opt.alpaca_interface import AlpacaClient
 from portfolio_opt import cli
-from portfolio_opt.backtest import BacktestResult, compute_dual_momentum_weights, run_backtest
+from portfolio_opt.backtest import (
+    BacktestResult,
+    compute_dual_momentum_weights,
+    run_backtest,
+)
 from portfolio_opt.config import AlpacaConfig, OptimizationConfig
 from portfolio_opt.model import ModelInputs
 from portfolio_opt.optimizer import optimize_weights
 from portfolio_opt.rebalance import build_order_plan, build_trailing_stop_plan
-from portfolio_opt.types import AccountSnapshot, Position, TrailingStopPlan
+from portfolio_opt.types import (
+    AccountSnapshot,
+    Position,
+    TrailingStopPlan,
+    UnprotectedTrailingStopQty,
+)
 
 
 def test_optimize_weights_aligns_asset_class_max_constraints() -> None:
@@ -60,11 +69,14 @@ def test_dynamic_universe_cache_writes_model_and_sidecar(tmp_path) -> None:
     assert meta["kind"] == "dynamic_universe_cache"
     assert meta["ticker_basket"] == ticker_basket
     assert meta["symbol_count"] == 2
-    assert cli._read_dynamic_universe_cache(
-        ticker_basket=ticker_basket,
-        cache_dir=tmp_path,
-        max_age_days=1,
-    ) == fetched
+    assert (
+        cli._read_dynamic_universe_cache(
+            ticker_basket=ticker_basket,
+            cache_dir=tmp_path,
+            max_age_days=1,
+        )
+        == fetched
+    )
 
 
 def test_dynamic_universe_cache_rejects_too_stale_sidecar(tmp_path) -> None:
@@ -113,11 +125,15 @@ def test_run_backtest_dispatches_black_litterman(monkeypatch) -> None:
             observations=2,
         )
 
-    def fake_optimize(*, expected_returns, covariance, config, current_weights, asset_class_matrix):
+    def fake_optimize(
+        *, expected_returns, covariance, config, current_weights, asset_class_matrix
+    ):
         called["optimize"] = True
         return np.array([0.25, 0.75], dtype=float)
 
-    monkeypatch.setattr("portfolio_opt.backtest.estimate_inputs_from_black_litterman", fake_bl)
+    monkeypatch.setattr(
+        "portfolio_opt.backtest.estimate_inputs_from_black_litterman", fake_bl
+    )
     monkeypatch.setattr("portfolio_opt.backtest.optimize_weights", fake_optimize)
 
     result = run_backtest(
@@ -159,7 +175,9 @@ def test_run_backtest_dispatches_risk_parity_projection(monkeypatch) -> None:
     def fail_optimize(**_kwargs):
         raise AssertionError("risk-parity backtest should not call optimize_weights")
 
-    monkeypatch.setattr("portfolio_opt.backtest.estimate_inputs_risk_parity", fake_risk_parity)
+    monkeypatch.setattr(
+        "portfolio_opt.backtest.estimate_inputs_risk_parity", fake_risk_parity
+    )
     monkeypatch.setattr("portfolio_opt.backtest.project_weights", fake_project)
     monkeypatch.setattr("portfolio_opt.backtest.optimize_weights", fail_optimize)
 
@@ -225,7 +243,7 @@ def test_order_plan_ignores_protective_trailing_stop_orders() -> None:
 
 
 def test_build_trailing_stop_plan_skips_existing_protection() -> None:
-    plan = build_trailing_stop_plan(
+    result = build_trailing_stop_plan(
         symbols=["SPY", "QQQ"],
         target_weights=[0.5, 0.5],
         positions=[
@@ -244,14 +262,171 @@ def test_build_trailing_stop_plan_skips_existing_protection() -> None:
         rebalance_threshold=0.02,
     )
 
-    assert plan == [
+    assert result.orders == [
         TrailingStopPlan(
             symbol="QQQ",
-            qty=2.5,
+            qty=2.0,
             side="sell",
             trail_percent=15.0,
             time_in_force="gtc",
         )
+    ]
+    assert result.unprotected_qty == [
+        UnprotectedTrailingStopQty(
+            symbol="QQQ",
+            position_qty=2.5,
+            unprotected_qty=0.5,
+        )
+    ]
+
+
+def test_build_trailing_stop_plan_floors_fractional_qty() -> None:
+    result = build_trailing_stop_plan(
+        symbols=["SPY"],
+        target_weights=[1.0],
+        positions=[Position(symbol="SPY", qty=12.345678, market_value=1234.57)],
+        open_orders=[],
+        trailing_stop=0.15,
+        rebalance_threshold=0.02,
+    )
+
+    assert result.orders == [
+        TrailingStopPlan(
+            symbol="SPY",
+            qty=12.0,
+            side="sell",
+            trail_percent=15.0,
+            time_in_force="gtc",
+        )
+    ]
+    assert result.unprotected_qty == [
+        UnprotectedTrailingStopQty(
+            symbol="SPY",
+            position_qty=12.345678,
+            unprotected_qty=0.345678,
+        )
+    ]
+
+
+def test_build_trailing_stop_plan_reports_subshare_qty_without_order() -> None:
+    result = build_trailing_stop_plan(
+        symbols=["SPY"],
+        target_weights=[1.0],
+        positions=[Position(symbol="SPY", qty=0.75, market_value=75.0)],
+        open_orders=[],
+        trailing_stop=0.15,
+        rebalance_threshold=0.02,
+    )
+
+    assert result.orders == []
+    assert result.unprotected_qty == [
+        UnprotectedTrailingStopQty(
+            symbol="SPY",
+            position_qty=0.75,
+            unprotected_qty=0.75,
+        )
+    ]
+
+
+def test_cli_dry_run_reports_unprotected_fractional_trailing_stop_qty(
+    monkeypatch,
+    capsys,
+) -> None:
+    args = Namespace(
+        model="dummy.json",
+        dynamic_universe=False,
+        filter_before=None,
+        ticker_basket=[],
+        risk_aversion=4.0,
+        min_weight=0.0,
+        max_weight=1.0,
+        rebalance_threshold=0.02,
+        turnover_penalty=0.02,
+        allow_cash=False,
+        min_cash_weight=0.0,
+        max_turnover=None,
+        min_invested_weight=0.0,
+        estimate_from_history=False,
+        lookback_days=60,
+        mean_shrinkage=0.75,
+        return_model="sample-mean",
+        strategy="mean-variance",
+        momentum_window=63,
+        top_k=3,
+        factor_top_k=1,
+        dual_momentum_weighting="equal",
+        softmax_temperature=0.05,
+        absolute_momentum_threshold=0.0,
+        target_vol=None,
+        vol_window=63,
+        max_single_weight=None,
+        trailing_stop=0.15,
+        basket_opt=None,
+        basket_risk_aversion=1.0,
+        data_source="alpaca",
+        backtest_days=0,
+        rebalance_every=21,
+        rolling_window_days=0,
+        rolling_step_days=21,
+        sweep=False,
+        top_n=5,
+        submit=False,
+        use_cache=False,
+        refresh_cache=False,
+        offline=False,
+        dry_run=True,
+    )
+
+    class FakeAlpaca:
+        def __init__(self, _config) -> None:
+            pass
+
+        def get_account(self, **_kwargs):
+            return AccountSnapshot(equity=1234.5678)
+
+        def get_positions(self, **_kwargs):
+            return [Position(symbol="SPY", qty=12.345678, market_value=1234.5678)]
+
+        def get_open_orders(self):
+            return []
+
+        def get_latest_prices(self, *_args, **_kwargs):
+            return {}
+
+    monkeypatch.setattr(cli, "parse_args", lambda: args)
+    monkeypatch.setattr(
+        cli,
+        "load_model_inputs",
+        lambda _path: ModelInputs(
+            symbols=["SPY"],
+            expected_returns=np.array([0.1], dtype=float),
+            covariance=np.eye(1, dtype=float),
+            asset_classes={"SPY": "equity"},
+            class_min_weights={},
+            class_max_weights={},
+        ),
+    )
+    monkeypatch.setattr(cli, "AlpacaClient", FakeAlpaca)
+    monkeypatch.setattr(cli, "optimize_weights", lambda **_kwargs: np.array([1.0]))
+
+    cli.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["trailing_stop_orders"] == [
+        {
+            "symbol": "SPY",
+            "qty": 12.0,
+            "side": "sell",
+            "trail_percent": 15.0,
+            "time_in_force": "gtc",
+        }
+    ]
+    assert payload["unprotected_fractional_trailing_stop_qty"] == [
+        {
+            "symbol": "SPY",
+            "position_qty": 12.345678,
+            "unprotected_qty": 0.345678,
+        }
     ]
 
 
@@ -735,7 +910,7 @@ def test_submit_trailing_stop_plan_uses_qty_and_percent() -> None:
         [
             TrailingStopPlan(
                 symbol="SPY",
-                qty=12.345678,
+                qty=12.0,
                 side="sell",
                 trail_percent=15.0,
                 time_in_force="gtc",
@@ -752,7 +927,7 @@ def test_submit_trailing_stop_plan_uses_qty_and_percent() -> None:
         }
     ]
     assert fake_trading.submitted.symbol == "SPY"
-    assert fake_trading.submitted.qty == 12.345678
+    assert fake_trading.submitted.qty == 12.0
     assert fake_trading.submitted.notional is None
     assert fake_trading.submitted.trail_percent == 15.0
     assert fake_trading.submitted.type.value == "trailing_stop"
@@ -825,7 +1000,9 @@ def test_daily_closes_refresh_appends_only_missing_bars(monkeypatch, tmp_path) -
         calls.append((symbols, start, limit))
         return {"SPY": [{"timestamp": "2026-01-05", "close": 103.0}]}
 
-    monkeypatch.setattr(client, "_daily_closes_v2_cache_path", lambda _symbol: cache_file)
+    monkeypatch.setattr(
+        client, "_daily_closes_v2_cache_path", lambda _symbol: cache_file
+    )
     monkeypatch.setattr(client, "_daily_bar_rows_payload", fake_daily_bar_rows_payload)
     monkeypatch.setattr(
         "portfolio_opt.alpaca_interface.datetime",
