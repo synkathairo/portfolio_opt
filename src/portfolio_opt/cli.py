@@ -33,6 +33,7 @@ from .csv_data import (
     write_yfinance_compatible_caches as csv_write_yfinance_compatible_caches,
 )
 from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
+from .execution import submit_rebalance_sell_first
 from .black_litterman import estimate_inputs_from_black_litterman
 from .risk_parity import estimate_inputs_risk_parity
 from .model import ModelInputs, load_model_inputs
@@ -1479,8 +1480,18 @@ def main() -> None:
             if args.trailing_stop is not None
             else []
         )
-        submitted_orders = alpaca.submit_order_plan(plan)
-        fill_statuses: list[dict] = []
+        execution_result = submit_rebalance_sell_first(
+            broker=alpaca,
+            plan=plan,
+            symbols=model.symbols,
+            target_weights=target_weights.tolist(),
+            config=opt_config,
+            use_cache=args.use_cache,
+            refresh_cache=args.refresh_cache,
+            offline=args.offline,
+        )
+        submitted_orders = execution_result.submitted_orders
+        fill_statuses: list[dict] = execution_result.sell_fill_statuses
         submitted_trailing_stops: list[dict] = []
         if args.trailing_stop is not None:
             fill_statuses = alpaca.wait_for_submitted_orders(submitted_orders)

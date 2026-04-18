@@ -14,11 +14,13 @@ from portfolio_opt.backtest import (
     run_backtest,
 )
 from portfolio_opt.config import AlpacaConfig, OptimizationConfig
+from portfolio_opt.execution import submit_rebalance_sell_first
 from portfolio_opt.model import ModelInputs
 from portfolio_opt.optimizer import optimize_weights
 from portfolio_opt.rebalance import build_order_plan, build_trailing_stop_plan
 from portfolio_opt.types import (
     AccountSnapshot,
+    OrderPlan,
     Position,
     TrailingStopPlan,
     UnprotectedTrailingStopQty,
@@ -975,6 +977,142 @@ def test_cancel_open_trailing_stops_only_cancels_matching_symbols() -> None:
 
     assert canceled == [{"id": "stop-1", "symbol": "SPY"}]
     assert fake_trading.canceled == ["stop-1"]
+
+
+def test_submit_rebalance_sell_first_waits_before_buying() -> None:
+    class FakeBroker:
+        def __init__(self) -> None:
+            self.submitted_symbols: list[list[str]] = []
+
+        def submit_order_plan(self, plans: list[OrderPlan]):
+            self.submitted_symbols.append([plan.symbol for plan in plans])
+            return [
+                {"id": f"order-{plan.symbol}", "symbol": plan.symbol, "side": plan.side}
+                for plan in plans
+            ]
+
+        def wait_for_submitted_orders(self, submitted_orders, **_kwargs):
+            return [dict(order, status="filled") for order in submitted_orders]
+
+        def get_account(self, **_kwargs):
+            return AccountSnapshot(equity=1175.92)
+
+        def get_positions(self, **_kwargs):
+            return []
+
+        def get_open_orders(self):
+            return []
+
+        def get_latest_prices(self, symbols, **_kwargs):
+            assert symbols == ["APP"]
+            return {"APP": 500.0}
+
+    broker = FakeBroker()
+
+    result = submit_rebalance_sell_first(
+        broker=broker,
+        plan=[
+            OrderPlan("APP", 0.0, 0.5, 0.5, "buy", 587.96),
+            OrderPlan("PLTR", 0.504958, 0.0, -0.504958, "sell", 593.79),
+        ],
+        symbols=["APP", "PLTR"],
+        target_weights=[0.5, 0.0],
+        config=OptimizationConfig(rebalance_threshold=0.02),
+    )
+
+    assert broker.submitted_symbols == [["PLTR"], ["APP"]]
+    assert result.sell_fill_statuses == [
+        {"id": "order-PLTR", "symbol": "PLTR", "side": "sell", "status": "filled"}
+    ]
+    assert result.buy_plan == [OrderPlan("APP", 0.0, 0.5, 0.5, "buy", 587.96)]
+    assert result.skipped_buys_reason is None
+
+
+def test_submit_rebalance_sell_first_skips_buys_when_sell_rejected() -> None:
+    class FakeBroker:
+        def __init__(self) -> None:
+            self.submitted_symbols: list[list[str]] = []
+
+        def submit_order_plan(self, plans: list[OrderPlan]):
+            self.submitted_symbols.append([plan.symbol for plan in plans])
+            return [
+                {"id": f"order-{plan.symbol}", "symbol": plan.symbol, "side": plan.side}
+                for plan in plans
+            ]
+
+        def wait_for_submitted_orders(self, submitted_orders, **_kwargs):
+            return [dict(order, status="rejected") for order in submitted_orders]
+
+        def get_account(self, **_kwargs):
+            raise AssertionError("buy leg should not refresh account")
+
+        def get_positions(self, **_kwargs):
+            raise AssertionError("buy leg should not refresh positions")
+
+        def get_open_orders(self):
+            raise AssertionError("buy leg should not refresh open orders")
+
+        def get_latest_prices(self, symbols, **_kwargs):
+            raise AssertionError("buy leg should not fetch prices")
+
+    broker = FakeBroker()
+
+    result = submit_rebalance_sell_first(
+        broker=broker,
+        plan=[
+            OrderPlan("APP", 0.0, 0.5, 0.5, "buy", 587.96),
+            OrderPlan("PLTR", 0.504958, 0.0, -0.504958, "sell", 593.79),
+        ],
+        symbols=["APP", "PLTR"],
+        target_weights=[0.5, 0.0],
+        config=OptimizationConfig(rebalance_threshold=0.02),
+    )
+
+    assert broker.submitted_symbols == [["PLTR"]]
+    assert result.buy_plan == []
+    assert result.skipped_buys_reason == "one or more sell orders did not fill"
+
+
+def test_submit_rebalance_sell_first_skips_buys_when_sell_not_accepted() -> None:
+    class FakeBroker:
+        def __init__(self) -> None:
+            self.submitted_symbols: list[list[str]] = []
+
+        def submit_order_plan(self, plans: list[OrderPlan]):
+            self.submitted_symbols.append([plan.symbol for plan in plans])
+            return []
+
+        def wait_for_submitted_orders(self, submitted_orders, **_kwargs):
+            raise AssertionError("unaccepted sell leg should not be polled")
+
+        def get_account(self, **_kwargs):
+            raise AssertionError("buy leg should not refresh account")
+
+        def get_positions(self, **_kwargs):
+            raise AssertionError("buy leg should not refresh positions")
+
+        def get_open_orders(self):
+            raise AssertionError("buy leg should not refresh open orders")
+
+        def get_latest_prices(self, symbols, **_kwargs):
+            raise AssertionError("buy leg should not fetch prices")
+
+    broker = FakeBroker()
+
+    result = submit_rebalance_sell_first(
+        broker=broker,
+        plan=[
+            OrderPlan("APP", 0.0, 0.5, 0.5, "buy", 587.96),
+            OrderPlan("PLTR", 0.504958, 0.0, -0.504958, "sell", 593.79),
+        ],
+        symbols=["APP", "PLTR"],
+        target_weights=[0.5, 0.0],
+        config=OptimizationConfig(rebalance_threshold=0.02),
+    )
+
+    assert broker.submitted_symbols == [["PLTR"]]
+    assert result.buy_plan == []
+    assert result.skipped_buys_reason == "one or more sell orders were not accepted"
 
 
 def test_daily_closes_refresh_appends_only_missing_bars(monkeypatch, tmp_path) -> None:
