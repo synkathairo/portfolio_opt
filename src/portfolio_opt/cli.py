@@ -1448,6 +1448,11 @@ def main() -> None:
         "cash": {
             "current_weight": round(current_cash_weight, 6),
             "target_weight": round(target_cash_weight, 6),
+            "buying_power": (
+                round(account.buying_power, 2)
+                if account.buying_power is not None
+                else None
+            ),
         },
         "asset_class_exposures": {
             "current": asset_class_exposures(

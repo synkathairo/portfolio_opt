@@ -83,7 +83,7 @@ def build_order_plan(
                 notional_usd=round(notional_usd, 2),
             )
         )
-    return plans
+    return _cap_buy_orders_to_buying_power(plans, account, config)
 
 
 def build_trailing_stop_plan(
@@ -145,3 +145,42 @@ def build_trailing_stop_plan(
 def _order_value(value: object) -> str:
     raw = getattr(value, "value", value)
     return str(raw)
+
+
+def _cap_buy_orders_to_buying_power(
+    plans: list[OrderPlan],
+    account: AccountSnapshot,
+    config: OptimizationConfig,
+) -> list[OrderPlan]:
+    if account.buying_power is None:
+        return plans
+
+    buy_plan = [plan for plan in plans if plan.side == "buy"]
+    total_buy_notional = sum(plan.notional_usd for plan in buy_plan)
+    if total_buy_notional <= 0.0 or total_buy_notional <= account.buying_power:
+        return plans
+
+    scale = max(0.0, account.buying_power) / total_buy_notional
+    capped: list[OrderPlan] = []
+    for plan in plans:
+        if plan.side != "buy":
+            capped.append(plan)
+            continue
+
+        adjusted_notional = round(plan.notional_usd * scale, 2)
+        adjusted_delta = (
+            adjusted_notional / account.equity if account.equity > 0 else 0.0
+        )
+        if adjusted_notional <= 0.0 or adjusted_delta < config.rebalance_threshold:
+            continue
+        capped.append(
+            OrderPlan(
+                symbol=plan.symbol,
+                current_weight=plan.current_weight,
+                target_weight=round(plan.current_weight + adjusted_delta, 6),
+                delta_weight=round(adjusted_delta, 6),
+                side=plan.side,
+                notional_usd=adjusted_notional,
+            )
+        )
+    return capped

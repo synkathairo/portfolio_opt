@@ -13,6 +13,7 @@ class Position:
 @dataclass(frozen=True)
 class AccountSnapshot:
     equity: float
+    buying_power: float | None = None
 
 
 @dataclass(frozen=True)

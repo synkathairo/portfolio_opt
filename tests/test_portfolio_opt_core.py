@@ -3,6 +3,7 @@ from __future__ import annotations
 from argparse import Namespace
 from datetime import UTC, datetime, timedelta
 import json
+from uuid import UUID
 
 import numpy as np
 
@@ -242,6 +243,35 @@ def test_order_plan_ignores_protective_trailing_stop_orders() -> None:
     )
 
     assert plan == []
+
+
+def test_order_plan_skips_buys_below_threshold_when_buying_power_is_low() -> None:
+    plan = build_order_plan(
+        symbols=["APP", "SNDK"],
+        target_weights=[0.5, 0.5],
+        account=AccountSnapshot(equity=1178.12, buying_power=5.70),
+        positions=[Position(symbol="SNDK", qty=0.633232, market_value=583.2)],
+        latest_prices={"APP": 500.0},
+        config=OptimizationConfig(rebalance_threshold=0.02),
+    )
+
+    assert plan == []
+
+
+def test_order_plan_scales_buys_to_buying_power() -> None:
+    plan = build_order_plan(
+        symbols=["APP", "SNDK"],
+        target_weights=[0.5, 0.5],
+        account=AccountSnapshot(equity=1000.0, buying_power=300.0),
+        positions=[],
+        latest_prices={"APP": 500.0, "SNDK": 50.0},
+        config=OptimizationConfig(rebalance_threshold=0.02),
+    )
+
+    assert plan == [
+        OrderPlan("APP", 0.0, 0.15, 0.15, "buy", 150.0),
+        OrderPlan("SNDK", 0.0, 0.15, 0.15, "buy", 150.0),
+    ]
 
 
 def test_build_trailing_stop_plan_skips_existing_protection() -> None:
@@ -934,6 +964,62 @@ def test_submit_trailing_stop_plan_uses_qty_and_percent() -> None:
     assert fake_trading.submitted.trail_percent == 15.0
     assert fake_trading.submitted.type.value == "trailing_stop"
     assert fake_trading.submitted.time_in_force.value == "gtc"
+
+
+def test_submitted_order_results_are_json_serializable_with_uuid_ids() -> None:
+    order_id = UUID("12345678-1234-5678-1234-567812345678")
+
+    class FakeOrder:
+        def __init__(self, status: str = "new") -> None:
+            self.id = order_id
+            self.status = status
+            self.filled_qty = "1"
+
+    class FakeTrading:
+        def __init__(self) -> None:
+            self.submitted = None
+
+        def submit_order(self, order_data):
+            self.submitted = order_data
+            return FakeOrder()
+
+        def get_order_by_id(self, order_id_arg: str):
+            assert order_id_arg == str(order_id)
+            return FakeOrder(status="filled")
+
+    fake_trading = FakeTrading()
+    client = object.__new__(AlpacaClient)
+    client._trading = fake_trading
+
+    submitted = client.submit_order_plan(
+        [OrderPlan("SPY", 0.0, 1.0, 1.0, "buy", 123.45)]
+    )
+    statuses = client.wait_for_submitted_orders(
+        submitted, timeout_seconds=1.0, poll_seconds=0.0
+    )
+    trailing_stops = client.submit_trailing_stop_plan(
+        [
+            TrailingStopPlan(
+                symbol="SPY",
+                qty=1.0,
+                side="sell",
+                trail_percent=15.0,
+                time_in_force="gtc",
+            )
+        ]
+    )
+
+    assert submitted[0]["id"] == str(order_id)
+    assert statuses[0]["id"] == str(order_id)
+    assert statuses[0]["status"] == "filled"
+    assert trailing_stops[0]["id"] == str(order_id)
+    json.dumps(
+        {
+            "submitted_orders": submitted,
+            "order_fill_statuses": statuses,
+            "submitted_trailing_stops": trailing_stops,
+        }
+    )
 
 
 def test_cancel_open_trailing_stops_only_cancels_matching_symbols() -> None:

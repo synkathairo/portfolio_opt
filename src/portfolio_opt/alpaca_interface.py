@@ -8,6 +8,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
+from uuid import UUID
 
 from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical.stock import StockHistoricalDataClient
@@ -77,7 +78,11 @@ class AlpacaClient:
             refresh_cache=refresh_cache,
             offline=offline,
         )
-        return AccountSnapshot(equity=float(payload["equity"]))
+        buying_power = payload.get("buying_power")
+        return AccountSnapshot(
+            equity=float(payload["equity"]),
+            buying_power=float(buying_power) if buying_power is not None else None,
+        )
 
     def get_positions(
         self,
@@ -186,7 +191,10 @@ class AlpacaClient:
 
     def _account_payload(self) -> dict[str, Any]:
         account = cast(TradeAccount, self._trading.get_account())
-        return {"equity": account.equity}
+        return {
+            "equity": account.equity,
+            "buying_power": _model_value(account, "buying_power"),
+        }
 
     def _positions_payload(self) -> list[dict[str, Any]]:
         positions = cast(list[AlpacaPosition], self._trading.get_all_positions())
@@ -942,7 +950,10 @@ class AlpacaClient:
 
 def _model_value(model: Any, field: str) -> Any:
     value = model.get(field) if isinstance(model, dict) else getattr(model, field, None)
-    return getattr(value, "value", value)
+    value = getattr(value, "value", value)
+    if isinstance(value, UUID):
+        return str(value)
+    return value
 
 
 def format_order_plans(plans: list[OrderPlan] | list[TrailingStopPlan]) -> str:
