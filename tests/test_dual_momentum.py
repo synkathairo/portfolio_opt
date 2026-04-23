@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from portfolio_opt.backtest import (
+    compute_dual_momentum_weights,
     rolling_window_comparison,
     run_dual_momentum_backtest,
     run_factor_momentum_backtest,
@@ -155,6 +156,56 @@ def test_dual_momentum_inverse_vol_weighting_tilts_toward_lower_vol_asset() -> N
     assert result.latest_weights[1] > result.latest_weights[0]
     assert result.latest_weights[2] == 0.0
     assert round(float(result.latest_weights.sum()), 6) == 1.0
+
+
+def test_dual_momentum_max_single_weight_redistributes_to_available_capacity() -> None:
+    weights = compute_dual_momentum_weights(
+        symbols=["A", "B", "C", "D", "SGOV"],
+        closes_by_symbol={
+            "A": [100.0, 140.0],
+            "B": [100.0, 129.0],
+            "C": [100.0, 120.0],
+            "D": [100.0, 101.0],
+            "SGOV": [100.0, 100.0],
+        },
+        asset_classes={
+            "A": "equity",
+            "B": "equity",
+            "C": "equity",
+            "D": "equity",
+            "SGOV": "cash_like",
+        },
+        lookback_days=1,
+        top_k=4,
+        weighting="score",
+        max_single_weight=0.3,
+    )
+
+    assert max(weights.values()) <= 0.3
+    assert round(sum(weights.values()), 6) == 1.0
+
+
+def test_dual_momentum_trailing_stop_peak_starts_at_entry() -> None:
+    result = run_dual_momentum_backtest(
+        symbols=["A", "B", "SGOV"],
+        closes_by_symbol={
+            "A": [100.0, 120.0, 140.0, 130.0, 125.0, 125.0],
+            "B": [100.0, 100.0, 25.0, 50.0, 75.0, 100.0],
+            "SGOV": [100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+        },
+        asset_classes={
+            "A": "equity_a",
+            "B": "equity_b",
+            "SGOV": "cash_like",
+        },
+        lookback_days=2,
+        rebalance_every=2,
+        top_k=1,
+        absolute_threshold=0.0,
+        trailing_stop=0.1,
+    )
+
+    assert result.latest_weights.tolist() == [0.0, 1.0, 0.0]
 
 
 def test_factor_momentum_selects_names_inside_top_factor_sleeve() -> None:

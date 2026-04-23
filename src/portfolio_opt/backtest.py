@@ -36,6 +36,48 @@ def _find_symbol_indices(
     return result
 
 
+def _apply_max_single_weight(
+    weights: np.ndarray,
+    max_single_weight: float | None,
+) -> np.ndarray:
+    if max_single_weight is None:
+        return weights
+    if max_single_weight <= 0.0:
+        raise ValueError("max_single_weight must be positive.")
+
+    capped = np.maximum(np.array(weights, dtype=float), 0.0)
+    total = float(capped.sum())
+    if total <= 0.0:
+        return capped
+
+    target_total = min(total, max_single_weight * np.count_nonzero(capped > 0.0))
+    remaining_total = target_total
+    result = np.zeros_like(capped)
+    active = capped > 0.0
+
+    while np.any(active):
+        active_weights = capped[active]
+        active_sum = float(active_weights.sum())
+        if active_sum <= 0.0:
+            break
+        proposed = active_weights / active_sum * remaining_total
+        capped_active = proposed >= max_single_weight
+        active_indices = np.flatnonzero(active)
+
+        if not np.any(capped_active):
+            result[active_indices] = proposed
+            break
+
+        capped_indices = active_indices[capped_active]
+        result[capped_indices] = max_single_weight
+        remaining_total -= max_single_weight * len(capped_indices)
+        active[capped_indices] = False
+        if remaining_total <= 0.0:
+            break
+
+    return result
+
+
 def compute_dual_momentum_weights(
     symbols: list[str],
     closes_by_symbol: dict[str, list[float]],
@@ -148,22 +190,7 @@ def compute_dual_momentum_weights(
             ).items():
                 target_weights[index] = weight
 
-        if max_single_weight is not None:
-            capped = target_weights.copy()
-            excess = 0.0
-            for i in range(len(symbols)):
-                if capped[i] > max_single_weight:
-                    excess += capped[i] - max_single_weight
-                    capped[i] = max_single_weight
-                elif capped[i] < 0:
-                    excess += abs(capped[i])
-                    capped[i] = 0.0
-            remaining = capped[capped > 0].sum()
-            if remaining > 0:
-                for i in range(len(symbols)):
-                    if 0 < capped[i] < max_single_weight:
-                        capped[i] += excess * (capped[i] / remaining)
-            target_weights = capped
+        target_weights = _apply_max_single_weight(target_weights, max_single_weight)
 
         if target_vol is not None:
             recent_returns_window = returns[:, max(0, returns.shape[1] - vol_window) :]
@@ -654,23 +681,10 @@ def run_dual_momentum_backtest(
                     ).items():
                         target_weights[index] = weight
 
-                # Apply single-asset cap
-                if max_single_weight is not None:
-                    capped = target_weights.copy()
-                    excess = 0.0
-                    for i in range(len(symbols)):
-                        if capped[i] > max_single_weight:
-                            excess += capped[i] - max_single_weight
-                            capped[i] = max_single_weight
-                        elif capped[i] < 0:
-                            excess += abs(capped[i])
-                            capped[i] = 0.0
-                    remaining = capped[capped > 0].sum()
-                    if remaining > 0:
-                        for i in range(len(symbols)):
-                            if 0 < capped[i] < max_single_weight:
-                                capped[i] += excess * (capped[i] / remaining)
-                    target_weights = capped
+                target_weights = _apply_max_single_weight(
+                    target_weights,
+                    max_single_weight,
+                )
 
                 # Scale risky basket to hit target portfolio volatility
                 if target_vol is not None:
@@ -699,14 +713,20 @@ def run_dual_momentum_backtest(
                 for index in defensive_indices:
                     target_weights[index] = weight
 
-            turnovers.append(float(np.abs(target_weights - weights).sum()))
+            previous_weights = weights
+            turnovers.append(float(np.abs(target_weights - previous_weights).sum()))
             weights = target_weights
             rebalance_count += 1
 
         # Trailing stop-loss: track peak prices since entry per asset
         if trailing_stop is not None:
             if asset_peak_price is None:
-                asset_peak_price = price_matrix[:, step - 1].copy()
+                asset_peak_price = np.zeros(len(symbols), dtype=float)
+            for i in range(len(symbols)):
+                if weights[i] > 0 and asset_peak_price[i] <= 0.0:
+                    asset_peak_price[i] = price_matrix[i, step]
+                elif weights[i] <= 0.0:
+                    asset_peak_price[i] = 0.0
             # Update peaks for held positions
             for i in range(len(symbols)):
                 if weights[i] > 0:
