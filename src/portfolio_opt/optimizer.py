@@ -14,6 +14,7 @@ except ImportError as exc:  # pragma: no cover
 SOLVER = cp.CLARABEL
 # SOLVER = cp.ECOS
 _SOLUTION_TOLERANCE = 1e-6
+_CONSTRAINT_TOLERANCE = 1e-5
 _ACCEPTABLE_STATUSES = {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}
 
 
@@ -74,25 +75,25 @@ def _finalize_solution(
     cleaned[near_max] = config.max_weight
 
     violations: list[str] = []
-    if np.any(cleaned < config.min_weight - _SOLUTION_TOLERANCE):
+    if np.any(cleaned < config.min_weight - _CONSTRAINT_TOLERANCE):
         violations.append("min_weight")
-    if np.any(cleaned > config.max_weight + _SOLUTION_TOLERANCE):
+    if np.any(cleaned > config.max_weight + _CONSTRAINT_TOLERANCE):
         violations.append("max_weight")
 
     total = float(cleaned.sum())
     if config.force_full_investment:
-        if abs(total - 1.0) > _SOLUTION_TOLERANCE:
+        if abs(total - 1.0) > _CONSTRAINT_TOLERANCE:
             violations.append(f"full_investment_sum={total:.12g}")
     else:
         max_invested = 1.0 - config.min_cash_weight
-        if total > max_invested + _SOLUTION_TOLERANCE:
+        if total > max_invested + _CONSTRAINT_TOLERANCE:
             violations.append(f"max_invested_sum={total:.12g}")
-        if total < config.min_invested_weight - _SOLUTION_TOLERANCE:
+        if total < config.min_invested_weight - _CONSTRAINT_TOLERANCE:
             violations.append(f"min_invested_sum={total:.12g}")
 
     if baseline_weights is not None and config.max_turnover is not None:
         turnover = float(np.abs(cleaned - baseline_weights).sum())
-        if turnover > config.max_turnover + _SOLUTION_TOLERANCE:
+        if turnover > config.max_turnover + _CONSTRAINT_TOLERANCE:
             violations.append(f"max_turnover={turnover:.12g}")
 
     if asset_class_matrix is not None:
@@ -101,7 +102,7 @@ def _finalize_solution(
             min_weight = config.class_min_weights.get(class_name)
             if (
                 min_weight is not None
-                and class_exposures[class_index] < min_weight - _SOLUTION_TOLERANCE
+                and class_exposures[class_index] < min_weight - _CONSTRAINT_TOLERANCE
             ):
                 violations.append(
                     f"class_min[{class_name}]={class_exposures[class_index]:.12g}"
@@ -109,7 +110,7 @@ def _finalize_solution(
             max_weight = config.class_max_weights.get(class_name)
             if (
                 max_weight is not None
-                and class_exposures[class_index] > max_weight + _SOLUTION_TOLERANCE
+                and class_exposures[class_index] > max_weight + _CONSTRAINT_TOLERANCE
             ):
                 violations.append(
                     f"class_max[{class_name}]={class_exposures[class_index]:.12g}"
@@ -142,14 +143,14 @@ def _finalize_basket_solution(
     )
 
     violations: list[str] = []
-    if np.any(cleaned < min_weight - _SOLUTION_TOLERANCE):
+    if np.any(cleaned < min_weight - _CONSTRAINT_TOLERANCE):
         violations.append("min_weight")
-    if np.any(cleaned > max_weight + _SOLUTION_TOLERANCE):
+    if np.any(cleaned > max_weight + _CONSTRAINT_TOLERANCE):
         violations.append("max_weight")
     total = float(cleaned.sum())
-    if force_full_investment and abs(total - 1.0) > _SOLUTION_TOLERANCE:
+    if force_full_investment and abs(total - 1.0) > _CONSTRAINT_TOLERANCE:
         violations.append(f"full_investment_sum={total:.12g}")
-    if not force_full_investment and total > 1.0 + _SOLUTION_TOLERANCE:
+    if not force_full_investment and total > 1.0 + _CONSTRAINT_TOLERANCE:
         violations.append(f"max_invested_sum={total:.12g}")
     if violations:
         raise RuntimeError(

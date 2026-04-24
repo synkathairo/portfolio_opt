@@ -18,7 +18,7 @@ from portfolio_opt.backtest import (
 from portfolio_opt.config import AlpacaConfig, OptimizationConfig
 from portfolio_opt.execution import submit_rebalance_sell_first
 from portfolio_opt.model import ModelInputs, load_model_inputs
-from portfolio_opt.optimizer import optimize_weights, project_weights
+from portfolio_opt.optimizer import _finalize_solution, optimize_weights, project_weights
 from portfolio_opt.risk_parity import risk_parity_weights
 from portfolio_opt.rebalance import build_order_plan, build_trailing_stop_plan
 from portfolio_opt.types import (
@@ -95,6 +95,29 @@ def test_project_weights_preserves_max_weight_after_cleanup() -> None:
 
     assert abs(float(weights.sum()) - 1.0) <= 1e-6
     assert float(weights.max()) <= 0.4 + 1e-6
+
+
+def test_finalize_solution_accepts_small_solver_feasibility_residual() -> None:
+    weights = _finalize_solution(
+        np.array([0.4, 0.599998991866], dtype=float),
+        OptimizationConfig(max_weight=1.0, force_full_investment=True),
+        context="Optimization",
+    )
+
+    assert abs(float(weights.sum()) - 1.0) <= 1e-5
+
+
+def test_finalize_solution_rejects_material_full_investment_residual() -> None:
+    try:
+        _finalize_solution(
+            np.array([0.4, 0.59998], dtype=float),
+            OptimizationConfig(max_weight=1.0, force_full_investment=True),
+            context="Optimization",
+        )
+    except RuntimeError as exc:
+        assert "full_investment_sum" in str(exc)
+    else:
+        raise AssertionError("Material full-investment residual should fail.")
 
 
 def _risk_contributions(weights: np.ndarray, covariance: np.ndarray) -> np.ndarray:
