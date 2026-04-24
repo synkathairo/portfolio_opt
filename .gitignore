@@ -210,5 +210,16 @@ target
 # Contains mutation testing data
 **/mutants.out*/
 
+# Project-generated artifacts
+plots/
+outputs/
+chart-widgets-*.js
+chunk-*.js
+outputs.txt
+test_fetch.py
+test_rust.json
+update_chart.sh
+.qwen/
+
 # macos
 .DS_Store

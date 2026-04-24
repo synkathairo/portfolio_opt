@@ -21,4 +21,7 @@ def read_cache(path: Path) -> Any:
 
 
 def write_cache(path: Path, payload: Any) -> None:
-    path.write_text(json.dumps(payload, indent=2))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2))
+    tmp_path.replace(path)

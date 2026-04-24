@@ -78,78 +78,78 @@ def _apply_max_single_weight(
     return result
 
 
-def compute_dual_momentum_weights(
+def _momentum_asset_indices(
     symbols: list[str],
-    closes_by_symbol: dict[str, list[float]],
     asset_classes: dict[str, str],
+) -> tuple[list[int], list[int], int | None]:
+    risky_indices = [
+        index
+        for index, symbol in enumerate(symbols)
+        if not asset_classes.get(symbol, "").startswith("bond")
+        and asset_classes.get(symbol) != "cash_like"
+    ]
+    defensive_indices = [
+        index
+        for index, symbol in enumerate(symbols)
+        if asset_classes.get(symbol, "").startswith("bond")
+        or asset_classes.get(symbol) == "cash_like"
+    ]
+    cash_like_index = next(
+        (
+            index
+            for index, symbol in enumerate(symbols)
+            if asset_classes.get(symbol) == "cash_like"
+        ),
+        None,
+    )
+    return risky_indices, defensive_indices, cash_like_index
+
+
+def _momentum_target_weights(
+    *,
+    symbols: list[str],
+    asset_classes: dict[str, str],
+    returns: np.ndarray,
+    trailing_returns: np.ndarray,
+    trailing_volatility: np.ndarray,
     lookback_days: int,
     top_k: int,
-    weighting: str = "equal",
-    softmax_temperature: float = 0.05,
-    absolute_threshold: float = 0.0,
-    basket_opt: str | None = None,
-    basket_risk_aversion: float = 1.0,
-    target_vol: float | None = None,
-    max_single_weight: float | None = None,
-    vol_window: int = 63,
-    trailing_stop: float | None = None,
-    factor_top_k: int | None = None,
-) -> dict[str, float]:
-    """Compute dual-momentum target weights for a single point in time.
-
-    Used by the live rebalancing path to produce target weights from current
-    Alpaca data, identical to the backtest logic at a single rebalance step.
-    """
-    # The live CLI handles trailing stops with broker-side protective orders.
-    # This single-period weight calculation cannot simulate an entry peak.
-    aligned_closes = align_close_history(symbols, closes_by_symbol)
-    price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
-    if price_matrix.ndim != 2 or price_matrix.shape[1] < lookback_days + 1:
-        raise ValueError("Not enough price history to compute dual momentum weights.")
-
-    returns = price_matrix[:, 1:] / price_matrix[:, :-1] - 1.0
-    trailing_returns = price_matrix[:, -1] / price_matrix[:, -(lookback_days + 1)] - 1.0
-    trailing_volatility = returns.std(axis=1, ddof=0)
-
-    risky_symbols = [
-        s
-        for s in symbols
-        if not asset_classes.get(s, "").startswith("bond")
-        and asset_classes.get(s) != "cash_like"
-    ]
-    defensive_symbols = [
-        s
-        for s in symbols
-        if asset_classes.get(s, "").startswith("bond")
-        or asset_classes.get(s) == "cash_like"
-    ]
-    risky_indices = _find_symbol_indices(symbols, risky_symbols)
-    defensive_indices = _find_symbol_indices(symbols, defensive_symbols)
+    weighting: str,
+    softmax_temperature: float,
+    absolute_threshold: float,
+    basket_opt: str | None,
+    basket_risk_aversion: float,
+    target_vol: float | None,
+    max_single_weight: float | None,
+    vol_window: int,
+    factor_top_k: int | None,
+) -> np.ndarray:
+    risky_indices, defensive_indices, cash_like_index = _momentum_asset_indices(
+        symbols,
+        asset_classes,
+    )
     if not risky_indices:
         raise ValueError("Dual momentum requires at least one risky symbol.")
 
-    cash_like_index = next(
-        (i for i, s in enumerate(symbols) if asset_classes.get(s) == "cash_like"),
-        None,
-    )
     defensive_floor = (
         float(trailing_returns[cash_like_index])
         if cash_like_index is not None
         else absolute_threshold
     )
+    threshold = max(absolute_threshold, defensive_floor)
     candidate_risky_indices = _factor_momentum_candidate_indices(
         risky_indices=risky_indices,
         asset_classes=asset_classes,
         symbols=symbols,
         trailing_returns=trailing_returns,
         factor_top_k=factor_top_k,
-        threshold=max(absolute_threshold, defensive_floor),
+        threshold=threshold,
     )
     risky_ranked = sorted(
         (
             (idx, float(trailing_returns[idx]))
             for idx in candidate_risky_indices
-            if float(trailing_returns[idx]) > max(absolute_threshold, defensive_floor)
+            if float(trailing_returns[idx]) > threshold
         ),
         key=lambda item: item[1],
         reverse=True,
@@ -197,7 +197,7 @@ def compute_dual_momentum_weights(
             risky_indices_active = [
                 i for i in range(len(symbols)) if target_weights[i] > 0
             ]
-            if len(risky_indices_active) > 0:
+            if risky_indices_active:
                 w = target_weights[risky_indices_active]
                 recent_risky_returns = recent_returns_window[risky_indices_active]
                 portfolio_recent_returns = np.dot(w, recent_risky_returns)
@@ -208,12 +208,66 @@ def compute_dual_momentum_weights(
                 portfolio_vol = 0.0
 
             if portfolio_vol > 0 and portfolio_vol > target_vol:
-                scale = target_vol / portfolio_vol
-                target_weights = target_weights * scale
+                target_weights = target_weights * (target_vol / portfolio_vol)
     elif defensive_indices:
         weight = 1.0 / len(defensive_indices)
         for index in defensive_indices:
             target_weights[index] = weight
+
+    return target_weights
+
+
+def compute_dual_momentum_weights(
+    symbols: list[str],
+    closes_by_symbol: dict[str, list[float]],
+    asset_classes: dict[str, str],
+    lookback_days: int,
+    top_k: int,
+    weighting: str = "equal",
+    softmax_temperature: float = 0.05,
+    absolute_threshold: float = 0.0,
+    basket_opt: str | None = None,
+    basket_risk_aversion: float = 1.0,
+    target_vol: float | None = None,
+    max_single_weight: float | None = None,
+    vol_window: int = 63,
+    trailing_stop: float | None = None,
+    factor_top_k: int | None = None,
+) -> dict[str, float]:
+    """Compute dual-momentum target weights for a single point in time.
+
+    Used by the live rebalancing path to produce target weights from current
+    Alpaca data, identical to the backtest logic at a single rebalance step.
+    """
+    # The live CLI handles trailing stops with broker-side protective orders.
+    # This single-period weight calculation cannot simulate an entry peak.
+    aligned_closes = align_close_history(symbols, closes_by_symbol)
+    price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
+    if price_matrix.ndim != 2 or price_matrix.shape[1] < lookback_days + 1:
+        raise ValueError("Not enough price history to compute dual momentum weights.")
+
+    returns = price_matrix[:, 1:] / price_matrix[:, :-1] - 1.0
+    trailing_returns = price_matrix[:, -1] / price_matrix[:, -(lookback_days + 1)] - 1.0
+    trailing_volatility = returns.std(axis=1, ddof=0)
+
+    target_weights = _momentum_target_weights(
+        symbols=symbols,
+        asset_classes=asset_classes,
+        returns=returns,
+        trailing_returns=trailing_returns,
+        trailing_volatility=trailing_volatility,
+        lookback_days=lookback_days,
+        top_k=top_k,
+        weighting=weighting,
+        softmax_temperature=softmax_temperature,
+        absolute_threshold=absolute_threshold,
+        basket_opt=basket_opt,
+        basket_risk_aversion=basket_risk_aversion,
+        target_vol=target_vol,
+        max_single_weight=max_single_weight,
+        vol_window=vol_window,
+        factor_top_k=factor_top_k,
+    )
 
     return {s: float(target_weights[i]) for i, s in enumerate(symbols)}
 
@@ -568,47 +622,12 @@ def run_dual_momentum_backtest(
     daily_values: list[float] = [1.0]
     turnovers: list[float] = []
 
-    # Compute SPY benchmark curve if available
-    spy_values: list[float] = []
-    if "SPY" in symbols:
-        spy_idx = symbols.index("SPY")
-        # SPY returns start from day 1 relative to lookback start
-        spy_prices = price_matrix[spy_idx, 1:]
-        start_price = price_matrix[spy_idx, 0]
-        spy_values = [(p / start_price) for p in spy_prices]
-
     rebalance_count = 0
     peak_value = portfolio_value
     max_drawdown = 0.0
 
     # Per-asset peak prices since entry, for trailing stop-loss
     asset_peak_price: np.ndarray | None = None
-
-    risky_symbols = [
-        symbol
-        for symbol in symbols
-        if not asset_classes.get(symbol, "").startswith("bond")
-        and asset_classes.get(symbol) != "cash_like"
-    ]
-    defensive_symbols = [
-        symbol
-        for symbol in symbols
-        if asset_classes.get(symbol, "").startswith("bond")
-        or asset_classes.get(symbol) == "cash_like"
-    ]
-    risky_indices = _find_symbol_indices(symbols, risky_symbols)
-    defensive_indices = _find_symbol_indices(symbols, defensive_symbols)
-    if not risky_indices:
-        raise ValueError("Dual momentum requires at least one risky symbol.")
-
-    cash_like_index = next(
-        (
-            index
-            for index, symbol in enumerate(symbols)
-            if asset_classes.get(symbol) == "cash_like"
-        ),
-        None,
-    )
 
     for step in range(lookback_days, returns.shape[1]):
         if (step - lookback_days) % rebalance_every == 0:
@@ -618,100 +637,24 @@ def run_dual_momentum_backtest(
             trailing_volatility = returns[:, step - lookback_days : step].std(
                 axis=1, ddof=0
             )
-            defensive_floor = (
-                float(trailing_returns[cash_like_index])
-                if cash_like_index is not None
-                else absolute_threshold
-            )
-            candidate_risky_indices = _factor_momentum_candidate_indices(
-                risky_indices=risky_indices,
-                asset_classes=asset_classes,
+            target_weights = _momentum_target_weights(
                 symbols=symbols,
+                asset_classes=asset_classes,
+                returns=returns[:, :step],
                 trailing_returns=trailing_returns,
+                trailing_volatility=trailing_volatility,
+                lookback_days=lookback_days,
+                top_k=top_k,
+                weighting=weighting,
+                softmax_temperature=softmax_temperature,
+                absolute_threshold=absolute_threshold,
+                basket_opt=basket_opt,
+                basket_risk_aversion=basket_risk_aversion,
+                target_vol=target_vol,
+                max_single_weight=max_single_weight,
+                vol_window=vol_window,
                 factor_top_k=factor_top_k,
-                threshold=max(absolute_threshold, defensive_floor),
             )
-            risky_ranked = sorted(
-                (
-                    (index, float(trailing_returns[index]))
-                    for index in candidate_risky_indices
-                    if float(trailing_returns[index])
-                    > max(absolute_threshold, defensive_floor)
-                ),
-                key=lambda item: item[1],
-                reverse=True,
-            )
-
-            target_weights = np.zeros(len(symbols), dtype=float)
-            if risky_ranked:
-                selected = risky_ranked[:top_k]
-                selected_indices = [idx for idx, _ in selected]
-
-                # Momentum pre-selects the basket, then size via one of:
-                #  - weighting: equal / score / inverse-vol / softmax
-                #  - basket_opt: cvxpy mean-variance on the small basket
-                if basket_opt == "mean-variance":
-                    basket_returns = trailing_returns[selected_indices]
-                    basket_returns_history = returns[
-                        :, max(0, step - lookback_days) : step
-                    ][selected_indices]
-                    if len(selected_indices) == 1:
-                        basket_cov = np.array([[np.var(basket_returns_history[0])]])
-                    else:
-                        basket_cov = np.cov(basket_returns_history)
-                    # Add diagonal ridge for stability
-                    basket_cov += 1e-8 * np.eye(len(selected_indices))
-                    basket_weights = optimize_basket_weights(
-                        expected_returns=basket_returns,
-                        covariance=basket_cov,
-                        min_weight=0.0,
-                        max_weight=1.0,
-                        risk_aversion=basket_risk_aversion,
-                        force_full_investment=True,
-                    )
-                    for i, idx in enumerate(selected_indices):
-                        target_weights[idx] = basket_weights[i]
-                else:
-                    for index, weight in _dual_momentum_selected_weights(
-                        selected=selected,
-                        trailing_returns=trailing_returns,
-                        trailing_volatility=trailing_volatility,
-                        weighting=weighting,
-                        softmax_temperature=softmax_temperature,
-                    ).items():
-                        target_weights[index] = weight
-
-                target_weights = _apply_max_single_weight(
-                    target_weights,
-                    max_single_weight,
-                )
-
-                # Scale risky basket to hit target portfolio volatility
-                if target_vol is not None:
-                    recent_returns_window = returns[:, max(0, step - vol_window) : step]
-                    risky_indices_active = [
-                        i for i in range(len(symbols)) if target_weights[i] > 0
-                    ]
-                    if len(risky_indices_active) > 0:
-                        w = target_weights[risky_indices_active]
-                        recent_risky_returns = recent_returns_window[
-                            risky_indices_active
-                        ]
-                        # Portfolio returns over the lookback window
-                        portfolio_recent_returns = np.dot(w, recent_risky_returns)
-                        portfolio_vol = float(
-                            np.std(portfolio_recent_returns, ddof=0)
-                        ) * np.sqrt(TRADING_DAYS_PER_YEAR)
-                    else:
-                        portfolio_vol = 0.0
-
-                    if portfolio_vol > 0 and portfolio_vol > target_vol:
-                        scale = target_vol / portfolio_vol
-                        target_weights = target_weights * scale
-            elif defensive_indices:
-                weight = 1.0 / len(defensive_indices)
-                for index in defensive_indices:
-                    target_weights[index] = weight
 
             previous_weights = weights
             turnovers.append(float(np.abs(target_weights - previous_weights).sum()))
@@ -915,6 +858,8 @@ def rolling_window_comparison(
 ) -> dict[str, float | int]:
     if window_days <= 0 or step_days <= 0:
         raise ValueError("window_days and step_days must be positive.")
+    if "SPY" not in symbols:
+        raise ValueError("Rolling-window comparison requires SPY in the universe.")
 
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     total_periods = len(aligned_closes[symbols[0]]) - 1

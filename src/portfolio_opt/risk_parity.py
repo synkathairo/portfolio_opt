@@ -14,6 +14,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
+try:
+    import cvxpy as cp
+except ImportError as exc:  # pragma: no cover
+    raise RuntimeError(
+        "cvxpy is required for risk parity. Install dependencies with `uv sync`."
+    ) from exc
+
 
 @dataclass(frozen=True)
 class RiskParityInputs:
@@ -27,45 +34,48 @@ def risk_parity_weights(
     max_iter: int = 1000,
     tol: float = 1e-10,
 ) -> np.ndarray:
-    """Compute risk-parity weights using the cyclical coordinate descent algorithm.
+    """Compute equal-risk-contribution long-only weights.
 
-    For long-only portfolios this converges to weights where each asset
-    contributes equally to portfolio variance: w_i * (Sigma w)_i = constant.
+    The log-barrier formulation solves for an unconstrained positive vector and
+    then normalizes it; the normalized weights have equal risk contributions.
     """
+    del max_iter, tol
+    covariance = np.array(covariance, dtype=float)
+    if covariance.ndim != 2 or covariance.shape[0] != covariance.shape[1]:
+        raise ValueError("Covariance matrix must be square.")
+    if not np.all(np.isfinite(covariance)):
+        raise ValueError("Covariance matrix must contain only finite values.")
+    covariance = (covariance + covariance.T) / 2.0
+
     n = covariance.shape[0]
     if n == 0:
         return np.array([], dtype=float)
     if n == 1:
         return np.ones(1, dtype=float)
 
-    # Start from inverse-vol initialization
-    vols = np.sqrt(np.diag(covariance))
-    w = 1.0 / np.maximum(vols, 1e-8)
-    w /= w.sum()
+    min_variance = float(np.min(np.diag(covariance)))
+    if min_variance <= 0.0:
+        covariance = covariance + np.eye(n) * (abs(min_variance) + 1e-8)
 
-    for _ in range(max_iter):
-        w_old = w.copy()
-        for i in range(n):
-            sigma_i = covariance[i, :] @ w
-            other = covariance[i, :] @ w - covariance[i, i] * w[i]
-            # Solve: w_i^2 * sigma_ii + w_i * other - target = 0
-            # where target = w_j * (Sigma w)_j for all j (equal risk contribution)
-            # The closed-form update for RC = 1/n is:
-            if abs(other) < 1e-16:
-                continue
-            w[i] = max(
-                0.0,
-                (-other + np.sqrt(other**2 + 4 * covariance[i, i] * (1.0 / n)))
-                / (2 * covariance[i, i]),
-            )
-        # Normalize
-        total = w.sum()
-        if total > 0:
-            w /= total
-        if np.max(np.abs(w - w_old)) < tol:
-            break
+    unscaled = cp.Variable(n, pos=True)
+    objective = cp.Minimize(
+        0.5 * cp.quad_form(unscaled, covariance)
+        - (1.0 / n) * cp.sum(cp.log(unscaled))
+    )
+    problem = cp.Problem(objective)
+    problem.solve(solver=cp.CLARABEL)
+    if problem.status not in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
+        raise RuntimeError(
+            f"Risk parity optimization failed with status {problem.status}."
+        )
+    if unscaled.value is None:
+        raise RuntimeError("Risk parity optimization returned no weights.")
 
-    return w
+    weights = np.maximum(np.array(unscaled.value, dtype=float), 0.0)
+    total = float(weights.sum())
+    if total <= 0.0:
+        raise RuntimeError("Risk parity optimization returned non-positive weights.")
+    return weights / total
 
 
 def estimate_inputs_risk_parity(

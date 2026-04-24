@@ -102,6 +102,38 @@ def test_rolling_window_comparison_counts_windows_against_spy() -> None:
     assert comparison["beat_spy_sharpe_windows"] == 2
 
 
+def test_rolling_window_comparison_rejects_missing_spy() -> None:
+    try:
+        rolling_window_comparison(
+            strategy="dual-momentum",
+            symbols=["QQQ", "SGOV"],
+            closes_by_symbol={
+                "QQQ": [100.0, 101.0, 102.0, 103.0, 104.0],
+                "SGOV": [100.0, 100.1, 100.2, 100.3, 100.4],
+            },
+            asset_classes={"QQQ": "equity", "SGOV": "cash_like"},
+            lookback_days=1,
+            window_days=2,
+            step_days=1,
+            rebalance_every=1,
+            return_model="momentum",
+            mean_shrinkage=0.75,
+            momentum_window=1,
+            opt_config=OptimizationConfig(),
+            asset_class_matrix=None,
+            top_k=1,
+            absolute_threshold=0.0,
+            weighting="equal",
+            softmax_temperature=0.05,
+        )
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("rolling comparison should fail without SPY")
+
+    assert "requires SPY" in message
+
+
 def test_dual_momentum_score_weighting_tilts_toward_stronger_asset() -> None:
     closes_by_symbol = {
         "SPY": [100.0, 102.0, 106.0, 112.0, 120.0],

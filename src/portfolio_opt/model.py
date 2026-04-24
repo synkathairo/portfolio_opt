@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -17,23 +18,56 @@ class ModelInputs:
     class_max_weights: dict[str, float]
 
 
+def _require_mapping(value: Any, name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object.")
+    return value
+
+
+def _float_mapping(value: Any, name: str) -> dict[str, float]:
+    raw = _require_mapping(value, name)
+    parsed = {str(key): float(item) for key, item in raw.items()}
+    if not all(np.isfinite(list(parsed.values()))):
+        raise ValueError(f"{name} must contain only finite numeric values.")
+    return parsed
+
+
 def load_model_inputs(path: str | Path) -> ModelInputs:
     raw = json.loads(Path(path).read_text())
+    if not isinstance(raw, dict):
+        raise ValueError("Model file must contain a JSON object.")
     symbols = raw["symbols"]
+    if not isinstance(symbols, list):
+        raise ValueError("Model symbols must be a list.")
     if not symbols:
         raise ValueError("Model must contain at least one symbol.")
+    if any(not isinstance(symbol, str) or not symbol for symbol in symbols):
+        raise ValueError("Model symbols must be non-empty strings.")
     if len(set(symbols)) != len(symbols):
         raise ValueError("Model symbols must be unique.")
     expected_returns = None
     covariance = None
-    asset_classes = raw.get("asset_classes", {})
-    class_min_weights = raw.get("class_min_weights", {})
-    class_max_weights = raw.get("class_max_weights", {})
+    asset_classes_raw = _require_mapping(raw.get("asset_classes", {}), "asset_classes")
+    asset_classes = {
+        str(symbol): str(asset_class)
+        for symbol, asset_class in asset_classes_raw.items()
+    }
+    class_min_weights = _float_mapping(raw.get("class_min_weights", {}), "class_min_weights")
+    class_max_weights = _float_mapping(raw.get("class_max_weights", {}), "class_max_weights")
 
     # The file can either contain a complete static model or just a symbol
     # universe when inputs will be estimated from Alpaca history at runtime.
     if "expected_returns" in raw:
-        expected_returns_map = raw["expected_returns"]
+        expected_returns_map = _require_mapping(
+            raw["expected_returns"],
+            "expected_returns",
+        )
+        unknown_expected_returns = sorted(set(expected_returns_map) - set(symbols))
+        if unknown_expected_returns:
+            raise ValueError(
+                "Expected returns provided for unknown symbols: "
+                f"{unknown_expected_returns}"
+            )
         missing_expected_returns = [
             symbol for symbol in symbols if symbol not in expected_returns_map
         ]
@@ -45,11 +79,17 @@ def load_model_inputs(path: str | Path) -> ModelInputs:
         expected_returns = np.array(
             [float(expected_returns_map[s]) for s in symbols], dtype=float
         )
+        if not np.all(np.isfinite(expected_returns)):
+            raise ValueError("Expected returns must contain only finite values.")
 
     if "covariance" in raw:
         covariance = np.array(raw["covariance"], dtype=float)
         if covariance.shape != (len(symbols), len(symbols)):
             raise ValueError("Covariance matrix must match the number of symbols.")
+        if not np.all(np.isfinite(covariance)):
+            raise ValueError("Covariance matrix must contain only finite values.")
+        if not np.allclose(covariance, covariance.T, atol=1e-10):
+            raise ValueError("Covariance matrix must be symmetric.")
 
     if (expected_returns is None) != (covariance is None):
         raise ValueError(
@@ -81,6 +121,19 @@ def load_model_inputs(path: str | Path) -> ModelInputs:
     if invalid_ranges:
         raise ValueError(
             f"Class minimums exceed maximums for asset classes: {invalid_ranges}"
+        )
+    min_total = sum(class_min_weights.values())
+    if min_total > 1.0 + 1e-12:
+        raise ValueError("Class minimum weights cannot sum above 1.")
+    invalid_class_bounds = sorted(
+        class_name
+        for class_name, value in (class_min_weights | class_max_weights).items()
+        if value < 0.0 or value > 1.0
+    )
+    if invalid_class_bounds:
+        raise ValueError(
+            "Class constraints must be between 0 and 1 for asset classes: "
+            f"{invalid_class_bounds}"
         )
 
     return ModelInputs(

@@ -9,6 +9,7 @@ import numpy as np
 
 from portfolio_opt.alpaca_interface import AlpacaClient
 from portfolio_opt import cli
+from portfolio_opt.cache import read_cache, write_cache
 from portfolio_opt.backtest import (
     BacktestResult,
     compute_dual_momentum_weights,
@@ -16,8 +17,9 @@ from portfolio_opt.backtest import (
 )
 from portfolio_opt.config import AlpacaConfig, OptimizationConfig
 from portfolio_opt.execution import submit_rebalance_sell_first
-from portfolio_opt.model import ModelInputs
-from portfolio_opt.optimizer import optimize_weights
+from portfolio_opt.model import ModelInputs, load_model_inputs
+from portfolio_opt.optimizer import optimize_weights, project_weights
+from portfolio_opt.risk_parity import risk_parity_weights
 from portfolio_opt.rebalance import build_order_plan, build_trailing_stop_plan
 from portfolio_opt.types import (
     AccountSnapshot,
@@ -48,6 +50,120 @@ def test_optimize_weights_aligns_asset_class_max_constraints() -> None:
 
     assert round(float(weights[0]), 6) == 0.4
     assert round(float(weights[1]), 6) == 0.6
+
+
+def test_optimize_weights_preserves_constraints_after_cleanup() -> None:
+    config = OptimizationConfig(
+        risk_aversion=0.01,
+        min_weight=0.0,
+        max_weight=0.5,
+        force_full_investment=True,
+        max_turnover=0.2,
+        class_min_weights={"equity": 0.6},
+        class_max_weights={"bond": 0.4},
+    )
+    current_weights = np.array([0.3, 0.3, 0.4], dtype=float)
+    asset_class_matrix = np.array(
+        [
+            [1.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=float,
+    )
+
+    weights = optimize_weights(
+        expected_returns=np.array([0.5, 0.1, 0.0], dtype=float),
+        covariance=np.eye(3, dtype=float) * 1e-4,
+        config=config,
+        current_weights=current_weights,
+        asset_class_matrix=asset_class_matrix,
+    )
+
+    class_exposures = asset_class_matrix @ weights
+    assert abs(float(weights.sum()) - 1.0) <= 1e-6
+    assert float(weights.max()) <= 0.5 + 1e-6
+    assert float(np.abs(weights - current_weights).sum()) <= 0.2 + 1e-6
+    assert class_exposures[0] >= 0.6 - 1e-6
+    assert class_exposures[1] <= 0.4 + 1e-6
+
+
+def test_project_weights_preserves_max_weight_after_cleanup() -> None:
+    weights = project_weights(
+        target_weights=np.array([1.0, 0.0, 0.0], dtype=float),
+        config=OptimizationConfig(max_weight=0.4, force_full_investment=True),
+    )
+
+    assert abs(float(weights.sum()) - 1.0) <= 1e-6
+    assert float(weights.max()) <= 0.4 + 1e-6
+
+
+def _risk_contributions(weights: np.ndarray, covariance: np.ndarray) -> np.ndarray:
+    marginal = covariance @ weights
+    return weights * marginal / float(weights @ marginal)
+
+
+def test_risk_parity_equal_vol_assets_are_equal_weight() -> None:
+    weights = risk_parity_weights(np.eye(3, dtype=float) * 0.04)
+
+    assert np.allclose(weights, np.full(3, 1.0 / 3.0), atol=1e-5)
+    assert np.allclose(
+        _risk_contributions(weights, np.eye(3, dtype=float) * 0.04),
+        np.full(3, 1.0 / 3.0),
+        atol=1e-5,
+    )
+
+
+def test_risk_parity_diagonal_covariance_inverse_vol_weights() -> None:
+    covariance = np.diag([0.01, 0.04, 0.16])
+    weights = risk_parity_weights(covariance)
+
+    inverse_vol = np.array([10.0, 5.0, 2.5], dtype=float)
+    expected = inverse_vol / inverse_vol.sum()
+    assert np.allclose(weights, expected, atol=1e-5)
+    assert np.allclose(
+        _risk_contributions(weights, covariance),
+        np.full(3, 1.0 / 3.0),
+        atol=1e-5,
+    )
+
+
+def test_cache_write_is_atomic_and_round_trips(tmp_path) -> None:
+    path = tmp_path / "nested" / "cache.json"
+    write_cache(path, {"symbols": ["SPY"], "values": [1.0]})
+
+    assert read_cache(path) == {"symbols": ["SPY"], "values": [1.0]}
+    assert not path.with_name("cache.json.tmp").exists()
+
+
+def test_load_model_inputs_rejects_malformed_static_inputs(tmp_path) -> None:
+    bad_models = [
+        {"symbols": ["SPY", 123]},
+        {
+            "symbols": ["SPY"],
+            "expected_returns": {"SPY": float("nan")},
+            "covariance": [[1.0]],
+        },
+        {
+            "symbols": ["SPY", "IEF"],
+            "expected_returns": {"SPY": 0.1, "IEF": 0.2},
+            "covariance": [[1.0, 0.2], [0.1, 1.0]],
+        },
+        {
+            "symbols": ["SPY"],
+            "asset_classes": {"SPY": "equity"},
+            "class_min_weights": {"equity": 1.2},
+        },
+    ]
+
+    for index, payload in enumerate(bad_models):
+        path = tmp_path / f"bad-{index}.json"
+        path.write_text(json.dumps(payload))
+        try:
+            load_model_inputs(path)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"Malformed model should fail: {payload}")
 
 
 def test_dynamic_universe_cache_writes_model_and_sidecar(tmp_path) -> None:
