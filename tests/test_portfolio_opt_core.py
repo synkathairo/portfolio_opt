@@ -1037,6 +1037,49 @@ def test_offline_close_fallback_reuses_cached_superset_in_requested_order(
     }
 
 
+def test_alpaca_client_honors_configured_live_endpoint(monkeypatch) -> None:
+    trading_kwargs = {}
+    data_kwargs = {}
+
+    class FakeTradingClient:
+        def __init__(self, **kwargs) -> None:
+            trading_kwargs.update(kwargs)
+
+    class FakeDataClient:
+        def __init__(self, **kwargs) -> None:
+            data_kwargs.update(kwargs)
+
+    monkeypatch.setattr(
+        "portfolio_opt.alpaca_interface.TradingClient",
+        FakeTradingClient,
+    )
+    monkeypatch.setattr(
+        "portfolio_opt.alpaca_interface.StockHistoricalDataClient",
+        FakeDataClient,
+    )
+
+    AlpacaClient(
+        AlpacaConfig(
+            api_key="key",
+            api_secret="secret",
+            base_url="https://api.alpaca.markets",
+            data_url="https://data.alpaca.markets",
+        )
+    )
+
+    assert trading_kwargs == {
+        "api_key": "key",
+        "secret_key": "secret",
+        "paper": False,
+        "url_override": "https://api.alpaca.markets",
+    }
+    assert data_kwargs == {
+        "api_key": "key",
+        "secret_key": "secret",
+        "url_override": "https://data.alpaca.markets",
+    }
+
+
 def test_latest_prices_payload_accepts_trade_objects_and_dicts() -> None:
     class FakeTrade:
         def __init__(self, price: float) -> None:

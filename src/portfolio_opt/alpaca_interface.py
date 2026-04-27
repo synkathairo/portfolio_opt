@@ -8,6 +8,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlparse
 from uuid import UUID
 
 from alpaca.data.enums import Adjustment, DataFeed
@@ -47,10 +48,15 @@ class AlpacaClient:
     def __init__(self, config: AlpacaConfig) -> None:
         self._config = config
         self._trading = TradingClient(
-            api_key=config.api_key, secret_key=config.api_secret
+            api_key=config.api_key,
+            secret_key=config.api_secret,
+            paper=_is_paper_trading_url(config.base_url),
+            url_override=config.base_url,
         )
         self._data = StockHistoricalDataClient(
-            api_key=config.api_key, secret_key=config.api_secret
+            api_key=config.api_key,
+            secret_key=config.api_secret,
+            url_override=config.data_url,
         )
         try:
             self._data_feed = DataFeed(config.data_feed.lower())
@@ -954,6 +960,12 @@ def _model_value(model: Any, field: str) -> Any:
     if isinstance(value, UUID):
         return str(value)
     return value
+
+
+def _is_paper_trading_url(base_url: str) -> bool:
+    parsed = urlparse(base_url)
+    host = (parsed.hostname or base_url).lower()
+    return host == "paper-api.alpaca.markets"
 
 
 def format_order_plans(plans: list[OrderPlan] | list[TrailingStopPlan]) -> str:
