@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from portfolio_opt.runtime import configure_local_cache_dirs
+from portfolio_opt.backtest import TRADING_DAYS_PER_YEAR
 
 configure_local_cache_dirs()
 
@@ -39,6 +40,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--benchmark-weight", type=float, default=1.0)
     parser.add_argument("--linear-trade-cost", type=float, default=0.0)
     parser.add_argument("--planning-horizon", type=int, default=1)
+    parser.add_argument(
+        "--trading-days-per-year",
+        type=int,
+        default=TRADING_DAYS_PER_YEAR,
+        help="Trading sessions per year used for annualized metrics.",
+    )
     parser.add_argument("--rolling-window-days", type=int, default=0)
     parser.add_argument("--rolling-step-days", type=int, default=21)
     parser.add_argument(
@@ -89,6 +96,7 @@ def main() -> None:
             "benchmark_weight": args.benchmark_weight,
             "linear_trade_cost": args.linear_trade_cost,
             "planning_horizon": args.planning_horizon,
+            "trading_days_per_year": args.trading_days_per_year,
         }
         result = run_framework_comparison(
             model_path=args.model,
@@ -96,6 +104,7 @@ def main() -> None:
             backtest_days=args.backtest_days,
             cvxportfolio_config=cvxportfolio_config,
             custom_config=custom_config,
+            trading_days_per_year=args.trading_days_per_year,
             use_cache=args.use_cache,
             refresh_cache=args.refresh_cache,
             offline=args.offline,
@@ -116,6 +125,7 @@ def main() -> None:
             max_leverage=args.max_leverage,
             benchmark_symbol=args.benchmark_symbol,
             benchmark_weight=args.benchmark_weight,
+            trading_days_per_year=args.trading_days_per_year,
             use_cache=args.use_cache,
             refresh_cache=args.refresh_cache,
             offline=args.offline,
@@ -142,6 +152,7 @@ def main() -> None:
         planning_horizon=args.planning_horizon,
         rolling_window_days=args.rolling_window_days,
         rolling_step_days=args.rolling_step_days,
+        trading_days_per_year=args.trading_days_per_year,
         use_cache=args.use_cache,
         refresh_cache=args.refresh_cache,
         offline=args.offline,

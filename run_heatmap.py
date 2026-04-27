@@ -1,3 +1,4 @@
+# from plot_comparison import BACKTEST_DAYS
 import subprocess
 import json
 import matplotlib.pyplot as plt
@@ -9,19 +10,22 @@ from datetime import date
 today = str(date.today())
 
 # Configuration
+# TITLE_NAME_VAR = "Nasdaq_100_historical"
+# TITLE_NAME_VAR = "sector_universe_pre2020"
+# TITLE_NAME_VAR = "nasdaq100_sp500_sector_universe_b2016filtered"
+# TITLE_NAME_VAR = "nasdaq100_sp500_sector_universe_b2016filtered-targetvol0.3-252"
+# TITLE_NAME_VAR = "nasdaq100_sp500_sector_universe_b2016filtered-basketoptrisk2.0"
+TITLE_NAME_VAR = "sector_universe_pre2016_nomax"
 # MODEL = "examples/nasdaq100_universe.json"
 # MODEL = "examples/nasdaq100_historical_universe.json"
 # MODEL = "examples/sector_universe_pre2020.json"
 # MODEL = "examples/nasdaq100_sp500_sector_universe.json"
-MODEL = "examples/nasdaq100_sp500_sector_universe_b2016filtered.json"
-# TITLE_NAME_VAR = "Nasdaq_100_historical"
-# TITLE_NAME_VAR = "sector_universe_pre2020"
-TITLE_NAME_VAR = "nasdaq100_sp500_sector_universe_b2016filtered"
-# TITLE_NAME_VAR = "nasdaq100_sp500_sector_universe_b2016filtered-targetvol0.3-252"
-# TITLE_NAME_VAR = "nasdaq100_sp500_sector_universe_b2016filtered-basketoptrisk2.0"
+# MODEL = "examples/nasdaq100_sp500_sector_universe_b2016filtered.json"
+MODEL = f"examples/{TITLE_NAME_VAR}.json"
 # LOOKBACK = 60
 LOOKBACK = 252
-BACKTEST_DAYS = 252 * 9
+# BACKTEST_DAYS = 252 * 9
+BACKTEST_DAYS = 4454
 # BACKTEST_DAYS = 252*4
 # BACKTEST_DAYS = 6000
 # BACKTEST_DAYS = 2520
@@ -29,6 +33,7 @@ BACKTEST_DAYS = 252 * 9
 # VOL_WINDOW = 252
 REBALANCE_DAYS = [1, 5, 10, 21, 42, 63]
 TOP_KS = [1, 2, 3, 5, 8]
+TRADING_DAYS_PER_YEAR = 252
 FIGURE_NAME = f"heatmap_comparison_{TITLE_NAME_VAR}_{BACKTEST_DAYS}_{LOOKBACK}_{today}"
 # TIMEOUT = 120
 # TIMEOUT_LEN = 600
@@ -53,6 +58,8 @@ def build_backtest_cmd(rebal_days, k, *, refresh_cache=False, offline=False):
         str(rebal_days),
         "--top-k",
         str(k),
+        "--trading-days-per-year",
+        str(TRADING_DAYS_PER_YEAR),
         # "--basket-opt", "mean-variance", "--basket-risk-aversion", "2.0",
         # "--target-vol", str(TARGET_VOL), "--vol-window", str(VOL_WINDOW),
         "--data-source",
@@ -97,6 +104,21 @@ def run_backtest(rebal_days, k):
         return None
 
 
+def fallback_sortino_ratio(res):
+    daily_values = res.get("daily_values", [])
+    if len(daily_values) < 2:
+        return 0.0
+    values = np.array(daily_values, dtype=float)
+    returns = values[1:] / values[:-1] - 1.0
+    downside_returns = np.minimum(returns, 0.0)
+    downside_deviation = np.sqrt(float(np.mean(downside_returns**2))) * np.sqrt(
+        TRADING_DAYS_PER_YEAR
+    )
+    if downside_deviation <= 0:
+        return 0.0
+    return float(res.get("annualized_return", 0.0)) / downside_deviation
+
+
 # Run Grid Search
 print("Running grid search...")
 prime_cache()
@@ -120,6 +142,7 @@ for rebal in REBALANCE_DAYS:
             # note TODO: again technically involves risk-free return but this is close enough for purposes here
             # (see https://www.investopedia.com/terms/c/calmarratio.asp https://en.wikipedia.org/wiki/Calmar_ratio)
             calmar = (ann_ret / max_dd) if max_dd > 0 else 0.0
+            sortino = float(res.get("sortino_ratio", fallback_sortino_ratio(res)))
 
             rows.append(
                 {
@@ -129,6 +152,7 @@ for rebal in REBALANCE_DAYS:
                     "Annualized Volatility": ann_vol,
                     "Sharpe Ratio": sharpe,
                     "Calmar Ratio": calmar,
+                    "Sortino Ratio": sortino,
                     "Max Drawdown": res.get("max_drawdown", 0),
                     "Average Turnover": res.get("average_turnover", 0),
                 }
@@ -148,7 +172,8 @@ df_vol = df.pivot(
 df_dd = df.pivot(index="Rebalance Days", columns="Top K", values="Max Drawdown")
 df_turn = df.pivot(index="Rebalance Days", columns="Top K", values="Average Turnover")
 df_sharpe = df.pivot(index="Rebalance Days", columns="Top K", values="Sharpe Ratio")
-df_calmar = df.pivot(index="Rebalance Days", columns="Top K", values="Calmar Ratio")
+# df_calmar = df.pivot(index="Rebalance Days", columns="Top K", values="Calmar Ratio")
+df_sortino = df.pivot(index="Rebalance Days", columns="Top K", values="Sortino Ratio")
 
 # Plotting
 # fig, axes = plt.subplots(2, 2, figsize=(14, 10))
@@ -208,18 +233,29 @@ sns.heatmap(
 )
 axes[2, 0].set_title("Sharpe Ratio")
 
-# 6. Calmar Ratio
+# # 6. Calmar Ratio
+# sns.heatmap(
+#     df_calmar,
+#     annot=True,
+#     fmt=".2f",
+#     cmap="YlOrRd",
+#     ax=axes[2, 1],
+#     cbar_kws={"label": "Calmar"},
+# )
+# axes[2, 1].set_title("Calmar Ratio")
+# axes[2, 1].set_title("Calmar Ratio (Return / |MaxDD|)")
+
+# 6. Sortino Ratio
 sns.heatmap(
-    df_calmar,
+    df_sortino,
     annot=True,
     fmt=".2f",
     cmap="YlOrRd",
     ax=axes[2, 1],
-    cbar_kws={"label": "Calmar"},
+    cbar_kws={"label": "Sortino"},
 )
-axes[2, 1].set_title("Calmar Ratio")
-# axes[2, 1].set_title("Calmar Ratio (Return / |MaxDD|)")
+axes[2, 1].set_title("Sortino Ratio")
 
 plt.tight_layout()
-plt.savefig(f"{FIGURE_NAME}.png", dpi=150)
-print(f"Saved {FIGURE_NAME}.png")
+plt.savefig(f"plots/{FIGURE_NAME}.png", dpi=150)
+print(f"Saved plots/{FIGURE_NAME}.png")

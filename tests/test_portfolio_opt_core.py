@@ -14,6 +14,7 @@ from portfolio_opt.backtest import (
     BacktestResult,
     compute_dual_momentum_weights,
     run_backtest,
+    summarize_return_series,
 )
 from portfolio_opt.config import AlpacaConfig, OptimizationConfig
 from portfolio_opt.execution import submit_rebalance_sell_first
@@ -156,6 +157,18 @@ def test_cache_write_is_atomic_and_round_trips(tmp_path) -> None:
 
     assert read_cache(path) == {"symbols": ["SPY"], "values": [1.0]}
     assert not path.with_name("cache.json.tmp").exists()
+
+
+def test_summarize_return_series_uses_configurable_annualization() -> None:
+    returns = np.array([0.01, -0.02, 0.03, -0.01], dtype=float)
+
+    summary_252 = summarize_return_series(returns, trading_days_per_year=252)
+    summary_365 = summarize_return_series(returns, trading_days_per_year=365)
+
+    assert summary_252.annualized_return != summary_365.annualized_return
+    assert summary_252.annualized_volatility != summary_365.annualized_volatility
+    assert summary_252.sortino_ratio != summary_365.sortino_ratio
+    assert round(summary_252.max_drawdown, 6) == 0.02
 
 
 def test_load_model_inputs_rejects_malformed_static_inputs(tmp_path) -> None:

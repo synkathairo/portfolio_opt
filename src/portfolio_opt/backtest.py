@@ -15,6 +15,16 @@ TRADING_DAYS_PER_YEAR = 252
 
 
 @dataclass(frozen=True)
+class ReturnSeriesSummary:
+    final_value: float
+    total_return: float
+    annualized_return: float
+    annualized_volatility: float
+    max_drawdown: float
+    sortino_ratio: float
+
+
+@dataclass(frozen=True)
 class BacktestResult:
     final_value: float
     total_return: float
@@ -25,6 +35,7 @@ class BacktestResult:
     average_turnover: float
     latest_weights: np.ndarray
     daily_values: tuple[float, ...]
+    sortino_ratio: float = 0.0
 
 
 def _find_symbol_indices(
@@ -405,7 +416,11 @@ def _dual_momentum_selected_weights(
 
 def summarize_return_series(
     returns: np.ndarray,
-) -> tuple[float, float, float, float, float]:
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
+) -> ReturnSeriesSummary:
+    if trading_days_per_year <= 0:
+        raise ValueError("trading_days_per_year must be positive.")
+
     portfolio_value = 1.0
     peak_value = portfolio_value
     max_drawdown = 0.0
@@ -415,14 +430,22 @@ def summarize_return_series(
         max_drawdown = max(max_drawdown, 1.0 - portfolio_value / peak_value)
 
     periods = max(len(returns), 1)
-    annualized_return = portfolio_value ** (TRADING_DAYS_PER_YEAR / periods) - 1.0
-    annualized_volatility = returns.std(ddof=0) * np.sqrt(TRADING_DAYS_PER_YEAR)
-    return (
-        portfolio_value,
-        portfolio_value - 1.0,
-        annualized_return,
-        annualized_volatility,
-        max_drawdown,
+    annualized_return = portfolio_value ** (trading_days_per_year / periods) - 1.0
+    annualized_volatility = returns.std(ddof=0) * np.sqrt(trading_days_per_year)
+    downside_returns = np.minimum(returns, 0.0)
+    downside_deviation = np.sqrt(float(np.mean(downside_returns**2))) * np.sqrt(
+        trading_days_per_year
+    )
+    sortino_ratio = (
+        annualized_return / downside_deviation if downside_deviation > 0 else 0.0
+    )
+    return ReturnSeriesSummary(
+        final_value=portfolio_value,
+        total_return=portfolio_value - 1.0,
+        annualized_return=annualized_return,
+        annualized_volatility=annualized_volatility,
+        max_drawdown=max_drawdown,
+        sortino_ratio=sortino_ratio,
     )
 
 
@@ -449,6 +472,7 @@ def run_backtest(
     momentum_window: int,
     opt_config: OptimizationConfig,
     asset_class_matrix: np.ndarray | None,
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
 ) -> BacktestResult:
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
@@ -539,21 +563,23 @@ def run_backtest(
         max_drawdown = max(max_drawdown, 1.0 - portfolio_value / peak_value)
 
     returns_array = np.array(portfolio_returns, dtype=float)
-    _, _, annualized_return, annualized_volatility, _ = summarize_return_series(
-        returns_array
+    summary = summarize_return_series(
+        returns_array,
+        trading_days_per_year=trading_days_per_year,
     )
     average_turnover = float(np.mean(turnovers)) if turnovers else 0.0
 
     return BacktestResult(
         final_value=portfolio_value,
         total_return=portfolio_value - 1.0,
-        annualized_return=annualized_return,
-        annualized_volatility=annualized_volatility,
+        annualized_return=summary.annualized_return,
+        annualized_volatility=summary.annualized_volatility,
         max_drawdown=max_drawdown,
         rebalance_count=rebalance_count,
         average_turnover=average_turnover,
         latest_weights=weights,
         daily_values=tuple(daily_values),
+        sortino_ratio=summary.sortino_ratio,
     )
 
 
@@ -562,6 +588,7 @@ def run_fixed_weight_benchmark(
     closes_by_symbol: dict[str, list[float]],
     weights_by_symbol: dict[str, float],
     start_day: int,
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
 ) -> dict[str, float]:
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
@@ -576,19 +603,17 @@ def run_fixed_weight_benchmark(
         ],
         dtype=float,
     )
-    (
-        final_value,
-        total_return,
-        annualized_return,
-        annualized_volatility,
-        max_drawdown,
-    ) = summarize_return_series(benchmark_returns)
+    summary = summarize_return_series(
+        benchmark_returns,
+        trading_days_per_year=trading_days_per_year,
+    )
     return {
-        "final_value": round(float(final_value), 6),
-        "total_return": round(float(total_return), 6),
-        "annualized_return": round(float(annualized_return), 6),
-        "annualized_volatility": round(float(annualized_volatility), 6),
-        "max_drawdown": round(float(max_drawdown), 6),
+        "final_value": round(float(summary.final_value), 6),
+        "total_return": round(float(summary.total_return), 6),
+        "annualized_return": round(float(summary.annualized_return), 6),
+        "annualized_volatility": round(float(summary.annualized_volatility), 6),
+        "max_drawdown": round(float(summary.max_drawdown), 6),
+        "sortino_ratio": round(float(summary.sortino_ratio), 6),
     }
 
 
@@ -609,6 +634,7 @@ def run_dual_momentum_backtest(
     basket_risk_aversion: float = 1.0,
     trailing_stop: float | None = None,
     factor_top_k: int | None = None,
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
 ) -> BacktestResult:
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
@@ -694,21 +720,23 @@ def run_dual_momentum_backtest(
         max_drawdown = max(max_drawdown, 1.0 - portfolio_value / peak_value)
 
     returns_array = np.array(portfolio_returns, dtype=float)
-    _, _, annualized_return, annualized_volatility, _ = summarize_return_series(
-        returns_array
+    summary = summarize_return_series(
+        returns_array,
+        trading_days_per_year=trading_days_per_year,
     )
     average_turnover = float(np.mean(turnovers)) if turnovers else 0.0
 
     return BacktestResult(
         final_value=portfolio_value,
         total_return=portfolio_value - 1.0,
-        annualized_return=annualized_return,
-        annualized_volatility=annualized_volatility,
+        annualized_return=summary.annualized_return,
+        annualized_volatility=summary.annualized_volatility,
         max_drawdown=max_drawdown,
         rebalance_count=rebalance_count,
         average_turnover=average_turnover,
         latest_weights=weights,
         daily_values=tuple(daily_values),
+        sortino_ratio=summary.sortino_ratio,
     )
 
 
@@ -730,6 +758,7 @@ def run_factor_momentum_backtest(
     basket_opt: str | None = None,
     basket_risk_aversion: float = 1.0,
     trailing_stop: float | None = None,
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
 ) -> BacktestResult:
     return run_dual_momentum_backtest(
         symbols=symbols,
@@ -748,6 +777,7 @@ def run_factor_momentum_backtest(
         basket_risk_aversion=basket_risk_aversion,
         trailing_stop=trailing_stop,
         factor_top_k=factor_top_k,
+        trading_days_per_year=trading_days_per_year,
     )
 
 
@@ -769,6 +799,7 @@ def _run_single_window(
     absolute_threshold: float,
     weighting: str,
     softmax_temperature: float,
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
 ) -> dict[str, float | bool]:
     """Run a single rolling window backtest and compare against SPY."""
     if strategy == "dual-momentum":
@@ -782,6 +813,7 @@ def _run_single_window(
             absolute_threshold=absolute_threshold,
             weighting=weighting,
             softmax_temperature=softmax_temperature,
+            trading_days_per_year=trading_days_per_year,
         )
     elif strategy == "factor-momentum":
         backtest = run_factor_momentum_backtest(
@@ -795,6 +827,7 @@ def _run_single_window(
             absolute_threshold=absolute_threshold,
             weighting=weighting,
             softmax_temperature=softmax_temperature,
+            trading_days_per_year=trading_days_per_year,
         )
     else:
         backtest = run_backtest(
@@ -807,6 +840,7 @@ def _run_single_window(
             momentum_window=momentum_window,
             opt_config=opt_config,
             asset_class_matrix=asset_class_matrix,
+            trading_days_per_year=trading_days_per_year,
         )
 
     spy_benchmark = run_fixed_weight_benchmark(
@@ -814,6 +848,7 @@ def _run_single_window(
         closes_by_symbol=window_closes,
         weights_by_symbol={"SPY": 1.0},
         start_day=lookback_days,
+        trading_days_per_year=trading_days_per_year,
     )
     strategy_sharpe = (
         backtest.annualized_return / backtest.annualized_volatility
@@ -855,6 +890,7 @@ def rolling_window_comparison(
     weighting: str,
     softmax_temperature: float,
     factor_top_k: int = 1,
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
 ) -> dict[str, float | int]:
     if window_days <= 0 or step_days <= 0:
         raise ValueError("window_days and step_days must be positive.")
@@ -901,6 +937,7 @@ def rolling_window_comparison(
                     absolute_threshold=absolute_threshold,
                     weighting=weighting,
                     softmax_temperature=softmax_temperature,
+                    trading_days_per_year=trading_days_per_year,
                 )
                 for wc in window_args
             ]
@@ -926,6 +963,7 @@ def rolling_window_comparison(
                     absolute_threshold=absolute_threshold,
                     weighting=weighting,
                     softmax_temperature=softmax_temperature,
+                    trading_days_per_year=trading_days_per_year,
                 )
             )
 

@@ -18,6 +18,7 @@ import pandas as pd
 
 from .alpaca_interface import AlpacaClient, format_order_plans
 from .backtest import (
+    TRADING_DAYS_PER_YEAR,
     compute_dual_momentum_weights,
     compute_factor_momentum_weights,
     rolling_window_comparison,
@@ -195,6 +196,7 @@ def _run_sweep_point(
     turnover_penalty: float,
     momentum_window: int,
     asset_class_matrix: np.ndarray | None,
+    trading_days_per_year: int,
 ) -> dict[str, float | int | dict[str, float]] | tuple[str, str]:
     """Run a single sweep parameter combination. Returns result or error tuple."""
     sweep_config = OptimizationConfig(
@@ -221,6 +223,7 @@ def _run_sweep_point(
             momentum_window=momentum_window,
             opt_config=sweep_config,
             asset_class_matrix=asset_class_matrix,
+            trading_days_per_year=trading_days_per_year,
         )
     except RuntimeError as exc:
         return (
@@ -245,6 +248,7 @@ def _run_sweep_point(
         "annualized_return": round(float(sweep_backtest.annualized_return), 6),
         "annualized_volatility": round(float(sweep_backtest.annualized_volatility), 6),
         "max_drawdown": round(float(sweep_backtest.max_drawdown), 6),
+        "sortino_ratio": round(float(sweep_backtest.sortino_ratio), 6),
         "average_turnover": round(float(sweep_backtest.average_turnover), 6),
     }
 
@@ -561,6 +565,12 @@ def parse_args() -> argparse.Namespace:
         help="Trading-day interval between rebalances in backtest mode.",
     )
     parser.add_argument(
+        "--trading-days-per-year",
+        type=int,
+        default=TRADING_DAYS_PER_YEAR,
+        help="Trading sessions per year used for annualized metrics.",
+    )
+    parser.add_argument(
         "--rolling-window-days",
         type=int,
         default=0,
@@ -609,6 +619,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    trading_days_per_year = int(
+        getattr(args, "trading_days_per_year", TRADING_DAYS_PER_YEAR)
+    )
+    if trading_days_per_year <= 0:
+        raise ValueError("trading_days_per_year must be positive.")
     alpaca: AlpacaClient | None = None
     yfinance_max_workers = getattr(args, "yfinance_max_workers", 10)
     yfinance_retry_delay = getattr(args, "yfinance_retry_delay", 1.0)
@@ -871,6 +886,7 @@ def main() -> None:
                             asset_class_matrix=(
                                 asset_class_matrix if constrained_class_names else None
                             ),
+                            trading_days_per_year=trading_days_per_year,
                         )
                         for risk_aversion, min_cash_weight, min_invested_weight, turnover_penalty, momentum_window in grid_params
                     ]
@@ -898,6 +914,7 @@ def main() -> None:
                         asset_class_matrix=(
                             asset_class_matrix if constrained_class_names else None
                         ),
+                        trading_days_per_year=trading_days_per_year,
                     )
                     for risk_aversion, min_cash_weight, min_invested_weight, turnover_penalty, momentum_window in grid_params
                 ]
@@ -954,6 +971,7 @@ def main() -> None:
                 trailing_stop=args.trailing_stop,
                 basket_opt=args.basket_opt,
                 basket_risk_aversion=args.basket_risk_aversion,
+                trading_days_per_year=trading_days_per_year,
             )
         elif args.strategy == "factor-momentum":
             backtest = run_factor_momentum_backtest(
@@ -973,6 +991,7 @@ def main() -> None:
                 trailing_stop=args.trailing_stop,
                 basket_opt=args.basket_opt,
                 basket_risk_aversion=args.basket_risk_aversion,
+                trading_days_per_year=trading_days_per_year,
             )
         else:
             backtest = run_backtest(
@@ -987,6 +1006,7 @@ def main() -> None:
                 asset_class_matrix=(
                     asset_class_matrix if constrained_class_names else None
                 ),
+                trading_days_per_year=trading_days_per_year,
             )
         latest_weights = clean_weights(backtest.latest_weights)
         rolling_comparison = None
@@ -1012,6 +1032,7 @@ def main() -> None:
                 absolute_threshold=args.absolute_momentum_threshold,
                 weighting=args.dual_momentum_weighting,
                 softmax_temperature=args.softmax_temperature,
+                trading_days_per_year=trading_days_per_year,
             )
         benchmark_results = {
             "spy": run_fixed_weight_benchmark(
@@ -1019,18 +1040,21 @@ def main() -> None:
                 closes_by_symbol=closes_by_symbol,
                 weights_by_symbol={"SPY": 1.0},
                 start_day=args.lookback_days,
+                trading_days_per_year=trading_days_per_year,
             ),
             "qqq": run_fixed_weight_benchmark(
                 symbols=model.symbols,
                 closes_by_symbol=closes_by_symbol,
                 weights_by_symbol={"QQQ": 1.0},
                 start_day=args.lookback_days,
+                trading_days_per_year=trading_days_per_year,
             ),
             "sixty_forty_spy_tlt": run_fixed_weight_benchmark(
                 symbols=model.symbols,
                 closes_by_symbol=closes_by_symbol,
                 weights_by_symbol={"SPY": 0.6, "TLT": 0.4},
                 start_day=args.lookback_days,
+                trading_days_per_year=trading_days_per_year,
             ),
             "equal_weight": run_fixed_weight_benchmark(
                 symbols=model.symbols,
@@ -1039,12 +1063,14 @@ def main() -> None:
                     symbol: 1.0 / len(model.symbols) for symbol in model.symbols
                 },
                 start_day=args.lookback_days,
+                trading_days_per_year=trading_days_per_year,
             ),
             "half_spy_half_cash": run_fixed_weight_benchmark(
                 symbols=model.symbols,
                 closes_by_symbol=closes_by_symbol,
                 weights_by_symbol={"SPY": 0.5},
                 start_day=args.lookback_days,
+                trading_days_per_year=trading_days_per_year,
             ),
         }
         for symbol in benchmark_symbols:
@@ -1054,6 +1080,7 @@ def main() -> None:
                 closes_by_symbol=closes_for_benchmarks,
                 weights_by_symbol={symbol: 1.0},
                 start_day=args.lookback_days,
+                trading_days_per_year=trading_days_per_year,
             )
         result = {
             "symbols": model.symbols,
@@ -1083,6 +1110,7 @@ def main() -> None:
                 ),
                 "days": args.backtest_days,
                 "rebalance_every": args.rebalance_every,
+                "trading_days_per_year": trading_days_per_year,
                 "final_value": round(float(backtest.final_value), 6),
                 "total_return": round(float(backtest.total_return), 6),
                 "annualized_return": round(float(backtest.annualized_return), 6),
@@ -1090,6 +1118,7 @@ def main() -> None:
                     float(backtest.annualized_volatility), 6
                 ),
                 "max_drawdown": round(float(backtest.max_drawdown), 6),
+                "sortino_ratio": round(float(backtest.sortino_ratio), 6),
                 "rebalance_count": backtest.rebalance_count,
                 "average_turnover": round(float(backtest.average_turnover), 6),
                 "daily_values": [round(v, 6) for v in backtest.daily_values],

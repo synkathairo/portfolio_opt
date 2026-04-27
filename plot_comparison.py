@@ -17,7 +17,8 @@ today = str(date.today())
 # MODEL_NAME = "yfiua_csi1000_202402_current_valid_universe"
 # MODEL_NAME = "yfiua_csi_combined_202402_current_valid_with_benchmarks_universe"
 # MODEL_NAME = "yfiua_sse_202307_current_valid_universe"
-MODEL_NAME = "nikkei225_current_backtest_valid_universe"
+# MODEL_NAME = "nikkei225_current_backtest_valid_universe"
+MODEL_NAME = "sector_universe_pre2016_nomax"
 # MODEL_NAME = "sector_universe"
 # MODEL_NAME = "nasdaq100_universe"
 # MODEL = "examples/nasdaq100_universe.json"
@@ -26,24 +27,27 @@ MODEL = f"examples/{MODEL_NAME}.json"
 # LOOKBACK_DAYS = 60
 LOOKBACK_DAYS = 252
 # BACKTEST_DAYS = 252*9
+# BACKTEST_DAYS = 252*15
+BACKTEST_DAYS = 4454
 # BACKTEST_DAYS = 680
 # BACKTEST_DAYS = 675
 # BACKTEST_DAYS = 470
 # BACKTEST_DAYS = 408
 # BACKTEST_DAYS = 402
-BACKTEST_DAYS = 604
+# BACKTEST_DAYS = 604
 # BACKTEST_DAYS = 1220
 MOMENTUM_WINDOW = 40
 LIMIT_VOL = "0.3"
 MODEL_FILENAME = f"{MODEL_NAME}_{BACKTEST_DAYS}_{LOOKBACK_DAYS}_{today}"
-INDEX_PERIOD = "10y"
+# INDEX_PERIOD = "10y"
+INDEX_PERIOD = "20y"
 DATASOURCE = "yfinance"
-# BENCHMARKS = [
-#     ("SPY", "SPY (S&P 500)"),
-#     ("QQQ", "QQQ (Nasdaq 100)"),
-#     ("IWM", "IWM (Russell 2000)"),
-#     ("TLT", "TLT (20+Yr Treasury)")
-# ]
+BENCHMARKS = [
+    ("SPY", "SPY (S&P 500)"),
+    ("QQQ", "QQQ (Nasdaq 100)"),
+    ("IWM", "IWM (Russell 2000)"),
+    ("TLT", "TLT (20+Yr Treasury)")
+]
 # BENCHMARKS = [
 #     # ("^HSI", "Hang Seng Index"),
 #     ("2800.HK", "Tracker Fund of Hong Kong"),
@@ -66,12 +70,12 @@ DATASOURCE = "yfinance"
 #     ("510050.SS", "SSE 50 ETF"),
 #     ("159915.SZ", "ChiNext ETF")
 # ]
-BENCHMARKS = [
-    # ("^N225", "Nikkei 225"),
-    ("1321.T", "NEXT FUNDS Nikkei 225 ETF"),
-    ("1306.T", "NEXT FUNDS TOPIX ETF"),
-    ("2561.T", "iShares Japan Government Bond ETF"),
-]
+# BENCHMARKS = [
+#     # ("^N225", "Nikkei 225"),
+#     ("1321.T", "NEXT FUNDS Nikkei 225 ETF"),
+#     ("1306.T", "NEXT FUNDS TOPIX ETF"),
+#     ("2561.T", "iShares Japan Government Bond ETF"),
+# ]
 
 
 def run_backtest(label: str, args):

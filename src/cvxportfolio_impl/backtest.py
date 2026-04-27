@@ -8,7 +8,11 @@ import numpy as np
 import pandas as pd
 
 from portfolio_opt.alpaca_interface import AlpacaClient
-from portfolio_opt.backtest import run_fixed_weight_benchmark, summarize_return_series
+from portfolio_opt.backtest import (
+    TRADING_DAYS_PER_YEAR,
+    run_fixed_weight_benchmark,
+    summarize_return_series,
+)
 from portfolio_opt.backtest import run_backtest as run_custom_backtest
 from portfolio_opt.config import AlpacaConfig, OptimizationConfig
 from portfolio_opt.model import load_model_inputs
@@ -39,6 +43,7 @@ def _run_single_sweep(params: tuple) -> dict[str, float | int]:
         benchmark_df,
         linear_trade_cost,
         planning_horizon,
+        trading_days_per_year,
     ) = params
 
     try:
@@ -76,11 +81,14 @@ def _run_single_sweep(params: tuple) -> dict[str, float | int]:
     realized_returns = result.v.pct_change().dropna().to_numpy()
     turnover_series = result.turnover.reindex(result.v.index).fillna(0.0).to_numpy()
     net_realized_returns = realized_returns - linear_trade_cost * turnover_series[1:]
-    _, _, annualized_return, annualized_volatility, max_drawdown = (
-        summarize_return_series(net_realized_returns)
+    summary = summarize_return_series(
+        net_realized_returns,
+        trading_days_per_year=trading_days_per_year,
     )
     sharpe_ratio = (
-        annualized_return / annualized_volatility if annualized_volatility > 0 else 0.0
+        summary.annualized_return / summary.annualized_volatility
+        if summary.annualized_volatility > 0
+        else 0.0
     )
     return {
         "risk_aversion": risk_aversion,
@@ -88,11 +96,12 @@ def _run_single_sweep(params: tuple) -> dict[str, float | int]:
         "min_cash_weight": min_cash_weight,
         "min_invested_weight": min_invested_weight,
         "momentum_window": momentum_window,
-        "annualized_return": round(float(annualized_return), 6),
-        "annualized_volatility": round(float(annualized_volatility), 6),
-        "max_drawdown": round(float(max_drawdown), 6),
+        "annualized_return": round(float(summary.annualized_return), 6),
+        "annualized_volatility": round(float(summary.annualized_volatility), 6),
+        "max_drawdown": round(float(summary.max_drawdown), 6),
         "average_turnover": round(float(result.turnover.mean()), 6),
         "sharpe_ratio": round(float(sharpe_ratio), 6),
+        "sortino_ratio": round(float(summary.sortino_ratio), 6),
     }
 
 
@@ -188,6 +197,7 @@ def rolling_window_comparison(
     *,
     window_days: int,
     step_days: int,
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
 ) -> dict[str, float | int]:
     if len(strategy_returns) != len(benchmark_returns):
         raise ValueError("Strategy and benchmark returns must have the same length.")
@@ -203,36 +213,33 @@ def rolling_window_comparison(
         end = start + window_days
         strategy_slice = strategy_returns[start:end]
         benchmark_slice = benchmark_returns[start:end]
-        (
-            _,
-            strategy_total_return,
-            strategy_annualized_return,
-            strategy_volatility,
-            strategy_drawdown,
-        ) = summarize_return_series(strategy_slice)
-        (
-            _,
-            benchmark_total_return,
-            benchmark_annualized_return,
-            benchmark_volatility,
-            benchmark_drawdown,
-        ) = summarize_return_series(benchmark_slice)
+        strategy_summary = summarize_return_series(
+            strategy_slice,
+            trading_days_per_year=trading_days_per_year,
+        )
+        benchmark_summary = summarize_return_series(
+            benchmark_slice,
+            trading_days_per_year=trading_days_per_year,
+        )
         strategy_sharpe = (
-            strategy_annualized_return / strategy_volatility
-            if strategy_volatility > 0
+            strategy_summary.annualized_return / strategy_summary.annualized_volatility
+            if strategy_summary.annualized_volatility > 0
             else 0.0
         )
         benchmark_sharpe = (
-            benchmark_annualized_return / benchmark_volatility
-            if benchmark_volatility > 0
+            benchmark_summary.annualized_return / benchmark_summary.annualized_volatility
+            if benchmark_summary.annualized_volatility > 0
             else 0.0
         )
         window_results.append(
             {
-                "beat_return": strategy_total_return > benchmark_total_return,
+                "beat_return": strategy_summary.total_return
+                > benchmark_summary.total_return,
                 "beat_sharpe": strategy_sharpe > benchmark_sharpe,
-                "lower_drawdown": strategy_drawdown < benchmark_drawdown,
-                "excess_total_return": strategy_total_return - benchmark_total_return,
+                "lower_drawdown": strategy_summary.max_drawdown
+                < benchmark_summary.max_drawdown,
+                "excess_total_return": strategy_summary.total_return
+                - benchmark_summary.total_return,
             }
         )
 
@@ -306,6 +313,7 @@ def run_cvxportfolio_backtest(
     planning_horizon: int = 1,
     rolling_window_days: int = 0,
     rolling_step_days: int = 21,
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
     use_cache: bool = False,
     refresh_cache: bool = False,
     offline: bool = False,
@@ -372,16 +380,13 @@ def run_cvxportfolio_backtest(
     turnover_series = result.turnover.reindex(result.v.index).fillna(0.0).to_numpy()
     # Apply a simple proportional transaction cost ex-post using reported turnover.
     net_realized_returns = realized_returns - linear_trade_cost * turnover_series[1:]
-    (
-        realized_final_value,
-        realized_total_return,
-        geometric_annualized_return,
-        realized_annualized_volatility,
-        realized_max_drawdown,
-    ) = summarize_return_series(net_realized_returns)
+    realized_summary = summarize_return_series(
+        net_realized_returns,
+        trading_days_per_year=trading_days_per_year,
+    )
     geometric_sharpe = (
-        geometric_annualized_return / realized_annualized_volatility
-        if realized_annualized_volatility > 0
+        realized_summary.annualized_return / realized_summary.annualized_volatility
+        if realized_summary.annualized_volatility > 0
         else 0.0
     )
     first_timestamp = str(result.v.index[0])
@@ -410,12 +415,14 @@ def run_cvxportfolio_backtest(
             closes_by_symbol=closes_by_symbol,
             weights_by_symbol={"SPY": 1.0},
             start_day=warmup_days,
+            trading_days_per_year=trading_days_per_year,
         ),
         "sixty_forty_spy_tlt": run_fixed_weight_benchmark(
             symbols=model.symbols,
             closes_by_symbol=closes_by_symbol,
             weights_by_symbol={"SPY": 0.6, "TLT": 0.4},
             start_day=warmup_days,
+            trading_days_per_year=trading_days_per_year,
         ),
         "equal_weight": run_fixed_weight_benchmark(
             symbols=model.symbols,
@@ -424,12 +431,14 @@ def run_cvxportfolio_backtest(
                 symbol: 1.0 / len(model.symbols) for symbol in model.symbols
             },
             start_day=warmup_days,
+            trading_days_per_year=trading_days_per_year,
         ),
         "half_spy_half_cash": run_fixed_weight_benchmark(
             symbols=model.symbols,
             closes_by_symbol=closes_by_symbol,
             weights_by_symbol={"SPY": 0.5},
             start_day=warmup_days,
+            trading_days_per_year=trading_days_per_year,
         ),
     }
     rolling_comparison = None
@@ -444,6 +453,7 @@ def run_cvxportfolio_backtest(
             benchmark_aligned_returns,
             window_days=rolling_window_days,
             step_days=rolling_step_days,
+            trading_days_per_year=trading_days_per_year,
         )
 
     result_payload = {
@@ -462,20 +472,24 @@ def run_cvxportfolio_backtest(
             "benchmark_weight": benchmark_weight,
             "linear_trade_cost": linear_trade_cost,
             "planning_horizon": planning_horizon,
+            "trading_days_per_year": trading_days_per_year,
             "first_timestamp": first_timestamp,
             "last_timestamp": last_timestamp,
             "realized_periods": realized_periods,
             "initial_value": round(initial_value, 6),
             "final_value": round(final_value, 6),
             "normalized_final_value": round(normalized_final_value, 6),
-            "total_return": round(realized_total_return, 6),
+            "total_return": round(realized_summary.total_return, 6),
             "value_ratio_total_return": round(normalized_final_value - 1.0, 6),
-            "realized_return_series_final_value": round(realized_final_value, 6),
-            "annualized_return": round(float(geometric_annualized_return), 6),
-            "annualized_volatility": round(float(realized_annualized_volatility), 6),
-            "max_drawdown": round(float(realized_max_drawdown), 6),
+            "realized_return_series_final_value": round(realized_summary.final_value, 6),
+            "annualized_return": round(float(realized_summary.annualized_return), 6),
+            "annualized_volatility": round(
+                float(realized_summary.annualized_volatility), 6
+            ),
+            "max_drawdown": round(float(realized_summary.max_drawdown), 6),
             "average_turnover": round(float(result.turnover.mean()), 6),
             "sharpe_ratio": round(float(geometric_sharpe), 6),
+            "sortino_ratio": round(float(realized_summary.sortino_ratio), 6),
             "cvxportfolio_annualized_average_return": round(
                 float(result.annualized_average_return), 6
             ),
@@ -518,6 +532,7 @@ def run_framework_comparison(
     backtest_days: int,
     cvxportfolio_config: dict[str, float | int],
     custom_config: dict[str, float | int],
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
     use_cache: bool = False,
     refresh_cache: bool = False,
     offline: bool = False,
@@ -566,6 +581,7 @@ def run_framework_comparison(
         momentum_window=int(cvxportfolio_config["momentum_window"]),
         linear_trade_cost=float(cvxportfolio_config["linear_trade_cost"]),
         planning_horizon=int(cvxportfolio_config["planning_horizon"]),
+        trading_days_per_year=trading_days_per_year,
         use_cache=use_cache,
         refresh_cache=refresh_cache,
         offline=offline,
@@ -608,6 +624,7 @@ def run_framework_comparison(
             if constrained_class_names
             else None
         ),
+        trading_days_per_year=trading_days_per_year,
     )
     custom_latest_weights = clean_constraint_mapping(
         {
@@ -643,6 +660,7 @@ def run_framework_comparison(
                     float(custom_backtest.annualized_volatility), 6
                 ),
                 "max_drawdown": round(float(custom_backtest.max_drawdown), 6),
+                "sortino_ratio": round(float(custom_backtest.sortino_ratio), 6),
                 "average_turnover": round(float(custom_backtest.average_turnover), 6),
                 "rebalance_count": int(custom_backtest.rebalance_count),
                 "total_return": round(float(custom_backtest.total_return), 6),
@@ -676,6 +694,7 @@ def run_cvxportfolio_sweep(
     max_leverage: float | None = None,
     benchmark_symbol: str | None = None,
     benchmark_weight: float = 1.0,
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
     use_cache: bool = False,
     refresh_cache: bool = False,
     offline: bool = False,
@@ -741,6 +760,7 @@ def run_cvxportfolio_sweep(
             benchmark_df,
             linear_trade_cost,
             planning_horizon,
+            trading_days_per_year,
         )
         for (
             risk_aversion,
@@ -773,12 +793,14 @@ def run_cvxportfolio_sweep(
             closes_by_symbol=closes_by_symbol,
             weights_by_symbol={"SPY": 1.0},
             start_day=warmup_days,
+            trading_days_per_year=trading_days_per_year,
         ),
         "sixty_forty_spy_tlt": run_fixed_weight_benchmark(
             symbols=model.symbols,
             closes_by_symbol=closes_by_symbol,
             weights_by_symbol={"SPY": 0.6, "TLT": 0.4},
             start_day=warmup_days,
+            trading_days_per_year=trading_days_per_year,
         ),
         "equal_weight": run_fixed_weight_benchmark(
             symbols=model.symbols,
@@ -787,12 +809,14 @@ def run_cvxportfolio_sweep(
                 symbol: 1.0 / len(model.symbols) for symbol in model.symbols
             },
             start_day=warmup_days,
+            trading_days_per_year=trading_days_per_year,
         ),
         "half_spy_half_cash": run_fixed_weight_benchmark(
             symbols=model.symbols,
             closes_by_symbol=closes_by_symbol,
             weights_by_symbol={"SPY": 0.5},
             start_day=warmup_days,
+            trading_days_per_year=trading_days_per_year,
         ),
     }
     return {
@@ -802,6 +826,7 @@ def run_cvxportfolio_sweep(
             "warmup_days": warmup_days,
             "linear_trade_cost": linear_trade_cost,
             "planning_horizon": planning_horizon,
+            "trading_days_per_year": trading_days_per_year,
             "top_n": top_n,
             "tested": len(results),
             "skipped": len(skipped),
