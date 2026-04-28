@@ -18,6 +18,7 @@ from portfolio_opt.backtest import (
 )
 from portfolio_opt.config import AlpacaConfig, OptimizationConfig
 from portfolio_opt.execution import submit_rebalance_sell_first
+from portfolio_opt.market_data import CloseHistory
 from portfolio_opt.model import ModelInputs, load_model_inputs
 from portfolio_opt.optimizer import (
     _finalize_solution,
@@ -33,6 +34,80 @@ from portfolio_opt.types import (
     TrailingStopPlan,
     UnprotectedTrailingStopQty,
 )
+
+
+def _base_cli_args(**overrides) -> Namespace:
+    values = {
+        "model": "dummy.json",
+        "dynamic_universe": False,
+        "filter_before": None,
+        "ticker_basket": [],
+        "dynamic_universe_cache_dir": ".cache/models",
+        "allow_stale_dynamic_universe": False,
+        "max_stale_dynamic_universe_days": 14.0,
+        "risk_aversion": 4.0,
+        "min_weight": 0.0,
+        "max_weight": 0.35,
+        "rebalance_threshold": 0.02,
+        "turnover_penalty": 0.02,
+        "allow_cash": False,
+        "min_cash_weight": 0.0,
+        "max_turnover": None,
+        "min_invested_weight": 0.0,
+        "estimate_from_history": False,
+        "lookback_days": 60,
+        "mean_shrinkage": 0.75,
+        "return_model": "sample-mean",
+        "strategy": "mean-variance",
+        "momentum_window": 63,
+        "top_k": 3,
+        "factor_top_k": 1,
+        "dual_momentum_weighting": "equal",
+        "softmax_temperature": 0.05,
+        "absolute_momentum_threshold": 0.0,
+        "target_vol": None,
+        "vol_window": 63,
+        "max_single_weight": None,
+        "trailing_stop": None,
+        "basket_opt": None,
+        "basket_risk_aversion": 1.0,
+        "breadth_min_risky": 0.0,
+        "breadth_max_risky": 1.0,
+        "defensive_weighting": "equal",
+        "data_source": "alpaca",
+        "csv_dir": ".cache/csv",
+        "csv_write_json_cache": False,
+        "stockanalysis_start": "1980-01-01",
+        "stockanalysis_end": None,
+        "yfinance_max_workers": 10,
+        "yfinance_retry_delay": 1.0,
+        "yfinance_symbol_delay": 0.02,
+        "benchmark": [],
+        "backtest_days": 0,
+        "backtest_engine": "native",
+        "rebalance_every": 21,
+        "trading_days_per_year": 252,
+        "rolling_window_days": 0,
+        "rolling_step_days": 21,
+        "sweep": False,
+        "top_n": 5,
+        "core_symbol": None,
+        "core_weight": 0.0,
+        "target_volatility": None,
+        "max_leverage": None,
+        "benchmark_symbol": None,
+        "benchmark_weight": 1.0,
+        "linear_trade_cost": 0.0,
+        "planning_horizon": 1,
+        "compare_custom": False,
+        "submit": False,
+        "use_cache": False,
+        "refresh_cache": False,
+        "offline": False,
+        "dry_run": False,
+    }
+    values.update(overrides)
+    return Namespace(**values)
 
 
 def test_optimize_weights_aligns_asset_class_max_constraints() -> None:
@@ -678,11 +753,15 @@ def test_cli_yfinance_backtest_does_not_require_alpaca(monkeypatch, capsys) -> N
     )
     monkeypatch.setattr(
         cli,
-        "yf_fetch_closes",
-        lambda symbols, period="max", **_kwargs: {
-            "SPY": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0],
-            "IEF": [100.0, 100.5, 101.0, 101.5, 102.0, 102.5],
-        },
+        "load_close_history",
+        lambda **_kwargs: CloseHistory(
+            closes_by_symbol={
+                "SPY": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0],
+                "IEF": [100.0, 100.5, 101.0, 101.5, 102.0, 102.5],
+            },
+            benchmark_closes_by_symbol={},
+            benchmark_symbols_universe=["SPY", "IEF"],
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -722,6 +801,188 @@ def test_cli_yfinance_backtest_does_not_require_alpaca(monkeypatch, capsys) -> N
     out = capsys.readouterr().out
 
     assert '"final_value": 1.1' in out
+
+
+def test_cli_backtest_engine_defaults_to_native(monkeypatch, capsys) -> None:
+    args = _base_cli_args(
+        data_source="yfinance",
+        estimate_from_history=True,
+        lookback_days=2,
+        backtest_days=3,
+        rebalance_every=1,
+        dry_run=True,
+    )
+    called = {"native": False}
+
+    monkeypatch.setattr(cli, "parse_args", lambda: args)
+    monkeypatch.setattr(
+        cli,
+        "load_model_inputs",
+        lambda _path: ModelInputs(
+            symbols=["SPY", "IEF"],
+            expected_returns=None,
+            covariance=None,
+            asset_classes={"SPY": "equity", "IEF": "bond"},
+            class_min_weights={},
+            class_max_weights={},
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_close_history",
+        lambda **_kwargs: CloseHistory(
+            closes_by_symbol={
+                "SPY": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0],
+                "IEF": [100.0, 100.5, 101.0, 101.5, 102.0, 102.5],
+            },
+            benchmark_closes_by_symbol={},
+            benchmark_symbols_universe=["SPY", "IEF"],
+        ),
+    )
+
+    def fake_backtest(**_kwargs):
+        called["native"] = True
+        return BacktestResult(
+            final_value=1.1,
+            total_return=0.1,
+            annualized_return=0.12,
+            annualized_volatility=0.08,
+            max_drawdown=0.03,
+            rebalance_count=2,
+            average_turnover=0.1,
+            latest_weights=np.array([0.4, 0.6], dtype=float),
+            daily_values=(1.0, 1.05, 1.1),
+        )
+
+    monkeypatch.setattr(cli, "run_backtest", fake_backtest)
+    monkeypatch.setattr(
+        cli,
+        "run_fixed_weight_benchmark",
+        lambda **_kwargs: {
+            "final_value": 1.0,
+            "total_return": 0.0,
+            "annualized_return": 0.0,
+            "annualized_volatility": 0.0,
+            "max_drawdown": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_cvxportfolio_from_args",
+        lambda _args: (_ for _ in ()).throw(
+            AssertionError("cvxportfolio backend should not run by default")
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "AlpacaClient",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Alpaca should not be constructed for yfinance backtests")
+        ),
+    )
+
+    cli.main()
+
+    assert called["native"] is True
+    assert '"backtest"' in capsys.readouterr().out
+
+
+def test_cli_routes_cvxportfolio_backtest_engine(monkeypatch, capsys) -> None:
+    args = _base_cli_args(
+        backtest_engine="cvxportfolio",
+        backtest_days=252,
+        lookback_days=126,
+        risk_aversion=0.5,
+        min_cash_weight=0.05,
+        min_invested_weight=0.4,
+        linear_trade_cost=0.001,
+        data_source="yfinance",
+        offline=True,
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(cli, "parse_args", lambda: args)
+
+    def fake_cvxportfolio_backend(received_args):
+        captured["engine"] = received_args.backtest_engine
+        captured["linear_trade_cost"] = received_args.linear_trade_cost
+        captured["data_source"] = received_args.data_source
+        return {
+            "symbols": ["SPY"],
+            "cvxportfolio_backtest": {"annualized_return": 0.1},
+        }
+
+    monkeypatch.setattr(cli, "run_cvxportfolio_from_args", fake_cvxportfolio_backend)
+    monkeypatch.setattr(
+        cli,
+        "load_model_inputs",
+        lambda _path: (_ for _ in ()).throw(
+            AssertionError("native model loading should not run")
+        ),
+    )
+
+    cli.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert captured == {
+        "engine": "cvxportfolio",
+        "linear_trade_cost": 0.001,
+        "data_source": "yfinance",
+    }
+    assert payload["cvxportfolio_backtest"]["annualized_return"] == 0.1
+
+
+def test_cli_cvxportfolio_engine_requires_backtest_days(monkeypatch) -> None:
+    args = _base_cli_args(backtest_engine="cvxportfolio", backtest_days=0)
+
+    monkeypatch.setattr(cli, "parse_args", lambda: args)
+
+    try:
+        cli.main()
+    except SystemExit as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("cvxportfolio engine should require backtest mode")
+
+    assert "--backtest-engine cvxportfolio requires --backtest-days > 0" in message
+
+
+def test_cli_cvxportfolio_engine_rejects_native_only_flags(monkeypatch) -> None:
+    args = _base_cli_args(
+        backtest_engine="cvxportfolio",
+        backtest_days=252,
+        strategy="dual-momentum",
+    )
+
+    monkeypatch.setattr(cli, "parse_args", lambda: args)
+
+    try:
+        cli.main()
+    except SystemExit as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("cvxportfolio engine should reject native-only flags")
+
+    assert "--strategy" in message
+
+
+def test_cli_native_engine_rejects_cvxportfolio_only_flags(monkeypatch) -> None:
+    args = _base_cli_args(
+        backtest_engine="native",
+        backtest_days=252,
+        linear_trade_cost=0.001,
+    )
+
+    monkeypatch.setattr(cli, "parse_args", lambda: args)
+
+    try:
+        cli.main()
+    except SystemExit as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("native engine should reject cvxportfolio-only flags")
+
+    assert "--linear-trade-cost" in message
 
 
 def test_cli_dual_momentum_backtest_passes_vol_window(monkeypatch, capsys) -> None:
@@ -785,11 +1046,15 @@ def test_cli_dual_momentum_backtest_passes_vol_window(monkeypatch, capsys) -> No
     )
     monkeypatch.setattr(
         cli,
-        "yf_fetch_closes",
-        lambda symbols, period="max", **_kwargs: {
-            "SPY": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0],
-            "IEF": [100.0, 100.5, 101.0, 101.5, 102.0, 102.5],
-        },
+        "load_close_history",
+        lambda **_kwargs: CloseHistory(
+            closes_by_symbol={
+                "SPY": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0],
+                "IEF": [100.0, 100.5, 101.0, 101.5, 102.0, 102.5],
+            },
+            benchmark_closes_by_symbol={},
+            benchmark_symbols_universe=["SPY", "IEF"],
+        ),
     )
 
     def fake_dual_momentum_backtest(**kwargs):
@@ -899,13 +1164,22 @@ def test_cli_yfinance_backtest_supports_external_benchmark(
         ),
     )
 
-    def fake_fetch_closes(symbols, period="max", **_kwargs):
+    def fake_load_close_history(**kwargs):
+        symbols = [*kwargs["symbols"], *kwargs["benchmark_symbols"]]
         fetched_symbols.append(list(symbols))
-        return {
+        closes = {
             "0005.HK": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0],
             "0700.HK": [100.0, 100.5, 101.0, 101.5, 102.0, 102.5],
             "^HSI": [200.0, 201.0, 202.0, 203.0, 204.0, 205.0],
         }
+        return CloseHistory(
+            closes_by_symbol={
+                "0005.HK": closes["0005.HK"],
+                "0700.HK": closes["0700.HK"],
+            },
+            benchmark_closes_by_symbol=closes,
+            benchmark_symbols_universe=symbols,
+        )
 
     def fake_dual_momentum_backtest(**_kwargs):
         return BacktestResult(
@@ -931,7 +1205,7 @@ def test_cli_yfinance_backtest_supports_external_benchmark(
             "max_drawdown": 0.0,
         }
 
-    monkeypatch.setattr(cli, "yf_fetch_closes", fake_fetch_closes)
+    monkeypatch.setattr(cli, "load_close_history", fake_load_close_history)
     monkeypatch.setattr(cli, "run_dual_momentum_backtest", fake_dual_momentum_backtest)
     monkeypatch.setattr(cli, "run_fixed_weight_benchmark", fake_benchmark)
     monkeypatch.setattr(
@@ -1009,11 +1283,15 @@ def test_cli_rejects_backtest_when_common_history_is_too_short(monkeypatch) -> N
     )
     monkeypatch.setattr(
         cli,
-        "yf_fetch_closes",
-        lambda symbols, period="max", **_kwargs: {
-            "SPY": [100.0, 101.0, 102.0, 103.0, 104.0],
-            "IEF": [100.0, 100.5, 101.0, 101.5, 102.0],
-        },
+        "load_close_history",
+        lambda **_kwargs: CloseHistory(
+            closes_by_symbol={
+                "SPY": [100.0, 101.0, 102.0, 103.0, 104.0],
+                "IEF": [100.0, 100.5, 101.0, 101.5, 102.0],
+            },
+            benchmark_closes_by_symbol={},
+            benchmark_symbols_universe=["SPY", "IEF"],
+        ),
     )
 
     try:

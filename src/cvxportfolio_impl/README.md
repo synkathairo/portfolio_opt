@@ -8,7 +8,7 @@ It now includes a minimal backtest-only entrypoint intended for side-by-side com
 Keep the current custom optimizer in `src/portfolio_opt/` as the baseline and build a separate implementation here so both approaches can be compared against:
 
 - the same universe
-- the same Alpaca data source
+- the same historical close data sources and caches
 - the same backtest window
 - the same benchmarks
 
@@ -29,17 +29,20 @@ Keep the current custom optimizer in `src/portfolio_opt/` as the baseline and bu
 ## Current Entry Point
 
 ```bash
-uv run cvxportfolio-backtest \
+uv run portfolio-opt \
   --model examples/sample_universe.json \
+  --backtest-engine cvxportfolio \
   --lookback-days 126 \
   --backtest-days 252
 ```
+
+The old `cvxportfolio-backtest` command remains available as a compatibility wrapper.
 
 This first version is intentionally narrow:
 
 - backtest only
 - momentum-style returns forecast
-- user-provided market data built from Alpaca closes
+- user-provided market data from the configured historical close source
 - cash and asset-class policy bounds where possible
 
 The default sample universe is intentionally small. For a broader allocation experiment, try `examples/broad_universe.json`.

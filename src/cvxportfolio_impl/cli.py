@@ -17,6 +17,107 @@ from .backtest import (
 configure_local_cache_dirs()
 
 
+def run_from_args(args: argparse.Namespace) -> dict:
+    if args.compare_custom:
+        custom_config = json.loads(Path("examples/custom_best_preset.json").read_text())
+        cvxportfolio_config = {
+            "risk_aversion": args.risk_aversion,
+            "mean_shrinkage": args.mean_shrinkage,
+            "momentum_window": args.momentum_window,
+            "min_cash_weight": args.min_cash_weight,
+            "min_invested_weight": args.min_invested_weight,
+            "max_weight": args.max_weight,
+            "core_symbol": args.core_symbol,
+            "core_weight": args.core_weight,
+            "target_volatility": args.target_volatility,
+            "max_leverage": args.max_leverage,
+            "benchmark_symbol": args.benchmark_symbol,
+            "benchmark_weight": args.benchmark_weight,
+            "linear_trade_cost": args.linear_trade_cost,
+            "planning_horizon": args.planning_horizon,
+            "trading_days_per_year": args.trading_days_per_year,
+        }
+        return run_framework_comparison(
+            model_path=args.model,
+            lookback_days=args.lookback_days,
+            backtest_days=args.backtest_days,
+            cvxportfolio_config=cvxportfolio_config,
+            custom_config=custom_config,
+            trading_days_per_year=args.trading_days_per_year,
+            data_source=args.data_source,
+            csv_dir=args.csv_dir,
+            csv_write_json_cache=args.csv_write_json_cache,
+            stockanalysis_start=args.stockanalysis_start,
+            stockanalysis_end=args.stockanalysis_end,
+            yfinance_max_workers=args.yfinance_max_workers,
+            yfinance_retry_delay=args.yfinance_retry_delay,
+            yfinance_symbol_delay=args.yfinance_symbol_delay,
+            use_cache=args.use_cache,
+            refresh_cache=args.refresh_cache,
+            offline=args.offline,
+        )
+    if args.sweep:
+        return run_cvxportfolio_sweep(
+            model_path=args.model,
+            lookback_days=args.lookback_days,
+            backtest_days=args.backtest_days,
+            top_n=args.top_n,
+            linear_trade_cost=args.linear_trade_cost,
+            planning_horizon=args.planning_horizon,
+            core_symbol=args.core_symbol,
+            core_weight=args.core_weight,
+            target_volatility=args.target_volatility,
+            max_leverage=args.max_leverage,
+            benchmark_symbol=args.benchmark_symbol,
+            benchmark_weight=args.benchmark_weight,
+            trading_days_per_year=args.trading_days_per_year,
+            data_source=args.data_source,
+            csv_dir=args.csv_dir,
+            csv_write_json_cache=args.csv_write_json_cache,
+            stockanalysis_start=args.stockanalysis_start,
+            stockanalysis_end=args.stockanalysis_end,
+            yfinance_max_workers=args.yfinance_max_workers,
+            yfinance_retry_delay=args.yfinance_retry_delay,
+            yfinance_symbol_delay=args.yfinance_symbol_delay,
+            use_cache=args.use_cache,
+            refresh_cache=args.refresh_cache,
+            offline=args.offline,
+        )
+    return run_cvxportfolio_backtest(
+        model_path=args.model,
+        lookback_days=args.lookback_days,
+        backtest_days=args.backtest_days,
+        risk_aversion=args.risk_aversion,
+        min_cash_weight=args.min_cash_weight,
+        min_invested_weight=args.min_invested_weight,
+        max_weight=args.max_weight,
+        core_symbol=args.core_symbol,
+        core_weight=args.core_weight,
+        target_volatility=args.target_volatility,
+        max_leverage=args.max_leverage,
+        benchmark_symbol=args.benchmark_symbol,
+        benchmark_weight=args.benchmark_weight,
+        mean_shrinkage=args.mean_shrinkage,
+        momentum_window=args.momentum_window,
+        linear_trade_cost=args.linear_trade_cost,
+        planning_horizon=args.planning_horizon,
+        rolling_window_days=args.rolling_window_days,
+        rolling_step_days=args.rolling_step_days,
+        trading_days_per_year=args.trading_days_per_year,
+        data_source=args.data_source,
+        csv_dir=args.csv_dir,
+        csv_write_json_cache=args.csv_write_json_cache,
+        stockanalysis_start=args.stockanalysis_start,
+        stockanalysis_end=args.stockanalysis_end,
+        yfinance_max_workers=args.yfinance_max_workers,
+        yfinance_retry_delay=args.yfinance_retry_delay,
+        yfinance_symbol_delay=args.yfinance_symbol_delay,
+        use_cache=args.use_cache,
+        refresh_cache=args.refresh_cache,
+        offline=args.offline,
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a minimal cvxportfolio backtest on the repo universe."
@@ -40,6 +141,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--benchmark-weight", type=float, default=1.0)
     parser.add_argument("--linear-trade-cost", type=float, default=0.0)
     parser.add_argument("--planning-horizon", type=int, default=1)
+    parser.add_argument(
+        "--data-source",
+        choices=("alpaca", "yfinance", "csv", "csv+yfinance", "stockanalysis"),
+        default="alpaca",
+        help="Source for historical close data.",
+    )
+    parser.add_argument(
+        "--csv-dir",
+        default=".cache/csv",
+        help="Directory of local OHLCV CSV files when --data-source csv is used.",
+    )
+    parser.add_argument(
+        "--csv-write-json-cache",
+        action="store_true",
+        help="Write provider-neutral JSON close caches from --csv-dir before running.",
+    )
+    parser.add_argument(
+        "--stockanalysis-start",
+        default="1980-01-01",
+        help="Start date for --data-source stockanalysis chart JSON.",
+    )
+    parser.add_argument(
+        "--stockanalysis-end",
+        default=None,
+        help="End date for --data-source stockanalysis chart JSON. Defaults to today.",
+    )
+    parser.add_argument("--yfinance-max-workers", type=int, default=10)
+    parser.add_argument("--yfinance-retry-delay", type=float, default=1.0)
+    parser.add_argument("--yfinance-symbol-delay", type=float, default=0.02)
     parser.add_argument(
         "--trading-days-per-year",
         type=int,
@@ -79,85 +209,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    if args.compare_custom:
-        custom_config = json.loads(Path("examples/custom_best_preset.json").read_text())
-        cvxportfolio_config = {
-            "risk_aversion": args.risk_aversion,
-            "mean_shrinkage": args.mean_shrinkage,
-            "momentum_window": args.momentum_window,
-            "min_cash_weight": args.min_cash_weight,
-            "min_invested_weight": args.min_invested_weight,
-            "max_weight": args.max_weight,
-            "core_symbol": args.core_symbol,
-            "core_weight": args.core_weight,
-            "target_volatility": args.target_volatility,
-            "max_leverage": args.max_leverage,
-            "benchmark_symbol": args.benchmark_symbol,
-            "benchmark_weight": args.benchmark_weight,
-            "linear_trade_cost": args.linear_trade_cost,
-            "planning_horizon": args.planning_horizon,
-            "trading_days_per_year": args.trading_days_per_year,
-        }
-        result = run_framework_comparison(
-            model_path=args.model,
-            lookback_days=args.lookback_days,
-            backtest_days=args.backtest_days,
-            cvxportfolio_config=cvxportfolio_config,
-            custom_config=custom_config,
-            trading_days_per_year=args.trading_days_per_year,
-            use_cache=args.use_cache,
-            refresh_cache=args.refresh_cache,
-            offline=args.offline,
-        )
-        print(format_backtest(result))
-        return
-    if args.sweep:
-        result = run_cvxportfolio_sweep(
-            model_path=args.model,
-            lookback_days=args.lookback_days,
-            backtest_days=args.backtest_days,
-            top_n=args.top_n,
-            linear_trade_cost=args.linear_trade_cost,
-            planning_horizon=args.planning_horizon,
-            core_symbol=args.core_symbol,
-            core_weight=args.core_weight,
-            target_volatility=args.target_volatility,
-            max_leverage=args.max_leverage,
-            benchmark_symbol=args.benchmark_symbol,
-            benchmark_weight=args.benchmark_weight,
-            trading_days_per_year=args.trading_days_per_year,
-            use_cache=args.use_cache,
-            refresh_cache=args.refresh_cache,
-            offline=args.offline,
-        )
-        print(format_backtest(result))
-        return
-    result = run_cvxportfolio_backtest(
-        model_path=args.model,
-        lookback_days=args.lookback_days,
-        backtest_days=args.backtest_days,
-        risk_aversion=args.risk_aversion,
-        min_cash_weight=args.min_cash_weight,
-        min_invested_weight=args.min_invested_weight,
-        max_weight=args.max_weight,
-        core_symbol=args.core_symbol,
-        core_weight=args.core_weight,
-        target_volatility=args.target_volatility,
-        max_leverage=args.max_leverage,
-        benchmark_symbol=args.benchmark_symbol,
-        benchmark_weight=args.benchmark_weight,
-        mean_shrinkage=args.mean_shrinkage,
-        momentum_window=args.momentum_window,
-        linear_trade_cost=args.linear_trade_cost,
-        planning_horizon=args.planning_horizon,
-        rolling_window_days=args.rolling_window_days,
-        rolling_step_days=args.rolling_step_days,
-        trading_days_per_year=args.trading_days_per_year,
-        use_cache=args.use_cache,
-        refresh_cache=args.refresh_cache,
-        offline=args.offline,
-    )
-    print(format_backtest(result))
+    print(format_backtest(run_from_args(args)))
 
 
 if __name__ == "__main__":

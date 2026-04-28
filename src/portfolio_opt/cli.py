@@ -29,26 +29,22 @@ from .backtest import (
     run_protective_momentum_backtest,
 )
 from .config import AlpacaConfig, OptimizationConfig
-from .csv_data import (
-    fetch_closes as csv_fetch_closes,
-    write_json_caches as csv_write_json_caches,
-    write_yfinance_compatible_caches as csv_write_yfinance_compatible_caches,
-)
 from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
 from .execution import submit_rebalance_sell_first
 from .black_litterman import estimate_inputs_from_black_litterman
+from .market_data import load_close_history
 from .risk_parity import estimate_inputs_risk_parity
 from .model import ModelInputs, load_model_inputs
 from .optimizer import effective_turnover_penalty, optimize_weights, project_weights
 from .rebalance import build_order_plan, build_trailing_stop_plan, current_weights
 from .runtime import configure_local_cache_dirs
-from .stockanalysis_data import fetch_closes as stockanalysis_fetch_closes
-from .yfinance_data import fetch_closes as yf_fetch_closes
 from utils.fetch_tickers import (
     DEFAULT_TICKER_BASKET,
     fetch_ticker_dict,
     filter_tickers_before,
 )
+from cvxportfolio_impl.backtest import format_backtest as format_cvxportfolio_backtest
+from cvxportfolio_impl.cli import run_from_args as run_cvxportfolio_from_args
 
 configure_local_cache_dirs()
 
@@ -331,92 +327,179 @@ def _json_key(value: str) -> str:
     return "".join(char.lower() if char.isalnum() else "_" for char in value).strip("_")
 
 
+def _value_differs(value: Any, default: Any) -> bool:
+    if isinstance(default, float):
+        return abs(float(value) - default) > 1e-12
+    return value != default
+
+
+def _validate_cvxportfolio_engine_args(args: argparse.Namespace) -> None:
+    if getattr(args, "backtest_days", 0) <= 0:
+        raise SystemExit("--backtest-engine cvxportfolio requires --backtest-days > 0")
+
+    unsupported_defaults = [
+        ("dynamic_universe", False, "--dynamic-universe"),
+        ("filter_before", None, "--filter-before"),
+        ("ticker_basket", [], "--ticker-basket"),
+        ("allow_stale_dynamic_universe", False, "--allow-stale-dynamic-universe"),
+        ("max_stale_dynamic_universe_days", 14.0, "--max-stale-dynamic-universe-days"),
+        ("min_weight", 0.0, "--min-weight"),
+        ("rebalance_threshold", 0.02, "--rebalance-threshold"),
+        ("turnover_penalty", 0.02, "--turnover-penalty"),
+        ("allow_cash", False, "--allow-cash"),
+        ("max_turnover", None, "--max-turnover"),
+        ("estimate_from_history", False, "--estimate-from-history"),
+        ("return_model", "sample-mean", "--return-model"),
+        ("strategy", "mean-variance", "--strategy"),
+        ("top_k", 3, "--top-k"),
+        ("factor_top_k", 1, "--factor-top-k"),
+        ("dual_momentum_weighting", "equal", "--dual-momentum-weighting"),
+        ("softmax_temperature", 0.05, "--softmax-temperature"),
+        ("absolute_momentum_threshold", 0.0, "--absolute-momentum-threshold"),
+        ("target_vol", None, "--target-vol"),
+        ("vol_window", 63, "--vol-window"),
+        ("max_single_weight", None, "--max-single-weight"),
+        ("trailing_stop", None, "--trailing-stop"),
+        ("basket_opt", None, "--basket-opt"),
+        ("basket_risk_aversion", 1.0, "--basket-risk-aversion"),
+        ("breadth_min_risky", 0.0, "--breadth-min-risky"),
+        ("breadth_max_risky", 1.0, "--breadth-max-risky"),
+        ("defensive_weighting", "equal", "--defensive-weighting"),
+        ("benchmark", [], "--benchmark"),
+        ("rebalance_every", 21, "--rebalance-every"),
+        ("submit", False, "--submit"),
+        ("dry_run", False, "--dry-run"),
+    ]
+    unsupported = [
+        flag
+        for name, default, flag in unsupported_defaults
+        if _value_differs(getattr(args, name, default), default)
+    ]
+    if unsupported:
+        flags = ", ".join(unsupported)
+        raise SystemExit(
+            "--backtest-engine cvxportfolio does not support these native-only "
+            f"options yet: {flags}"
+        )
+
+
+def _validate_native_engine_args(args: argparse.Namespace) -> None:
+    cvxportfolio_defaults = [
+        ("core_symbol", None, "--core-symbol"),
+        ("core_weight", 0.0, "--core-weight"),
+        ("target_volatility", None, "--target-volatility"),
+        ("max_leverage", None, "--max-leverage"),
+        ("benchmark_symbol", None, "--benchmark-symbol"),
+        ("benchmark_weight", 1.0, "--benchmark-weight"),
+        ("linear_trade_cost", 0.0, "--linear-trade-cost"),
+        ("planning_horizon", 1, "--planning-horizon"),
+        ("compare_custom", False, "--compare-custom"),
+    ]
+    unsupported = [
+        flag
+        for name, default, flag in cvxportfolio_defaults
+        if _value_differs(getattr(args, name, default), default)
+    ]
+    if unsupported:
+        flags = ", ".join(unsupported)
+        raise SystemExit(
+            "--backtest-engine native does not support these cvxportfolio-only "
+            f"options: {flags}"
+        )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run a mean-variance rebalance against Alpaca."
+        description="Run native portfolio rebalances/backtests or the cvxportfolio comparison engine."
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--model", help="Path to model input JSON file.")
     group.add_argument(
         "--dynamic-universe",
         action="store_true",
-        help="Fetch current index constituents dynamically instead of using a model file.",
+        help="[native] Fetch current index constituents dynamically instead of using a model file.",
     )
-    parser.add_argument(
+    core_options = parser.add_argument_group("core options")
+    native_options = parser.add_argument_group("native engine options")
+    data_source_options = parser.add_argument_group("historical data-source options")
+    cvxportfolio_options = parser.add_argument_group("cvxportfolio engine options")
+    execution_options = parser.add_argument_group("execution and cache options")
+
+    native_options.add_argument(
         "--filter-before",
         type=str,
         default=None,
-        help="Only include tickers that started trading before this ISO date (e.g. 2020-01-01).",
+        help="[native] Only include tickers that started trading before this ISO date (e.g. 2020-01-01).",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--ticker-basket",
         nargs="*",
         default=[],
-        help="Universe components for --dynamic-universe (uses fetch_ticker_dict defaults if empty).",
+        help="[native] Universe components for --dynamic-universe (uses fetch_ticker_dict defaults if empty).",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--dynamic-universe-cache-dir",
         default=".cache/models",
-        help="Directory for latest-known-good generated dynamic universe model caches.",
+        help="[native] Directory for latest-known-good generated dynamic universe model caches.",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--allow-stale-dynamic-universe",
         action="store_true",
-        help="Use the previous cached dynamic universe if a fresh fetch fails.",
+        help="[native] Use the previous cached dynamic universe if a fresh fetch fails.",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--max-stale-dynamic-universe-days",
         type=float,
         default=14.0,
-        help="Maximum age in days for --allow-stale-dynamic-universe fallback.",
+        help="[native] Maximum age in days for --allow-stale-dynamic-universe fallback.",
     )
-    parser.add_argument("--risk-aversion", type=float, default=4.0)
-    parser.add_argument("--min-weight", type=float, default=0.0)
-    parser.add_argument("--max-weight", type=float, default=0.35)
-    parser.add_argument("--rebalance-threshold", type=float, default=0.02)
-    parser.add_argument("--turnover-penalty", type=float, default=0.02)
-    parser.add_argument(
+    core_options.add_argument("--risk-aversion", type=float, default=4.0)
+    native_options.add_argument("--min-weight", type=float, default=0.0)
+    core_options.add_argument("--max-weight", type=float, default=0.35)
+    native_options.add_argument("--rebalance-threshold", type=float, default=0.02)
+    native_options.add_argument("--turnover-penalty", type=float, default=0.02)
+    native_options.add_argument(
         "--allow-cash",
         action="store_true",
-        help="Allow the optimizer to leave part of the portfolio in cash.",
+        help="[native] Allow the optimizer to leave part of the portfolio in cash.",
     )
-    parser.add_argument(
+    core_options.add_argument(
         "--min-cash-weight",
         type=float,
         default=0.0,
-        help="Minimum cash weight to hold when --allow-cash is enabled.",
+        help="Minimum cash weight. Native uses this when --allow-cash is enabled; cvxportfolio uses it as an invested exposure cap.",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--max-turnover",
         type=float,
         default=None,
-        help="Hard cap on one-step turnover, measured as sum(abs(target-current)).",
+        help="[native] Hard cap on one-step turnover, measured as sum(abs(target-current)).",
     )
-    parser.add_argument(
+    core_options.add_argument(
         "--min-invested-weight",
         type=float,
         default=0.0,
-        help="Minimum total risky-asset weight when cash is allowed.",
+        help="Minimum total risky-asset weight.",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--estimate-from-history",
         action="store_true",
-        help="Estimate expected returns and covariance from Alpaca daily bars.",
+        help="[native] Estimate expected returns and covariance from historical closes.",
     )
-    parser.add_argument("--lookback-days", type=int, default=60)
-    parser.add_argument(
+    core_options.add_argument("--lookback-days", type=int, default=60)
+    core_options.add_argument(
         "--mean-shrinkage",
         type=float,
         default=0.75,
         help="Shrink sample mean returns toward zero to reduce estimation noise.",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--return-model",
         choices=("sample-mean", "momentum", "black-litterman", "risk-parity"),
         default="sample-mean",
-        help="How to estimate expected returns when using --estimate-from-history.",
+        help="[native] How to estimate expected returns when using --estimate-from-history.",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--strategy",
         choices=(
             "mean-variance",
@@ -425,105 +508,105 @@ def parse_args() -> argparse.Namespace:
             "protective-momentum",
         ),
         default="mean-variance",
-        help="Strategy for live or backtest rebalancing. Momentum strategies use live prices when --estimate-from-history is set.",
+        help="[native] Strategy for live or native backtest rebalancing. Momentum strategies use live prices when --estimate-from-history is set.",
     )
-    parser.add_argument(
+    core_options.add_argument(
         "--momentum-window",
         type=int,
         default=63,
         help="Trailing trading-day window used by the momentum return model.",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--top-k",
         type=int,
         default=3,
-        help="Number of assets to hold in dual momentum mode.",
+        help="[native] Number of assets to hold in dual momentum mode.",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--factor-top-k",
         type=int,
         default=1,
-        help="Number of top factor/sleeve groups to search in factor momentum mode.",
+        help="[native] Number of top factor/sleeve groups to search in factor momentum mode.",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--dual-momentum-weighting",
         choices=("equal", "score", "inverse-vol", "softmax"),
         default="equal",
-        help="How to weight the selected basket in dual momentum mode.",
+        help="[native] How to weight the selected basket in dual momentum mode.",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--softmax-temperature",
         type=float,
         default=0.05,
-        help="Temperature for softmax weighting in dual momentum mode.",
+        help="[native] Temperature for softmax weighting in dual momentum mode.",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--absolute-momentum-threshold",
         type=float,
         default=0.0,
-        help="Minimum trailing return required for dual momentum if no cash proxy is present.",
+        help="[native] Minimum trailing return required for dual momentum if no cash proxy is present.",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--target-vol",
         type=float,
         default=None,
-        help="Target annualized portfolio volatility for the risky basket (vol targeting).",
+        help="[native] Target annualized portfolio volatility for the risky basket (vol targeting).",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--vol-window",
         type=int,
         default=63,
-        help="Trailing trading-day window used to estimate volatility for --target-vol.",
+        help="[native] Trailing trading-day window used to estimate volatility for --target-vol.",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--max-single-weight",
         type=float,
         default=None,
-        help="Maximum weight for any single asset in the dual momentum basket.",
+        help="[native] Maximum weight for any single asset in the dual momentum basket.",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--trailing-stop",
         type=float,
         default=None,
-        help="Trailing stop-loss threshold per asset (e.g. 0.08 to exit an 8%% drawdown from peak).",
+        help="[native] Trailing stop-loss threshold per asset (e.g. 0.08 to exit an 8%% drawdown from peak).",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--basket-opt",
         choices=("mean-variance",),
         default=None,
-        help="How to size the momentum-selected basket (overrides --dual-momentum-weighting).",
+        help="[native] How to size the momentum-selected basket (overrides --dual-momentum-weighting).",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--basket-risk-aversion",
         type=float,
         default=1.0,
-        help="Risk aversion for basket mean-variance optimization.",
+        help="[native] Risk aversion for basket mean-variance optimization.",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--breadth-min-risky",
         type=float,
         default=0.0,
-        help="Minimum total risky exposure for protective momentum.",
+        help="[native] Minimum total risky exposure for protective momentum.",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--breadth-max-risky",
         type=float,
         default=1.0,
-        help="Maximum total risky exposure for protective momentum.",
+        help="[native] Maximum total risky exposure for protective momentum.",
     )
-    parser.add_argument(
+    native_options.add_argument(
         "--defensive-weighting",
         choices=("equal",),
         default="equal",
-        help="How protective momentum allocates capital not assigned to risky assets.",
+        help="[native] How protective momentum allocates capital not assigned to risky assets.",
     )
-    parser.add_argument(
+    data_source_options.add_argument(
         "--data-source",
         choices=("alpaca", "yfinance", "csv", "csv+yfinance", "stockanalysis"),
         default="alpaca",
-        help="Source for historical price data in backtest mode.",
+        help="Source for historical close data in backtest mode.",
     )
-    parser.add_argument(
+    data_source_options.add_argument(
         "--csv-dir",
         default=".cache/csv",
         help=(
@@ -531,34 +614,34 @@ def parse_args() -> argparse.Namespace:
             "Rows must be symbol,date,open,high,low,close,volume."
         ),
     )
-    parser.add_argument(
+    data_source_options.add_argument(
         "--csv-write-json-cache",
         action="store_true",
         help="Write provider-neutral JSON close caches from --csv-dir before running.",
     )
-    parser.add_argument(
+    data_source_options.add_argument(
         "--stockanalysis-start",
         default="1980-01-01",
         help="Start date for --data-source stockanalysis chart JSON.",
     )
-    parser.add_argument(
+    data_source_options.add_argument(
         "--stockanalysis-end",
         default=None,
         help="End date for --data-source stockanalysis chart JSON. Defaults to today.",
     )
-    parser.add_argument(
+    data_source_options.add_argument(
         "--yfinance-max-workers",
         type=int,
         default=10,
         help="Maximum concurrent yfinance symbol downloads when --data-source yfinance is used.",
     )
-    parser.add_argument(
+    data_source_options.add_argument(
         "--yfinance-retry-delay",
         type=float,
         default=1.0,
         help="Seconds to wait between yfinance retry attempts.",
     )
-    parser.add_argument(
+    data_source_options.add_argument(
         "--yfinance-symbol-delay",
         type=float,
         default=0.02,
@@ -567,77 +650,145 @@ def parse_args() -> argparse.Namespace:
             "--yfinance-max-workers is 1."
         ),
     )
-    parser.add_argument(
+    data_source_options.add_argument(
         "--benchmark",
         action="append",
         default=[],
         help=(
-            "Additional benchmark ticker to compare in backtest mode. "
+            "[native] Additional benchmark ticker to compare in backtest mode. "
             "Can be repeated, e.g. --benchmark ^HSI."
         ),
     )
-    parser.add_argument(
+    core_options.add_argument(
         "--backtest-days",
         type=int,
         default=0,
         help="Run a simple offline backtest over this many trading days instead of a live rebalance.",
     )
-    parser.add_argument(
+    core_options.add_argument(
+        "--backtest-engine",
+        choices=("native", "cvxportfolio"),
+        default="native",
+        help=(
+            "Backtest engine to use. 'native' runs the built-in optimizer and "
+            "momentum strategies; 'cvxportfolio' runs the experimental "
+            "framework-based comparison path."
+        ),
+    )
+    native_options.add_argument(
         "--rebalance-every",
         type=int,
         default=21,
-        help="Trading-day interval between rebalances in backtest mode.",
+        help="[native] Trading-day interval between rebalances in native backtest mode.",
     )
-    parser.add_argument(
+    core_options.add_argument(
         "--trading-days-per-year",
         type=int,
         default=TRADING_DAYS_PER_YEAR,
         help="Trading sessions per year used for annualized metrics.",
     )
-    parser.add_argument(
+    core_options.add_argument(
         "--rolling-window-days",
         type=int,
         default=0,
         help="If set, compare the strategy to SPY over rolling windows of this many trading days.",
     )
-    parser.add_argument(
+    core_options.add_argument(
         "--rolling-step-days",
         type=int,
         default=21,
         help="Trading-day step between rolling comparison windows.",
     )
-    parser.add_argument(
+    core_options.add_argument(
         "--sweep",
         action="store_true",
         help="Run a simple parameter sweep in backtest mode.",
     )
-    parser.add_argument(
+    core_options.add_argument(
         "--top-n",
         type=int,
         default=5,
         help="Number of top parameter combinations to show in sweep mode.",
     )
-    parser.add_argument(
+    cvxportfolio_options.add_argument(
+        "--core-symbol",
+        default=None,
+        help="[cvxportfolio] Required minimum core holding symbol.",
+    )
+    cvxportfolio_options.add_argument(
+        "--core-weight",
+        type=float,
+        default=0.0,
+        help="[cvxportfolio] Required minimum weight for --core-symbol.",
+    )
+    cvxportfolio_options.add_argument(
+        "--target-volatility",
+        type=float,
+        default=None,
+        help="[cvxportfolio] Annualized volatility constraint.",
+    )
+    cvxportfolio_options.add_argument(
+        "--max-leverage",
+        type=float,
+        default=None,
+        help="[cvxportfolio] Maximum leverage constraint.",
+    )
+    cvxportfolio_options.add_argument(
+        "--benchmark-symbol",
+        default=None,
+        help="[cvxportfolio] Benchmark symbol for benchmark-relative policy metrics.",
+    )
+    cvxportfolio_options.add_argument(
+        "--benchmark-weight",
+        type=float,
+        default=1.0,
+        help="[cvxportfolio] Weight assigned to --benchmark-symbol.",
+    )
+    cvxportfolio_options.add_argument(
+        "--linear-trade-cost",
+        type=float,
+        default=0.0,
+        help="[cvxportfolio] Simple proportional transaction-cost adjustment.",
+    )
+    cvxportfolio_options.add_argument(
+        "--planning-horizon",
+        type=int,
+        default=1,
+        help="[cvxportfolio] Planning horizon; values above 1 use multi-period optimization.",
+    )
+    cvxportfolio_options.add_argument(
+        "--compare-custom",
+        action="store_true",
+        help=(
+            "[cvxportfolio] Compare the cvxportfolio configuration against "
+            "the repo's custom baseline preset."
+        ),
+    )
+    execution_options.add_argument(
         "--submit",
         action="store_true",
-        help="Submit market orders to Alpaca. Default behavior is dry-run output only.",
+        help="[native] Submit market orders to Alpaca. Default behavior is dry-run output only.",
     )
-    parser.add_argument(
+    execution_options.add_argument(
         "--use-cache",
         action="store_true",
         help="Use cached Alpaca data when available.",
     )
-    parser.add_argument(
+    execution_options.add_argument(
         "--refresh-cache",
         action="store_true",
         help="Refresh cached Alpaca data from the API.",
     )
-    parser.add_argument(
+    execution_options.add_argument(
         "--offline",
         action="store_true",
         help="Use cached data only and never call Alpaca.",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Explicit dry-run mode.")
+    execution_options.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="[native] Explicit dry-run mode.",
+    )
     return parser.parse_args()
 
 
@@ -694,6 +845,13 @@ def main() -> None:
         raise ValueError("--yfinance-symbol-delay cannot be negative.")
     if max_stale_dynamic_universe_days < 0:
         raise ValueError("--max-stale-dynamic-universe-days cannot be negative.")
+
+    backtest_engine = getattr(args, "backtest_engine", "native")
+    if backtest_engine == "cvxportfolio":
+        _validate_cvxportfolio_engine_args(args)
+        print(format_cvxportfolio_backtest(run_cvxportfolio_from_args(args)))
+        return
+    _validate_native_engine_args(args)
 
     # Dynamic universe is only useful for live/dry-run trading, not backtesting
     if args.dynamic_universe and args.backtest_days > 0:
@@ -805,71 +963,26 @@ def main() -> None:
         benchmark_symbols = [
             symbol for symbol in getattr(args, "benchmark", []) if symbol
         ]
-        closes_for_benchmarks: dict[str, list[float]] = {}
-        symbols_for_benchmarks = model.symbols
-        if args.data_source in {"yfinance", "csv", "csv+yfinance", "stockanalysis"}:
-            requested_symbols = list(
-                dict.fromkeys([*model.symbols, *benchmark_symbols])
-            )
-            if args.data_source == "csv+yfinance":
-                csv_write_yfinance_compatible_caches(
-                    csv_dir=csv_dir,
-                    symbols=requested_symbols,
-                )
-            if args.data_source in {"yfinance", "csv+yfinance"}:
-                closes_by_symbol = yf_fetch_closes(
-                    requested_symbols,
-                    period="max",
-                    use_cache=args.use_cache or args.data_source == "csv+yfinance",
-                    refresh_cache=(
-                        args.refresh_cache and args.data_source != "csv+yfinance"
-                    ),
-                    offline=args.offline,
-                    max_workers=yfinance_max_workers,
-                    retry_delay=yfinance_retry_delay,
-                    symbol_delay=yfinance_symbol_delay,
-                )
-            else:
-                if args.data_source == "stockanalysis":
-                    closes_by_symbol = stockanalysis_fetch_closes(
-                        requested_symbols,
-                        start=stockanalysis_start,
-                        end=stockanalysis_end,
-                        use_cache=args.use_cache,
-                        refresh_cache=args.refresh_cache,
-                        offline=args.offline,
-                    )
-                elif getattr(args, "csv_write_json_cache", False):
-                    csv_write_json_caches(csv_dir=csv_dir, symbols=requested_symbols)
-                    closes_by_symbol = csv_fetch_closes(
-                        requested_symbols, csv_dir=csv_dir
-                    )
-                else:
-                    closes_by_symbol = csv_fetch_closes(
-                        requested_symbols, csv_dir=csv_dir
-                    )
-            # Trim to the requested total_days from the most recent
-            for s in closes_by_symbol:
-                closes_by_symbol[s] = closes_by_symbol[s][-total_days:]
-            closes_for_benchmarks = closes_by_symbol
-            symbols_for_benchmarks = requested_symbols
-            closes_by_symbol = {
-                symbol: closes_by_symbol[symbol] for symbol in model.symbols
-            }
-        else:
-            if benchmark_symbols:
-                raise ValueError(
-                    "--benchmark is only supported with --data-source yfinance, csv, or stockanalysis."
-                )
-            if alpaca is None:
-                alpaca = AlpacaClient(AlpacaConfig.from_env())
-            closes_by_symbol = alpaca.get_daily_closes_for_period(
-                model.symbols,
-                total_days,
-                use_cache=args.use_cache,
-                refresh_cache=args.refresh_cache,
-                offline=args.offline,
-            )
+        close_history = load_close_history(
+            symbols=model.symbols,
+            total_days=total_days,
+            data_source=args.data_source,
+            benchmark_symbols=benchmark_symbols,
+            alpaca=alpaca,
+            csv_dir=csv_dir,
+            csv_write_json_cache=getattr(args, "csv_write_json_cache", False),
+            stockanalysis_start=stockanalysis_start,
+            stockanalysis_end=stockanalysis_end,
+            yfinance_max_workers=yfinance_max_workers,
+            yfinance_retry_delay=yfinance_retry_delay,
+            yfinance_symbol_delay=yfinance_symbol_delay,
+            use_cache=args.use_cache,
+            refresh_cache=args.refresh_cache,
+            offline=args.offline,
+        )
+        closes_by_symbol = close_history.closes_by_symbol
+        closes_for_benchmarks = close_history.benchmark_closes_by_symbol
+        symbols_for_benchmarks = close_history.benchmark_symbols_universe
         _validate_backtest_history(
             closes_by_symbol,
             lookback_days=args.lookback_days,

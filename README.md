@@ -12,147 +12,15 @@ It can also backtest against historical data (primarily [yfinance](https://pypi.
 (**AI Disclosure**: some of the code in this repo was generated using the aid of coding tools such as Qwen Code and Codex)
 
 ## Usage
-It is recommended to run the below commands with `uv run`
+Run commands through `uv run`:
 
-`portfolio-opt`: Run a mean-variance rebalance against Alpaca.
+```bash
+uv run portfolio-opt --help
+```
 
-```
-options:
-  -h, --help            show this help message and exit
-  --model MODEL         Path to model input JSON file.
-  --dynamic-universe    Fetch current index constituents dynamically instead
-                        of using a model file.
-  --filter-before FILTER_BEFORE
-                        Only include tickers that started trading before this
-                        ISO date (e.g. 2020-01-01).
-  --ticker-basket [TICKER_BASKET ...]
-                        Universe components for --dynamic-universe (uses
-                        fetch_ticker_dict defaults if empty).
-  --dynamic-universe-cache-dir DYNAMIC_UNIVERSE_CACHE_DIR
-                        Directory for latest-known-good generated dynamic
-                        universe model caches.
-  --allow-stale-dynamic-universe
-                        Use the previous cached dynamic universe if a fresh
-                        fetch fails.
-  --max-stale-dynamic-universe-days MAX_STALE_DYNAMIC_UNIVERSE_DAYS
-                        Maximum age in days for --allow-stale-dynamic-universe
-                        fallback.
-  --risk-aversion RISK_AVERSION
-  --min-weight MIN_WEIGHT
-  --max-weight MAX_WEIGHT
-  --rebalance-threshold REBALANCE_THRESHOLD
-  --turnover-penalty TURNOVER_PENALTY
-  --allow-cash          Allow the optimizer to leave part of the portfolio in
-                        cash.
-  --min-cash-weight MIN_CASH_WEIGHT
-                        Minimum cash weight to hold when --allow-cash is
-                        enabled.
-  --max-turnover MAX_TURNOVER
-                        Hard cap on one-step turnover, measured as
-                        sum(abs(target-current)).
-  --min-invested-weight MIN_INVESTED_WEIGHT
-                        Minimum total risky-asset weight when cash is allowed.
-  --estimate-from-history
-                        Estimate expected returns and covariance from Alpaca
-                        daily bars.
-  --lookback-days LOOKBACK_DAYS
-  --mean-shrinkage MEAN_SHRINKAGE
-                        Shrink sample mean returns toward zero to reduce
-                        estimation noise.
-  --return-model {sample-mean,momentum,black-litterman,risk-parity}
-                        How to estimate expected returns when using
-                        --estimate-from-history.
-  --strategy {mean-variance,dual-momentum,factor-momentum,protective-momentum}
-                        Strategy for live or backtest rebalancing. Momentum
-                        strategies use live prices when --estimate-from-
-                        history is set.
-  --momentum-window MOMENTUM_WINDOW
-                        Trailing trading-day window used by the momentum
-                        return model.
-  --top-k TOP_K         Number of assets to hold in dual momentum mode.
-  --factor-top-k FACTOR_TOP_K
-                        Number of top factor/sleeve groups to search in factor
-                        momentum mode.
-  --dual-momentum-weighting {equal,score,inverse-vol,softmax}
-                        How to weight the selected basket in dual momentum
-                        mode.
-  --softmax-temperature SOFTMAX_TEMPERATURE
-                        Temperature for softmax weighting in dual momentum
-                        mode.
-  --absolute-momentum-threshold ABSOLUTE_MOMENTUM_THRESHOLD
-                        Minimum trailing return required for dual momentum if
-                        no cash proxy is present.
-  --target-vol TARGET_VOL
-                        Target annualized portfolio volatility for the risky
-                        basket (vol targeting).
-  --vol-window VOL_WINDOW
-                        Trailing trading-day window used to estimate
-                        volatility for --target-vol.
-  --max-single-weight MAX_SINGLE_WEIGHT
-                        Maximum weight for any single asset in the dual
-                        momentum basket.
-  --trailing-stop TRAILING_STOP
-                        Trailing stop-loss threshold per asset (e.g. 0.08 to
-                        exit an 8% drawdown from peak).
-  --basket-opt {mean-variance}
-                        How to size the momentum-selected basket (overrides
-                        --dual-momentum-weighting).
-  --basket-risk-aversion BASKET_RISK_AVERSION
-                        Risk aversion for basket mean-variance optimization.
-  --breadth-min-risky BREADTH_MIN_RISKY
-                        Minimum total risky exposure for protective momentum.
-  --breadth-max-risky BREADTH_MAX_RISKY
-                        Maximum total risky exposure for protective momentum.
-  --defensive-weighting {equal}
-                        How protective momentum allocates capital not assigned
-                        to risky assets.
-  --data-source {alpaca,yfinance,csv,csv+yfinance,stockanalysis}
-                        Source for historical price data in backtest mode.
-  --csv-dir CSV_DIR     Directory of local OHLCV CSV files when --data-source
-                        csv is used. Rows must be
-                        symbol,date,open,high,low,close,volume.
-  --csv-write-json-cache
-                        Write provider-neutral JSON close caches from --csv-
-                        dir before running.
-  --stockanalysis-start STOCKANALYSIS_START
-                        Start date for --data-source stockanalysis chart JSON.
-  --stockanalysis-end STOCKANALYSIS_END
-                        End date for --data-source stockanalysis chart JSON.
-                        Defaults to today.
-  --yfinance-max-workers YFINANCE_MAX_WORKERS
-                        Maximum concurrent yfinance symbol downloads when
-                        --data-source yfinance is used.
-  --yfinance-retry-delay YFINANCE_RETRY_DELAY
-                        Seconds to wait between yfinance retry attempts.
-  --yfinance-symbol-delay YFINANCE_SYMBOL_DELAY
-                        Seconds to wait between yfinance symbol downloads when
-                        --yfinance-max-workers is 1.
-  --benchmark BENCHMARK
-                        Additional benchmark ticker to compare in backtest
-                        mode. Can be repeated, e.g. --benchmark ^HSI.
-  --backtest-days BACKTEST_DAYS
-                        Run a simple offline backtest over this many trading
-                        days instead of a live rebalance.
-  --rebalance-every REBALANCE_EVERY
-                        Trading-day interval between rebalances in backtest
-                        mode.
-  --trading-days-per-year TRADING_DAYS_PER_YEAR
-                        Trading sessions per year used for annualized metrics.
-  --rolling-window-days ROLLING_WINDOW_DAYS
-                        If set, compare the strategy to SPY over rolling
-                        windows of this many trading days.
-  --rolling-step-days ROLLING_STEP_DAYS
-                        Trading-day step between rolling comparison windows.
-  --sweep               Run a simple parameter sweep in backtest mode.
-  --top-n TOP_N         Number of top parameter combinations to show in sweep
-                        mode.
-  --submit              Submit market orders to Alpaca. Default behavior is
-                        dry-run output only.
-  --use-cache           Use cached Alpaca data when available.
-  --refresh-cache       Refresh cached Alpaca data from the API.
-  --offline             Use cached data only and never call Alpaca.
-  --dry-run             Explicit dry-run mode.
-```
+Common workflows are shown below. The CLI help is the source of truth for the full option list.
+
+`portfolio-opt --backtest-days ...` uses the native backtest engine by default. Use `--backtest-engine cvxportfolio` to run the experimental `cvxportfolio` framework path from the same CLI.
 
 
 ## Strategy
@@ -452,11 +320,14 @@ uv run portfolio-opt --model examples/sample_model.json --submit
 
 ## cvxportfolio Experiment
 
-There is now a separate comparison path under `src/cvxportfolio_impl/`.
+The `cvxportfolio` implementation is an experimental framework comparison path under `src/cvxportfolio_impl/`. It is available through the main CLI with `--backtest-engine cvxportfolio`; the old `cvxportfolio-backtest` command remains as a compatibility entrypoint.
+
+The `cvxportfolio` engine supports the same historical data-source and cache flags as native backtests, including `--data-source yfinance`, `csv`, `csv+yfinance`, `stockanalysis`, or `alpaca`.
 
 ```bash
-uv run cvxportfolio-backtest \
+uv run portfolio-opt \
   --model examples/sample_universe.json \
+  --backtest-engine cvxportfolio \
   --lookback-days 126 \
   --backtest-days 252
 ```
@@ -464,17 +335,21 @@ uv run cvxportfolio-backtest \
 For repeatable offline comparison runs:
 
 ```bash
-uv run cvxportfolio-backtest \
+uv run portfolio-opt \
   --model examples/sample_universe.json \
+  --backtest-engine cvxportfolio \
   --lookback-days 126 \
   --backtest-days 252 \
+  --data-source yfinance \
   --use-cache \
   --refresh-cache
 
-uv run cvxportfolio-backtest \
+uv run portfolio-opt \
   --model examples/sample_universe.json \
+  --backtest-engine cvxportfolio \
   --lookback-days 126 \
   --backtest-days 252 \
+  --data-source yfinance \
   --offline
 ```
 
@@ -482,8 +357,9 @@ The current best-known preset is captured in `examples/cvxportfolio_best_preset.
 It is the current cost-aware single-period candidate:
 
 ```bash
-uv run cvxportfolio-backtest \
+uv run portfolio-opt \
   --model examples/sample_universe.json \
+  --backtest-engine cvxportfolio \
   --lookback-days 126 \
   --backtest-days 252 \
   --risk-aversion 0.5 \
@@ -502,8 +378,9 @@ For a volatility-targeted broad-universe starting point, see `examples/cvxportfo
 To compare that `cvxportfolio` configuration against the repo's best-known custom baseline on the same cached data and benchmarks:
 
 ```bash
-uv run cvxportfolio-backtest \
+uv run portfolio-opt \
   --model examples/sample_universe.json \
+  --backtest-engine cvxportfolio \
   --lookback-days 126 \
   --backtest-days 252 \
   --risk-aversion 0.5 \
@@ -513,14 +390,16 @@ uv run cvxportfolio-backtest \
   --min-invested-weight 0.4 \
   --linear-trade-cost 0.001 \
   --compare-custom \
+  --data-source yfinance \
   --offline
 ```
 
 To see how often a broad-universe policy beats `SPY` across rolling subwindows of the aligned backtest period:
 
 ```bash
-uv run cvxportfolio-backtest \
+uv run portfolio-opt \
   --model examples/broad_universe.json \
+  --backtest-engine cvxportfolio \
   --lookback-days 126 \
   --backtest-days 252 \
   --risk-aversion 0.5 \
@@ -531,14 +410,16 @@ uv run cvxportfolio-backtest \
   --linear-trade-cost 0.001 \
   --rolling-window-days 63 \
   --rolling-step-days 21 \
+  --data-source yfinance \
   --offline
 ```
 
 To keep `SPY` as a required core holding and let the optimizer allocate active tilts around it:
 
 ```bash
-uv run cvxportfolio-backtest \
+uv run portfolio-opt \
   --model examples/broad_universe.json \
+  --backtest-engine cvxportfolio \
   --lookback-days 126 \
   --backtest-days 252 \
   --risk-aversion 0.5 \
@@ -549,6 +430,7 @@ uv run cvxportfolio-backtest \
   --core-symbol SPY \
   --core-weight 0.35 \
   --linear-trade-cost 0.001 \
+  --data-source yfinance \
   --offline
 ```
 
@@ -607,8 +489,10 @@ The built-in benchmark block is still anchored to `SPY`, `TLT`, and equal-weight
 - Dual-momentum backtests survive the 2008 crisis with a 29% drawdown vs SPY's 47% (~18 year history).
 - The `--trailing-stop 0.15` parameter adds per-asset stop-loss protection (15% from peak).
 - Asset-class bounds can be defined in the model file to keep allocations within a portfolio policy.
-- Backtest mode supports `mean-variance`, `dual-momentum`, and `dual-momentum` with rolling-window comparison vs SPY.
+- Native backtest mode supports `mean-variance`, `dual-momentum`, `factor-momentum`, and `protective-momentum`, with built-in benchmark comparisons against SPY, QQQ, 60/40 SPY/TLT, equal-weight, and half-SPY/half-cash portfolios.
+- Backtest output includes final value, total and annualized return, annualized volatility, max drawdown, Sortino ratio, rebalance count, average turnover, latest target weights, cash weight, asset-class exposures, daily equity values, and benchmark summaries.
+- Rolling-window comparison currently measures strategy results against SPY.
 - Sweep mode runs a backtest grid over core policy parameters and returns the top results.
-- `src/cvxportfolio_impl/` contains a parallel `cvxportfolio` experiment for comparison.
+- `--backtest-engine cvxportfolio` runs a parallel `cvxportfolio` experiment for comparison; it is not expected to match native results exactly because it uses a different simulator, warmup convention, and transaction-cost handling.
 - `uvx ty check` is the intended static type-checking entrypoint for this repo.
 - The project is managed with `uv`; keep `pyproject.toml` and `uv.lock` in sync.

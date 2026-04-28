@@ -7,17 +7,17 @@ from concurrent.futures import ProcessPoolExecutor
 import numpy as np
 import pandas as pd
 
-from portfolio_opt.alpaca_interface import AlpacaClient
 from portfolio_opt.backtest import (
     TRADING_DAYS_PER_YEAR,
     run_fixed_weight_benchmark,
     summarize_return_series,
 )
 from portfolio_opt.backtest import run_backtest as run_custom_backtest
-from portfolio_opt.config import AlpacaConfig, OptimizationConfig
+from portfolio_opt.config import OptimizationConfig
+from portfolio_opt.market_data import DataSource, load_close_history
 from portfolio_opt.model import load_model_inputs
 
-from .data import bars_to_market_data, momentum_forecast
+from .data import closes_to_market_data, momentum_forecast
 from .policy import build_policy
 
 
@@ -275,22 +275,38 @@ def prepare_cvxportfolio_context(
     model_path: str,
     lookback_days: int,
     backtest_days: int,
+    data_source: DataSource = "alpaca",
+    csv_dir: str = ".cache/csv",
+    csv_write_json_cache: bool = False,
+    stockanalysis_start: str = "1980-01-01",
+    stockanalysis_end: str | None = None,
+    yfinance_max_workers: int = 10,
+    yfinance_retry_delay: float = 1.0,
+    yfinance_symbol_delay: float = 0.02,
     use_cache: bool = False,
     refresh_cache: bool = False,
     offline: bool = False,
 ) -> tuple:
     model = load_model_inputs(model_path)
-    alpaca = AlpacaClient(AlpacaConfig.from_env())
     warmup_days = max(lookback_days, 252)
     total_days = warmup_days + backtest_days + 1
-    bars_by_symbol = alpaca.get_daily_bars_for_period(
-        model.symbols,
-        total_days,
+    close_history = load_close_history(
+        symbols=model.symbols,
+        total_days=total_days,
+        data_source=data_source,
+        csv_dir=csv_dir,
+        csv_write_json_cache=csv_write_json_cache,
+        stockanalysis_start=stockanalysis_start,
+        stockanalysis_end=stockanalysis_end,
+        yfinance_max_workers=yfinance_max_workers,
+        yfinance_retry_delay=yfinance_retry_delay,
+        yfinance_symbol_delay=yfinance_symbol_delay,
         use_cache=use_cache,
         refresh_cache=refresh_cache,
         offline=offline,
     )
-    returns_frame, prices_frame, closes_by_symbol = bars_to_market_data(bars_by_symbol)
+    closes_by_symbol = close_history.closes_by_symbol
+    returns_frame, prices_frame = closes_to_market_data(closes_by_symbol)
     return model, closes_by_symbol, returns_frame, prices_frame, warmup_days
 
 
@@ -315,6 +331,14 @@ def run_cvxportfolio_backtest(
     rolling_window_days: int = 0,
     rolling_step_days: int = 21,
     trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
+    data_source: DataSource = "alpaca",
+    csv_dir: str = ".cache/csv",
+    csv_write_json_cache: bool = False,
+    stockanalysis_start: str = "1980-01-01",
+    stockanalysis_end: str | None = None,
+    yfinance_max_workers: int = 10,
+    yfinance_retry_delay: float = 1.0,
+    yfinance_symbol_delay: float = 0.02,
     use_cache: bool = False,
     refresh_cache: bool = False,
     offline: bool = False,
@@ -331,6 +355,14 @@ def run_cvxportfolio_backtest(
             model_path=model_path,
             lookback_days=lookback_days,
             backtest_days=backtest_days,
+            data_source=data_source,
+            csv_dir=csv_dir,
+            csv_write_json_cache=csv_write_json_cache,
+            stockanalysis_start=stockanalysis_start,
+            stockanalysis_end=stockanalysis_end,
+            yfinance_max_workers=yfinance_max_workers,
+            yfinance_retry_delay=yfinance_retry_delay,
+            yfinance_symbol_delay=yfinance_symbol_delay,
             use_cache=use_cache,
             refresh_cache=refresh_cache,
             offline=offline,
@@ -536,6 +568,14 @@ def run_framework_comparison(
     cvxportfolio_config: dict[str, float | int],
     custom_config: dict[str, float | int],
     trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
+    data_source: DataSource = "alpaca",
+    csv_dir: str = ".cache/csv",
+    csv_write_json_cache: bool = False,
+    stockanalysis_start: str = "1980-01-01",
+    stockanalysis_end: str | None = None,
+    yfinance_max_workers: int = 10,
+    yfinance_retry_delay: float = 1.0,
+    yfinance_symbol_delay: float = 0.02,
     use_cache: bool = False,
     refresh_cache: bool = False,
     offline: bool = False,
@@ -545,6 +585,14 @@ def run_framework_comparison(
             model_path=model_path,
             lookback_days=lookback_days,
             backtest_days=backtest_days,
+            data_source=data_source,
+            csv_dir=csv_dir,
+            csv_write_json_cache=csv_write_json_cache,
+            stockanalysis_start=stockanalysis_start,
+            stockanalysis_end=stockanalysis_end,
+            yfinance_max_workers=yfinance_max_workers,
+            yfinance_retry_delay=yfinance_retry_delay,
+            yfinance_symbol_delay=yfinance_symbol_delay,
             use_cache=use_cache,
             refresh_cache=refresh_cache,
             offline=offline,
@@ -585,6 +633,14 @@ def run_framework_comparison(
         linear_trade_cost=float(cvxportfolio_config["linear_trade_cost"]),
         planning_horizon=int(cvxportfolio_config["planning_horizon"]),
         trading_days_per_year=trading_days_per_year,
+        data_source=data_source,
+        csv_dir=csv_dir,
+        csv_write_json_cache=csv_write_json_cache,
+        stockanalysis_start=stockanalysis_start,
+        stockanalysis_end=stockanalysis_end,
+        yfinance_max_workers=yfinance_max_workers,
+        yfinance_retry_delay=yfinance_retry_delay,
+        yfinance_symbol_delay=yfinance_symbol_delay,
         use_cache=use_cache,
         refresh_cache=refresh_cache,
         offline=offline,
@@ -698,6 +754,14 @@ def run_cvxportfolio_sweep(
     benchmark_symbol: str | None = None,
     benchmark_weight: float = 1.0,
     trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
+    data_source: DataSource = "alpaca",
+    csv_dir: str = ".cache/csv",
+    csv_write_json_cache: bool = False,
+    stockanalysis_start: str = "1980-01-01",
+    stockanalysis_end: str | None = None,
+    yfinance_max_workers: int = 10,
+    yfinance_retry_delay: float = 1.0,
+    yfinance_symbol_delay: float = 0.02,
     use_cache: bool = False,
     refresh_cache: bool = False,
     offline: bool = False,
@@ -707,6 +771,14 @@ def run_cvxportfolio_sweep(
             model_path=model_path,
             lookback_days=lookback_days,
             backtest_days=backtest_days,
+            data_source=data_source,
+            csv_dir=csv_dir,
+            csv_write_json_cache=csv_write_json_cache,
+            stockanalysis_start=stockanalysis_start,
+            stockanalysis_end=stockanalysis_end,
+            yfinance_max_workers=yfinance_max_workers,
+            yfinance_retry_delay=yfinance_retry_delay,
+            yfinance_symbol_delay=yfinance_symbol_delay,
             use_cache=use_cache,
             refresh_cache=refresh_cache,
             offline=offline,
