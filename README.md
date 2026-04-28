@@ -1,11 +1,159 @@
 # Portfolio Optimizer
 
-A tactical portfolio optimizer with two strategy paths that can rebalance an Alpaca account:
+A tactical portfolio optimizer with various strategy paths that can rebalance an Alpaca account:
 
-1. **Dual momentum** — ranks assets by trailing return, holds the top-k, exits positions that fall more than a trailing stop threshold.
-2. **Mean-variance** — `cvxpy` optimization of expected return vs. covariance with asset-class constraints and turnover penalties.
+1. `mean-variance` — ([cvxpy](https://github.com/cvxpy/cvxpy/)) optimization of expected return vs. covariance with asset-class constraints and turnover penalties.
+2. `dual-momentum` — ranks assets by trailing return, holds the top-k, exits positions that fall more than a trailing stop threshold.
+3. `factor-momentum` — ranks asset-class or sleeve groups first, then selects top assets inside the strongest groups.
+4. `protective-momentum` — scales risky exposure based on market breadth and moves the rest into defensive assets.
 
-(notes: much of this repo was generated using vibe-coding e.g. Codex and Qwen Coder)
+It can also backtest against historical data (primarily [yfinance](https://pypi.org/project/yfinance/) data, but other data sources can be manually uploaded via csv), and output various metrics of performance.
+
+(**AI Disclosure**: some of the code in this repo was generated using the aid of coding tools such as Qwen Code and Codex)
+
+## Usage
+It is recommended to run the below commands with `uv run`
+
+`portfolio-opt`: Run a mean-variance rebalance against Alpaca.
+
+```
+options:
+  -h, --help            show this help message and exit
+  --model MODEL         Path to model input JSON file.
+  --dynamic-universe    Fetch current index constituents dynamically instead
+                        of using a model file.
+  --filter-before FILTER_BEFORE
+                        Only include tickers that started trading before this
+                        ISO date (e.g. 2020-01-01).
+  --ticker-basket [TICKER_BASKET ...]
+                        Universe components for --dynamic-universe (uses
+                        fetch_ticker_dict defaults if empty).
+  --dynamic-universe-cache-dir DYNAMIC_UNIVERSE_CACHE_DIR
+                        Directory for latest-known-good generated dynamic
+                        universe model caches.
+  --allow-stale-dynamic-universe
+                        Use the previous cached dynamic universe if a fresh
+                        fetch fails.
+  --max-stale-dynamic-universe-days MAX_STALE_DYNAMIC_UNIVERSE_DAYS
+                        Maximum age in days for --allow-stale-dynamic-universe
+                        fallback.
+  --risk-aversion RISK_AVERSION
+  --min-weight MIN_WEIGHT
+  --max-weight MAX_WEIGHT
+  --rebalance-threshold REBALANCE_THRESHOLD
+  --turnover-penalty TURNOVER_PENALTY
+  --allow-cash          Allow the optimizer to leave part of the portfolio in
+                        cash.
+  --min-cash-weight MIN_CASH_WEIGHT
+                        Minimum cash weight to hold when --allow-cash is
+                        enabled.
+  --max-turnover MAX_TURNOVER
+                        Hard cap on one-step turnover, measured as
+                        sum(abs(target-current)).
+  --min-invested-weight MIN_INVESTED_WEIGHT
+                        Minimum total risky-asset weight when cash is allowed.
+  --estimate-from-history
+                        Estimate expected returns and covariance from Alpaca
+                        daily bars.
+  --lookback-days LOOKBACK_DAYS
+  --mean-shrinkage MEAN_SHRINKAGE
+                        Shrink sample mean returns toward zero to reduce
+                        estimation noise.
+  --return-model {sample-mean,momentum,black-litterman,risk-parity}
+                        How to estimate expected returns when using
+                        --estimate-from-history.
+  --strategy {mean-variance,dual-momentum,factor-momentum,protective-momentum}
+                        Strategy for live or backtest rebalancing. Momentum
+                        strategies use live prices when --estimate-from-
+                        history is set.
+  --momentum-window MOMENTUM_WINDOW
+                        Trailing trading-day window used by the momentum
+                        return model.
+  --top-k TOP_K         Number of assets to hold in dual momentum mode.
+  --factor-top-k FACTOR_TOP_K
+                        Number of top factor/sleeve groups to search in factor
+                        momentum mode.
+  --dual-momentum-weighting {equal,score,inverse-vol,softmax}
+                        How to weight the selected basket in dual momentum
+                        mode.
+  --softmax-temperature SOFTMAX_TEMPERATURE
+                        Temperature for softmax weighting in dual momentum
+                        mode.
+  --absolute-momentum-threshold ABSOLUTE_MOMENTUM_THRESHOLD
+                        Minimum trailing return required for dual momentum if
+                        no cash proxy is present.
+  --target-vol TARGET_VOL
+                        Target annualized portfolio volatility for the risky
+                        basket (vol targeting).
+  --vol-window VOL_WINDOW
+                        Trailing trading-day window used to estimate
+                        volatility for --target-vol.
+  --max-single-weight MAX_SINGLE_WEIGHT
+                        Maximum weight for any single asset in the dual
+                        momentum basket.
+  --trailing-stop TRAILING_STOP
+                        Trailing stop-loss threshold per asset (e.g. 0.08 to
+                        exit an 8% drawdown from peak).
+  --basket-opt {mean-variance}
+                        How to size the momentum-selected basket (overrides
+                        --dual-momentum-weighting).
+  --basket-risk-aversion BASKET_RISK_AVERSION
+                        Risk aversion for basket mean-variance optimization.
+  --breadth-min-risky BREADTH_MIN_RISKY
+                        Minimum total risky exposure for protective momentum.
+  --breadth-max-risky BREADTH_MAX_RISKY
+                        Maximum total risky exposure for protective momentum.
+  --defensive-weighting {equal}
+                        How protective momentum allocates capital not assigned
+                        to risky assets.
+  --data-source {alpaca,yfinance,csv,csv+yfinance,stockanalysis}
+                        Source for historical price data in backtest mode.
+  --csv-dir CSV_DIR     Directory of local OHLCV CSV files when --data-source
+                        csv is used. Rows must be
+                        symbol,date,open,high,low,close,volume.
+  --csv-write-json-cache
+                        Write provider-neutral JSON close caches from --csv-
+                        dir before running.
+  --stockanalysis-start STOCKANALYSIS_START
+                        Start date for --data-source stockanalysis chart JSON.
+  --stockanalysis-end STOCKANALYSIS_END
+                        End date for --data-source stockanalysis chart JSON.
+                        Defaults to today.
+  --yfinance-max-workers YFINANCE_MAX_WORKERS
+                        Maximum concurrent yfinance symbol downloads when
+                        --data-source yfinance is used.
+  --yfinance-retry-delay YFINANCE_RETRY_DELAY
+                        Seconds to wait between yfinance retry attempts.
+  --yfinance-symbol-delay YFINANCE_SYMBOL_DELAY
+                        Seconds to wait between yfinance symbol downloads when
+                        --yfinance-max-workers is 1.
+  --benchmark BENCHMARK
+                        Additional benchmark ticker to compare in backtest
+                        mode. Can be repeated, e.g. --benchmark ^HSI.
+  --backtest-days BACKTEST_DAYS
+                        Run a simple offline backtest over this many trading
+                        days instead of a live rebalance.
+  --rebalance-every REBALANCE_EVERY
+                        Trading-day interval between rebalances in backtest
+                        mode.
+  --trading-days-per-year TRADING_DAYS_PER_YEAR
+                        Trading sessions per year used for annualized metrics.
+  --rolling-window-days ROLLING_WINDOW_DAYS
+                        If set, compare the strategy to SPY over rolling
+                        windows of this many trading days.
+  --rolling-step-days ROLLING_STEP_DAYS
+                        Trading-day step between rolling comparison windows.
+  --sweep               Run a simple parameter sweep in backtest mode.
+  --top-n TOP_N         Number of top parameter combinations to show in sweep
+                        mode.
+  --submit              Submit market orders to Alpaca. Default behavior is
+                        dry-run output only.
+  --use-cache           Use cached Alpaca data when available.
+  --refresh-cache       Refresh cached Alpaca data from the API.
+  --offline             Use cached data only and never call Alpaca.
+  --dry-run             Explicit dry-run mode.
+```
+
 
 ## Strategy
 
