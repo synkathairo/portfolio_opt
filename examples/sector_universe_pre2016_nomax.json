@@ -39,6 +39,6 @@
     "TIP": "bond_inflation",
     "GLD": "commodity_gold",
     "GSG": "commodity_broad",
-    "VNQ": "real_estate"
+    "VNQ": "sector_real_estate"
   }
 }

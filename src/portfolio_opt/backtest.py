@@ -228,6 +228,140 @@ def _momentum_target_weights(
     return target_weights
 
 
+def _equal_defensive_weights(
+    target_weights: np.ndarray,
+    defensive_indices: list[int],
+    defensive_exposure: float,
+    defensive_weighting: str,
+) -> None:
+    if defensive_exposure <= 0.0:
+        return
+    if defensive_weighting != "equal":
+        raise ValueError(f"Unknown defensive weighting mode: {defensive_weighting}")
+    if not defensive_indices:
+        return
+    weight = defensive_exposure / len(defensive_indices)
+    for index in defensive_indices:
+        target_weights[index] = weight
+
+
+def _protective_momentum_target_weights(
+    *,
+    symbols: list[str],
+    asset_classes: dict[str, str],
+    returns: np.ndarray,
+    trailing_returns: np.ndarray,
+    trailing_volatility: np.ndarray,
+    lookback_days: int,
+    top_k: int,
+    weighting: str,
+    softmax_temperature: float,
+    absolute_threshold: float,
+    basket_opt: str | None,
+    basket_risk_aversion: float,
+    target_vol: float | None,
+    max_single_weight: float | None,
+    vol_window: int,
+    breadth_min_risky: float,
+    breadth_max_risky: float,
+    defensive_weighting: str,
+) -> np.ndarray:
+    if not 0.0 <= breadth_min_risky <= 1.0:
+        raise ValueError("breadth_min_risky must be between 0 and 1.")
+    if not 0.0 <= breadth_max_risky <= 1.0:
+        raise ValueError("breadth_max_risky must be between 0 and 1.")
+    if breadth_min_risky > breadth_max_risky:
+        raise ValueError("breadth_min_risky cannot exceed breadth_max_risky.")
+
+    risky_indices, defensive_indices, cash_like_index = _momentum_asset_indices(
+        symbols,
+        asset_classes,
+    )
+    if not risky_indices:
+        raise ValueError("Protective momentum requires at least one risky symbol.")
+
+    defensive_floor = (
+        float(trailing_returns[cash_like_index])
+        if cash_like_index is not None
+        else absolute_threshold
+    )
+    threshold = max(absolute_threshold, defensive_floor)
+    passing_risky = [
+        idx for idx in risky_indices if float(trailing_returns[idx]) > threshold
+    ]
+    risky_exposure = float(len(passing_risky)) / float(len(risky_indices))
+    risky_exposure = float(
+        np.clip(risky_exposure, breadth_min_risky, breadth_max_risky)
+    )
+    risky_ranked = sorted(
+        ((idx, float(trailing_returns[idx])) for idx in passing_risky),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+
+    target_weights = np.zeros(len(symbols), dtype=float)
+    if risky_ranked and risky_exposure > 0.0:
+        selected = risky_ranked[:top_k]
+        selected_indices = [idx for idx, _ in selected]
+        sleeve_weights = np.zeros(len(symbols), dtype=float)
+
+        if basket_opt == "mean-variance":
+            basket_returns = trailing_returns[selected_indices]
+            basket_returns_history = returns[
+                :, max(0, returns.shape[1] - lookback_days) :
+            ][selected_indices]
+            if len(selected_indices) == 1:
+                basket_cov = np.array([[np.var(basket_returns_history[0])]])
+            else:
+                basket_cov = np.cov(basket_returns_history)
+            basket_cov += 1e-8 * np.eye(len(selected_indices))
+            basket_weights = optimize_basket_weights(
+                expected_returns=basket_returns,
+                covariance=basket_cov,
+                min_weight=0.0,
+                max_weight=1.0,
+                risk_aversion=basket_risk_aversion,
+                force_full_investment=True,
+            )
+            for i, idx in enumerate(selected_indices):
+                sleeve_weights[idx] = basket_weights[i]
+        else:
+            for index, weight in _dual_momentum_selected_weights(
+                selected=selected,
+                trailing_returns=trailing_returns,
+                trailing_volatility=trailing_volatility,
+                weighting=weighting,
+                softmax_temperature=softmax_temperature,
+            ).items():
+                sleeve_weights[index] = weight
+
+        sleeve_weights = _apply_max_single_weight(sleeve_weights, max_single_weight)
+        target_weights = sleeve_weights * risky_exposure
+
+        if target_vol is not None:
+            recent_returns_window = returns[:, max(0, returns.shape[1] - vol_window) :]
+            active = [i for i in range(len(symbols)) if target_weights[i] > 0]
+            if active:
+                portfolio_recent_returns = np.dot(
+                    target_weights[active],
+                    recent_returns_window[active],
+                )
+                portfolio_vol = float(
+                    np.std(portfolio_recent_returns, ddof=0)
+                ) * np.sqrt(TRADING_DAYS_PER_YEAR)
+                if portfolio_vol > 0 and portfolio_vol > target_vol:
+                    target_weights = target_weights * (target_vol / portfolio_vol)
+
+    defensive_exposure = max(0.0, 1.0 - float(target_weights.sum()))
+    _equal_defensive_weights(
+        target_weights,
+        defensive_indices,
+        defensive_exposure,
+        defensive_weighting,
+    )
+    return target_weights
+
+
 def compute_dual_momentum_weights(
     symbols: list[str],
     closes_by_symbol: dict[str, list[float]],
@@ -278,6 +412,59 @@ def compute_dual_momentum_weights(
         max_single_weight=max_single_weight,
         vol_window=vol_window,
         factor_top_k=factor_top_k,
+    )
+
+    return {s: float(target_weights[i]) for i, s in enumerate(symbols)}
+
+
+def compute_protective_momentum_weights(
+    symbols: list[str],
+    closes_by_symbol: dict[str, list[float]],
+    asset_classes: dict[str, str],
+    lookback_days: int,
+    top_k: int,
+    weighting: str = "equal",
+    softmax_temperature: float = 0.05,
+    absolute_threshold: float = 0.0,
+    basket_opt: str | None = None,
+    basket_risk_aversion: float = 1.0,
+    target_vol: float | None = None,
+    max_single_weight: float | None = None,
+    vol_window: int = 63,
+    breadth_min_risky: float = 0.0,
+    breadth_max_risky: float = 1.0,
+    defensive_weighting: str = "equal",
+) -> dict[str, float]:
+    aligned_closes = align_close_history(symbols, closes_by_symbol)
+    price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
+    if price_matrix.ndim != 2 or price_matrix.shape[1] < lookback_days + 1:
+        raise ValueError(
+            "Not enough price history to compute protective momentum weights."
+        )
+
+    returns = price_matrix[:, 1:] / price_matrix[:, :-1] - 1.0
+    trailing_returns = price_matrix[:, -1] / price_matrix[:, -(lookback_days + 1)] - 1.0
+    trailing_volatility = returns.std(axis=1, ddof=0)
+
+    target_weights = _protective_momentum_target_weights(
+        symbols=symbols,
+        asset_classes=asset_classes,
+        returns=returns,
+        trailing_returns=trailing_returns,
+        trailing_volatility=trailing_volatility,
+        lookback_days=lookback_days,
+        top_k=top_k,
+        weighting=weighting,
+        softmax_temperature=softmax_temperature,
+        absolute_threshold=absolute_threshold,
+        basket_opt=basket_opt,
+        basket_risk_aversion=basket_risk_aversion,
+        target_vol=target_vol,
+        max_single_weight=max_single_weight,
+        vol_window=vol_window,
+        breadth_min_risky=breadth_min_risky,
+        breadth_max_risky=breadth_max_risky,
+        defensive_weighting=defensive_weighting,
     )
 
     return {s: float(target_weights[i]) for i, s in enumerate(symbols)}
@@ -781,6 +968,105 @@ def run_factor_momentum_backtest(
     )
 
 
+def run_protective_momentum_backtest(
+    *,
+    symbols: list[str],
+    closes_by_symbol: dict[str, list[float]],
+    asset_classes: dict[str, str],
+    lookback_days: int,
+    rebalance_every: int,
+    top_k: int,
+    absolute_threshold: float,
+    weighting: str = "equal",
+    softmax_temperature: float = 0.05,
+    target_vol: float | None = None,
+    max_single_weight: float | None = None,
+    vol_window: int = 63,
+    basket_opt: str | None = None,
+    basket_risk_aversion: float = 1.0,
+    breadth_min_risky: float = 0.0,
+    breadth_max_risky: float = 1.0,
+    defensive_weighting: str = "equal",
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
+) -> BacktestResult:
+    aligned_closes = align_close_history(symbols, closes_by_symbol)
+    price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
+    if price_matrix.ndim != 2 or price_matrix.shape[1] < lookback_days + 1:
+        raise ValueError("Not enough price history to run the backtest.")
+
+    returns = price_matrix[:, 1:] / price_matrix[:, :-1] - 1.0
+    portfolio_value = 1.0
+    weights = np.zeros(len(symbols), dtype=float)
+    portfolio_returns: list[float] = []
+    daily_values: list[float] = [1.0]
+    turnovers: list[float] = []
+
+    rebalance_count = 0
+    peak_value = portfolio_value
+    max_drawdown = 0.0
+
+    for step in range(lookback_days, returns.shape[1]):
+        if (step - lookback_days) % rebalance_every == 0:
+            trailing_returns = (
+                price_matrix[:, step] / price_matrix[:, step - lookback_days] - 1.0
+            )
+            trailing_volatility = returns[:, step - lookback_days : step].std(
+                axis=1, ddof=0
+            )
+            target_weights = _protective_momentum_target_weights(
+                symbols=symbols,
+                asset_classes=asset_classes,
+                returns=returns[:, :step],
+                trailing_returns=trailing_returns,
+                trailing_volatility=trailing_volatility,
+                lookback_days=lookback_days,
+                top_k=top_k,
+                weighting=weighting,
+                softmax_temperature=softmax_temperature,
+                absolute_threshold=absolute_threshold,
+                basket_opt=basket_opt,
+                basket_risk_aversion=basket_risk_aversion,
+                target_vol=target_vol,
+                max_single_weight=max_single_weight,
+                vol_window=vol_window,
+                breadth_min_risky=breadth_min_risky,
+                breadth_max_risky=breadth_max_risky,
+                defensive_weighting=defensive_weighting,
+            )
+
+            previous_weights = weights
+            turnovers.append(float(np.abs(target_weights - previous_weights).sum()))
+            weights = target_weights
+            rebalance_count += 1
+
+        period_return = float(np.dot(weights, returns[:, step]))
+        portfolio_returns.append(period_return)
+        portfolio_value *= 1.0 + period_return
+        daily_values.append(portfolio_value)
+        peak_value = max(peak_value, portfolio_value)
+        max_drawdown = max(max_drawdown, 1.0 - portfolio_value / peak_value)
+
+    returns_array = np.array(portfolio_returns, dtype=float)
+    summary = summarize_return_series(
+        returns_array,
+        trading_days_per_year=trading_days_per_year,
+    )
+    average_turnover = float(np.mean(turnovers)) if turnovers else 0.0
+
+    return BacktestResult(
+        final_value=portfolio_value,
+        total_return=portfolio_value - 1.0,
+        annualized_return=summary.annualized_return,
+        annualized_volatility=summary.annualized_volatility,
+        max_drawdown=max_drawdown,
+        rebalance_count=rebalance_count,
+        average_turnover=average_turnover,
+        latest_weights=weights,
+        daily_values=tuple(daily_values),
+        sortino_ratio=summary.sortino_ratio,
+    )
+
+
 def _run_single_window(
     *,
     strategy: str,
@@ -799,6 +1085,9 @@ def _run_single_window(
     absolute_threshold: float,
     weighting: str,
     softmax_temperature: float,
+    breadth_min_risky: float = 0.0,
+    breadth_max_risky: float = 1.0,
+    defensive_weighting: str = "equal",
     trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
 ) -> dict[str, float | bool]:
     """Run a single rolling window backtest and compare against SPY."""
@@ -827,6 +1116,22 @@ def _run_single_window(
             absolute_threshold=absolute_threshold,
             weighting=weighting,
             softmax_temperature=softmax_temperature,
+            trading_days_per_year=trading_days_per_year,
+        )
+    elif strategy == "protective-momentum":
+        backtest = run_protective_momentum_backtest(
+            symbols=symbols,
+            closes_by_symbol=window_closes,
+            asset_classes=asset_classes,
+            lookback_days=lookback_days,
+            rebalance_every=rebalance_every,
+            top_k=top_k,
+            absolute_threshold=absolute_threshold,
+            weighting=weighting,
+            softmax_temperature=softmax_temperature,
+            breadth_min_risky=breadth_min_risky,
+            breadth_max_risky=breadth_max_risky,
+            defensive_weighting=defensive_weighting,
             trading_days_per_year=trading_days_per_year,
         )
     else:
@@ -890,6 +1195,9 @@ def rolling_window_comparison(
     weighting: str,
     softmax_temperature: float,
     factor_top_k: int = 1,
+    breadth_min_risky: float = 0.0,
+    breadth_max_risky: float = 1.0,
+    defensive_weighting: str = "equal",
     trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
 ) -> dict[str, float | int]:
     if window_days <= 0 or step_days <= 0:
@@ -937,6 +1245,9 @@ def rolling_window_comparison(
                     absolute_threshold=absolute_threshold,
                     weighting=weighting,
                     softmax_temperature=softmax_temperature,
+                    breadth_min_risky=breadth_min_risky,
+                    breadth_max_risky=breadth_max_risky,
+                    defensive_weighting=defensive_weighting,
                     trading_days_per_year=trading_days_per_year,
                 )
                 for wc in window_args
@@ -963,6 +1274,9 @@ def rolling_window_comparison(
                     absolute_threshold=absolute_threshold,
                     weighting=weighting,
                     softmax_temperature=softmax_temperature,
+                    breadth_min_risky=breadth_min_risky,
+                    breadth_max_risky=breadth_max_risky,
+                    defensive_weighting=defensive_weighting,
                     trading_days_per_year=trading_days_per_year,
                 )
             )

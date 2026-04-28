@@ -6,6 +6,7 @@ from pathlib import Path
 
 from utils.fetch_tickers import (
     SP500_HISTORICAL_COMPONENTS_URL,
+    _format_ticker_dict,
     fetch_historical_sp500_tickers,
 )
 
@@ -30,7 +31,15 @@ def main() -> None:
         action="store_true",
         help="Refresh the cached historical components CSV.",
     )
+    parser.add_argument(
+        "--asset-class-workers",
+        type=int,
+        default=3,
+        help="Concurrent Yahoo metadata fetches for canonical sector labels.",
+    )
     args = parser.parse_args()
+    if args.asset_class_workers < 1:
+        raise SystemExit("--asset-class-workers must be positive.")
 
     symbols = fetch_historical_sp500_tickers(
         args.date,
@@ -45,12 +54,21 @@ def main() -> None:
         "index_code": "sp500",
         "snapshot": args.date,
         "symbols": symbols,
-        "asset_classes": {
-            symbol: f"{symbol} (sp500:{args.date})" for symbol in symbols
-        },
+        "asset_classes": _canonical_asset_classes(
+            symbols,
+            max_workers=args.asset_class_workers,
+        ),
     }
     output.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
     print(f"{output}: {len(symbols)} symbols")
+
+
+def _canonical_asset_classes(symbols: list[str], *, max_workers: int) -> dict[str, str]:
+    formatted = _format_ticker_dict(symbols, max_workers=max_workers)
+    asset_classes = formatted.get("asset_classes", {})
+    if not isinstance(asset_classes, dict):
+        raise ValueError("Canonical asset class formatting returned invalid payload.")
+    return {str(symbol): str(asset_classes[symbol]) for symbol in symbols}
 
 
 if __name__ == "__main__":

@@ -227,7 +227,8 @@ def rolling_window_comparison(
             else 0.0
         )
         benchmark_sharpe = (
-            benchmark_summary.annualized_return / benchmark_summary.annualized_volatility
+            benchmark_summary.annualized_return
+            / benchmark_summary.annualized_volatility
             if benchmark_summary.annualized_volatility > 0
             else 0.0
         )
@@ -481,7 +482,9 @@ def run_cvxportfolio_backtest(
             "normalized_final_value": round(normalized_final_value, 6),
             "total_return": round(realized_summary.total_return, 6),
             "value_ratio_total_return": round(normalized_final_value - 1.0, 6),
-            "realized_return_series_final_value": round(realized_summary.final_value, 6),
+            "realized_return_series_final_value": round(
+                realized_summary.final_value, 6
+            ),
             "annualized_return": round(float(realized_summary.annualized_return), 6),
             "annualized_volatility": round(
                 float(realized_summary.annualized_volatility), 6
@@ -699,13 +702,6 @@ def run_cvxportfolio_sweep(
     refresh_cache: bool = False,
     offline: bool = False,
 ) -> dict:
-    try:
-        import cvxportfolio as cvx
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError(
-            "cvxportfolio is required for this path. Run `uv sync` after adding the dependency."
-        ) from exc
-
     model, _closes_by_symbol, returns_frame, prices_frame, warmup_days = (
         prepare_cvxportfolio_context(
             model_path=model_path,

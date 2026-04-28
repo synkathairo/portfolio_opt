@@ -46,7 +46,7 @@ BENCHMARKS = [
     ("SPY", "SPY (S&P 500)"),
     ("QQQ", "QQQ (Nasdaq 100)"),
     ("IWM", "IWM (Russell 2000)"),
-    ("TLT", "TLT (20+Yr Treasury)")
+    ("TLT", "TLT (20+Yr Treasury)"),
 ]
 # BENCHMARKS = [
 #     # ("^HSI", "Hang Seng Index"),
@@ -124,7 +124,7 @@ mv_data = run_backtest(
         # , "--offline"
         # "--use-cache", "--refresh-cache"
         # , "--rebalance-threshold 0.1"
-    ]
+    ],
 )
 
 # 2. Run Dual Momentum Backtest (Top-5)
@@ -147,7 +147,7 @@ dm_data = run_backtest(
         "5",
         "--use-cache",
         # , "--offline"
-    ]
+    ],
 )
 
 # 3. Run Dual Momentum Backtest (Top-2)
@@ -170,7 +170,7 @@ dm_data2 = run_backtest(
         "2",
         "--use-cache",
         # , "--offline"
-    ]
+    ],
 )
 
 # Run Dual Momentum Backtest (Top-3, rebalance daily), trail stop 0.15
@@ -195,7 +195,7 @@ dm_data2b = run_backtest(
         "0.15",
         "--use-cache",
         # , "--offline"
-    ]
+    ],
 )
 
 # Run Dual Momentum Backtest (Top-3, rebalance daily)
@@ -218,7 +218,7 @@ dm_data2c = run_backtest(
         "3",
         "--use-cache",
         # , "--offline"
-    ]
+    ],
 )
 
 # dm_data2cb = run_backtest(
@@ -267,7 +267,7 @@ dm_data3 = run_backtest(
         "2",
         "--use-cache",
         # , "--offline"
-    ]
+    ],
 )
 
 # Run Dual Momentum Backtest (Top-2, rebalance daily), trail stop 0.15
@@ -292,7 +292,7 @@ dm_data3a = run_backtest(
         "0.15",
         "--use-cache",
         # , "--offline"
-    ]
+    ],
 )
 
 # 4. Run Dual Momentum Backtest (Top-1, rebalance daily)
@@ -315,7 +315,7 @@ dm_data4 = run_backtest(
         "1",
         "--use-cache",
         # , "--offline"
-    ]
+    ],
 )
 
 dm_data4b = run_backtest(
@@ -339,7 +339,7 @@ dm_data4b = run_backtest(
         "0.15",
         "--use-cache",
         # , "--offline"
-    ]
+    ],
 )
 
 # # Limit volatility
@@ -367,7 +367,7 @@ dm_data_limit_volatility = run_backtest(
         f"{LIMIT_VOL}",
         "--vol-window",
         "252",
-    ]
+    ],
 )
 
 strategy_results = [
@@ -390,8 +390,7 @@ if not all(strategy_results):
 
 # 3. Extract Daily Values
 strategy_curves = [
-    (result["label"], result["backtest"]["daily_values"])
-    for result in strategy_results
+    (result["label"], result["backtest"]["daily_values"]) for result in strategy_results
 ]
 
 # 4. Fetch Benchmarks
@@ -428,9 +427,7 @@ def normalize_tail(curve):
     return [v / tail[0] for v in tail]
 
 
-strategy_norms = [
-    (label, normalize_tail(curve)) for label, curve in strategy_curves
-]
+strategy_norms = [(label, normalize_tail(curve)) for label, curve in strategy_curves]
 benchmark_norms = {
     label: [v / curve.iloc[-target_len] for v in curve.iloc[-target_len:].tolist()]
     for label, curve in benchmark_curves.items()

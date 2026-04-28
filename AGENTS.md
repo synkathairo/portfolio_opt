@@ -64,7 +64,29 @@ Static type checking:
 uvx ty check
 ```
 
-**Before committing any code changes, always run `uvx ty check` and verify the plotter works by piping a test backtest into it.**
+Style and lint checks:
+
+```bash
+uvx ruff check
+uvx ruff format --check
+```
+
+To auto-fix style issues during development:
+
+```bash
+uvx ruff check --fix
+uvx ruff format
+```
+
+**Before committing code changes, always run `uvx ty check`, `uvx ruff check`, and `uvx ruff format --check`.**
+
+Also verify the plotter by piping a test backtest into it when changes touch:
+
+- `src/portfolio_opt/cli.py`
+- `src/portfolio_opt/backtest.py`
+- `src/portfolio_opt/plot.py`
+- backtest JSON output shape
+- plotting, benchmark, or data-source behavior
 
 If tests are added later, prefer `pytest`.
 The current lightweight test suite uses `pytest` under `tests/` for deterministic helper behavior and cache setup.

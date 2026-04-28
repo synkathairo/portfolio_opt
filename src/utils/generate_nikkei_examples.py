@@ -7,7 +7,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from portfolio_opt.yfinance_data import _fetch_single_symbol
-from utils.fetch_tickers import NikkeiConstituent, fetch_nikkei225_constituents
+from utils.fetch_tickers import (
+    NikkeiConstituent,
+    _format_ticker_dict,
+    fetch_nikkei225_constituents,
+)
 
 
 def main() -> None:
@@ -51,6 +55,12 @@ def main() -> None:
         default=0.02,
         help="Seconds to wait between yfinance submissions.",
     )
+    parser.add_argument(
+        "--asset-class-workers",
+        type=int,
+        default=3,
+        help="Concurrent Yahoo metadata fetches for canonical sector labels.",
+    )
     args = parser.parse_args()
     if args.min_history_prices < 1:
         raise SystemExit("--min-history-prices must be positive.")
@@ -58,6 +68,8 @@ def main() -> None:
         raise SystemExit("--max-workers must be positive.")
     if args.symbol_delay < 0:
         raise SystemExit("--symbol-delay must be non-negative.")
+    if args.asset_class_workers < 1:
+        raise SystemExit("--asset-class-workers must be positive.")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     constituents = fetch_nikkei225_constituents(
@@ -69,6 +81,7 @@ def main() -> None:
         constituents=constituents,
         backtest_valid=False,
         min_history_prices=None,
+        asset_class_workers=args.asset_class_workers,
     )
 
     if args.skip_backtest_valid:
@@ -91,6 +104,7 @@ def main() -> None:
         constituents=valid_constituents,
         backtest_valid=True,
         min_history_prices=args.min_history_prices,
+        asset_class_workers=args.asset_class_workers,
     )
     print(
         f"nikkei225: current={len(constituents)} "
@@ -145,20 +159,30 @@ def _write_universe(
     constituents: list[NikkeiConstituent],
     backtest_valid: bool,
     min_history_prices: int | None,
+    asset_class_workers: int,
 ) -> None:
+    symbols = [constituent.symbol for constituent in constituents]
     payload = {
         "source": "nikkei/indexes.nikkei.co.jp",
         "index_code": "nikkei225",
         "snapshot": "current",
         "filtered_for_backtest_history": backtest_valid,
         "min_history_prices": min_history_prices,
-        "symbols": [constituent.symbol for constituent in constituents],
-        "asset_classes": {
-            constituent.symbol: f"{constituent.name} (nikkei225:{constituent.sector})"
-            for constituent in constituents
-        },
+        "symbols": symbols,
+        "asset_classes": _canonical_asset_classes(
+            symbols,
+            max_workers=asset_class_workers,
+        ),
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+
+
+def _canonical_asset_classes(symbols: list[str], *, max_workers: int) -> dict[str, str]:
+    formatted = _format_ticker_dict(symbols, max_workers=max_workers)
+    asset_classes = formatted.get("asset_classes", {})
+    if not isinstance(asset_classes, dict):
+        raise ValueError("Canonical asset class formatting returned invalid payload.")
+    return {str(symbol): str(asset_classes[symbol]) for symbol in symbols}
 
 
 if __name__ == "__main__":

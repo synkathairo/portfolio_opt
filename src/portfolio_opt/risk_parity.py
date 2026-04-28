@@ -59,8 +59,7 @@ def risk_parity_weights(
 
     unscaled = cp.Variable(n, pos=True)
     objective = cp.Minimize(
-        0.5 * cp.quad_form(unscaled, covariance)
-        - (1.0 / n) * cp.sum(cp.log(unscaled))
+        0.5 * cp.quad_form(unscaled, covariance) - (1.0 / n) * cp.sum(cp.log(unscaled))
     )
     problem = cp.Problem(objective)
     problem.solve(solver=cp.CLARABEL)

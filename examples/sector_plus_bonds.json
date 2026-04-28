@@ -42,7 +42,7 @@
     "TIP": "bond_inflation",
     "CBON": "bond_china",
     "GLD": "commodity_gold",
-    "VNQ": "real_estate",
+    "VNQ": "sector_real_estate",
     "DBC": "commodity_broad"
   },
   "class_min_weights": {},
@@ -65,6 +65,6 @@
     "bond_china": 0.15,
     "commodity_gold": 0.20,
     "commodity_broad": 0.15,
-    "real_estate": 0.15
+    "sector_real_estate": 0.15
   }
 }

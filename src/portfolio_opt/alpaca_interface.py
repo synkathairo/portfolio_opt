@@ -13,11 +13,9 @@ from uuid import UUID
 
 from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical.stock import StockHistoricalDataClient
-from alpaca.data.models.bars import Bar, BarSet
-from alpaca.data.models.trades import TradeSet
+from alpaca.data.models.bars import BarSet
 from alpaca.data.requests import (
     StockBarsRequest,
-    StockLatestQuoteRequest,
     StockLatestTradeRequest,
 )
 from alpaca.data.timeframe import TimeFrame

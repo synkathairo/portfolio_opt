@@ -41,7 +41,7 @@
     "GLD": "commodity_gold",
     "SLV": "commodity_silver",
     "DBC": "commodity_broad",
-    "VNQ": "real_estate"
+    "VNQ": "sector_real_estate"
   },
   "class_min_weights": {
     "equity_us_large": 0.1,
@@ -68,6 +68,6 @@
     "commodity_gold": 0.2,
     "commodity_silver": 0.2,
     "commodity_broad": 0.15,
-    "real_estate": 0.15
+    "sector_real_estate": 0.15
   }
 }

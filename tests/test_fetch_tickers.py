@@ -44,10 +44,71 @@ def test_ticker_info_cache_reused_for_first_trade_date(monkeypatch) -> None:
 
     assert fetch_tickers._get_ticker_info("PNW") == (
         "PNW",
-        "PNW Utility (Utilities)",
+        "sector_utilities",
     )
     assert fetch_tickers.get_ticker_firstTradeDate("PNW") == datetime(2020, 1, 2)
     assert calls == ["PNW"]
+    assert cache["payload"] == {
+        "shortName": "PNW Utility",
+        "sector": "Utilities",
+        "asset_class": "sector_utilities",
+        "firstTradeDateMilliseconds": timestamp_ms,
+    }
+
+
+def test_ticker_info_normalizes_yahoo_real_estate_sector(monkeypatch) -> None:
+    class DummyPath:
+        def exists(self) -> bool:
+            return False
+
+    class FakeTicker:
+        def __init__(self, symbol: str) -> None:
+            self.symbol = symbol
+
+        @property
+        def info(self) -> dict[str, str]:
+            return {"shortName": "Alexandria", "sector": "Real Estate"}
+
+    monkeypatch.setattr(fetch_tickers, "_TICKER_INFO_MEMORY_CACHE", {})
+    monkeypatch.setattr(
+        fetch_tickers, "cache_path", lambda _name, _payload: DummyPath()
+    )
+    monkeypatch.setattr(fetch_tickers, "write_cache", lambda _path, _payload: None)
+    monkeypatch.setattr(fetch_tickers.yf, "Ticker", FakeTicker)
+
+    assert fetch_tickers._get_ticker_info("ARE") == ("ARE", "sector_real_estate")
+
+
+def test_ticker_info_uses_cached_asset_class_without_network(monkeypatch) -> None:
+    class DummyPath:
+        def exists(self) -> bool:
+            return True
+
+    timestamp_ms = int(datetime(2020, 1, 2, 12).timestamp() * 1000)
+    monkeypatch.setattr(fetch_tickers, "_TICKER_INFO_MEMORY_CACHE", {})
+    monkeypatch.setattr(
+        fetch_tickers, "cache_path", lambda _name, _payload: DummyPath()
+    )
+    monkeypatch.setattr(
+        fetch_tickers,
+        "read_cache",
+        lambda _path: {
+            "shortName": "Cached Name",
+            "sector": "Technology",
+            "asset_class": "sector_technology",
+            "firstTradeDateMilliseconds": timestamp_ms,
+        },
+    )
+    monkeypatch.setattr(
+        fetch_tickers.yf,
+        "Ticker",
+        lambda _symbol: (_ for _ in ()).throw(
+            AssertionError("network should not be used on cache hit")
+        ),
+    )
+
+    assert fetch_tickers._get_ticker_info("AAPL") == ("AAPL", "sector_technology")
+    assert fetch_tickers.get_ticker_firstTradeDate("AAPL") == datetime(2020, 1, 2)
 
 
 def test_fetch_yfiua_index_constituents_uses_monthly_json(monkeypatch) -> None:
@@ -424,7 +485,7 @@ def test_fetch_ticker_dict_supports_opt_in_ftse100(monkeypatch) -> None:
     monkeypatch.setattr(
         fetch_tickers,
         "_format_ticker_dict",
-        lambda tickers: {"symbols": tickers, "asset_classes": {}},
+        lambda tickers, **_kwargs: {"symbols": tickers, "asset_classes": {}},
     )
 
     assert fetch_tickers.fetch_ticker_dict(ticker_basket=["ftse100"]) == {
@@ -439,7 +500,7 @@ def test_fetch_ticker_dict_supports_nikkei225(monkeypatch) -> None:
     monkeypatch.setattr(
         fetch_tickers,
         "_format_ticker_dict",
-        lambda tickers: {"symbols": tickers, "asset_classes": {}},
+        lambda tickers, **_kwargs: {"symbols": tickers, "asset_classes": {}},
     )
 
     assert fetch_tickers.fetch_ticker_dict(ticker_basket=["nikkei225"]) == {
@@ -460,7 +521,7 @@ def test_fetch_ticker_dict_supports_yfiua_prefixed_builtin(monkeypatch) -> None:
     monkeypatch.setattr(
         fetch_tickers,
         "_format_ticker_dict",
-        lambda tickers: {"symbols": tickers, "asset_classes": {}},
+        lambda tickers, **_kwargs: {"symbols": tickers, "asset_classes": {}},
     )
 
     assert fetch_tickers.fetch_ticker_dict(ticker_basket=["yfiua:nasdaq100"]) == {
@@ -482,12 +543,53 @@ def test_fetch_ticker_dict_preserves_builtin_nasdaq_provider(monkeypatch) -> Non
     monkeypatch.setattr(
         fetch_tickers,
         "_format_ticker_dict",
-        lambda tickers: {"symbols": tickers, "asset_classes": {}},
+        lambda tickers, **_kwargs: {"symbols": tickers, "asset_classes": {}},
     )
 
     assert fetch_tickers.fetch_ticker_dict(ticker_basket=["nasdaq100"]) == {
         "symbols": ["NVDA"],
         "asset_classes": {},
+    }
+
+
+def test_fetch_ticker_dict_merges_static_basket_asset_classes_without_fetch(
+    monkeypatch,
+) -> None:
+    captured: dict[str, list[str]] = {}
+
+    def fake_format(tickers):
+        captured["tickers"] = list(tickers)
+        return {
+            "symbols": tickers,
+            "asset_classes": {symbol: "sector_unknown" for symbol in tickers},
+        }
+
+    monkeypatch.setattr(fetch_tickers, "_format_ticker_dict", fake_format)
+
+    result = fetch_tickers.fetch_ticker_dict(
+        ticker_basket=["indexes", "cashlike", "commodities", "realestate"]
+    )
+
+    assert result["asset_classes"]["VNQ"] == "sector_real_estate"
+    assert result["asset_classes"]["SGOV"] == "cash_like"
+    assert result["asset_classes"]["TLT"] == "bond_long"
+    assert result["asset_classes"]["GLD"] == "commodity_gold"
+    assert result["asset_classes"]["SPY"] == "equity_us_large"
+    assert captured["tickers"] == []
+
+
+def test_format_ticker_dict_normalizes_yahoo_real_estate_sector(monkeypatch) -> None:
+    monkeypatch.setattr(
+        fetch_tickers,
+        "_get_ticker_info",
+        lambda ticker: (ticker, "sector_real_estate"),
+    )
+
+    result = fetch_tickers._format_ticker_dict(["ARE"])
+
+    assert result == {
+        "symbols": ["ARE"],
+        "asset_classes": {"ARE": "sector_real_estate"},
     }
 
 

@@ -14,30 +14,26 @@ Usage:
 from __future__ import annotations
 
 import json
-import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlencode
 
 from .runtime import configure_local_cache_dirs
-
-configure_local_cache_dirs()
-
-import matplotlib
-import matplotlib.dates as mdates
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import yfinance as yf
 
 from .alpaca_interface import AlpacaClient
 from .config import AlpacaConfig
 
-matplotlib.use("Agg")
-
 
 def _plot_from_result(result: dict, save_path: str, benchmark: str = "SPY") -> None:
+    configure_local_cache_dirs()
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    import yfinance as yf
+
     daily_values = result.get("backtest", {}).get("daily_values", [])
     if not daily_values:
         print("No daily_values found in result.", file=sys.stderr)
@@ -101,6 +97,15 @@ def _plot_from_alpaca_history(
     timeframe: str = "1D",
 ) -> None:
     """Fetch portfolio history from Alpaca and plot against benchmark."""
+    configure_local_cache_dirs()
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    import yfinance as yf
+
     alpaca = AlpacaClient(AlpacaConfig.from_env())
     payload = alpaca.get_portfolio_history(period=period, timeframe=timeframe)
 

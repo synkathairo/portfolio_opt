@@ -4,10 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
-from portfolio_opt.runtime import configure_local_cache_dirs
 from portfolio_opt.backtest import TRADING_DAYS_PER_YEAR
-
-configure_local_cache_dirs()
+from portfolio_opt.runtime import configure_local_cache_dirs
 
 from .backtest import (
     format_backtest,
@@ -15,6 +13,8 @@ from .backtest import (
     run_cvxportfolio_sweep,
     run_framework_comparison,
 )
+
+configure_local_cache_dirs()
 
 
 def parse_args() -> argparse.Namespace:

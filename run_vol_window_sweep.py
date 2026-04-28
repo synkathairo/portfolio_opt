@@ -24,9 +24,7 @@ REFRESH_CACHE = False
 TARGET_VOLS = [0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
 VOL_WINDOWS = [21, 42, 63, 84, 126, 252]
 
-FIGURE_NAME = (
-    f"vol_window_sweep_{TITLE_NAME_VAR}_{BACKTEST_DAYS}_{LOOKBACK}_{today}"
-)
+FIGURE_NAME = f"vol_window_sweep_{TITLE_NAME_VAR}_{BACKTEST_DAYS}_{LOOKBACK}_{today}"
 CSV_NAME = f"{FIGURE_NAME}.csv"
 
 
@@ -157,8 +155,12 @@ def main() -> None:
     df_turn = df.pivot(
         index="Vol Window", columns="Target Vol", values="Average Turnover"
     )
-    df_sharpe = df.pivot(index="Vol Window", columns="Target Vol", values="Sharpe Ratio")
-    df_calmar = df.pivot(index="Vol Window", columns="Target Vol", values="Calmar Ratio")
+    df_sharpe = df.pivot(
+        index="Vol Window", columns="Target Vol", values="Sharpe Ratio"
+    )
+    df_calmar = df.pivot(
+        index="Vol Window", columns="Target Vol", values="Calmar Ratio"
+    )
 
     fig, axes = plt.subplots(3, 2, figsize=(14, 16))
     fig.suptitle(

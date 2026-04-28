@@ -263,7 +263,9 @@ def project_weights(
     _require_optimal(problem, "Projection")
 
     if weights.value is None:
-        raise RuntimeError(f"Projection failed with status {problem.status} and no weights.")
+        raise RuntimeError(
+            f"Projection failed with status {problem.status} and no weights."
+        )
 
     return _finalize_solution(
         np.array(weights.value, dtype=float),

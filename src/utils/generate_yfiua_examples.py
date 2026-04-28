@@ -18,7 +18,7 @@ from portfolio_opt.yfinance_data import (
 )
 from utils.fetch_tickers import (
     YFIUA_INDEX_STARTS,
-    fetch_yfiua_index_constituents,
+    _format_ticker_dict,
     fetch_yfiua_index_constituents_with_names,
 )
 
@@ -79,6 +79,12 @@ def main() -> None:
             "By default, existing current-valid files are reused to avoid rate limits."
         ),
     )
+    parser.add_argument(
+        "--asset-class-workers",
+        type=int,
+        default=3,
+        help="Concurrent Yahoo metadata fetches for canonical sector labels.",
+    )
     args = parser.parse_args()
     if (args.year is None) != (args.month is None):
         raise SystemExit("--year and --month must be provided together.")
@@ -130,7 +136,10 @@ def main() -> None:
             args.output_dir / f"yfiua_{code}_{year:04d}{month:02d}_universe.json",
             code=code,
             symbols=historical_symbols,
-            names=historical_names,
+            asset_classes=_canonical_asset_classes(
+                historical_symbols,
+                max_workers=args.asset_class_workers,
+            ),
             snapshot=f"{year:04d}-{month:02d}",
             filtered_for_current_yfinance_data=False,
         )
@@ -138,7 +147,10 @@ def main() -> None:
             current_valid_path,
             code=code,
             symbols=current_valid_symbols,
-            names=historical_names,
+            asset_classes=_canonical_asset_classes(
+                current_valid_symbols,
+                max_workers=args.asset_class_workers,
+            ),
             snapshot=f"{year:04d}-{month:02d}",
             filtered_for_current_yfinance_data=True,
         )
@@ -146,7 +158,10 @@ def main() -> None:
             args.output_dir / f"yfiua_{code}_current_universe.json",
             code=code,
             symbols=current_symbols,
-            names=current_names,
+            asset_classes=_canonical_asset_classes(
+                current_symbols,
+                max_workers=args.asset_class_workers,
+            ),
             snapshot="current",
             filtered_for_current_yfinance_data=False,
         )
@@ -263,7 +278,7 @@ def _write_universe(
     *,
     code: str,
     symbols: list[str],
-    names: dict[str, str],
+    asset_classes: dict[str, str],
     snapshot: str,
     filtered_for_current_yfinance_data: bool,
 ) -> None:
@@ -273,11 +288,19 @@ def _write_universe(
         "snapshot": snapshot,
         "filtered_for_current_yfinance_data": filtered_for_current_yfinance_data,
         "symbols": symbols,
-        "asset_classes": {
-            symbol: f"{names.get(symbol, symbol)} (yfiua:{code})" for symbol in symbols
-        },
+        "asset_classes": {symbol: asset_classes[symbol] for symbol in symbols},
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+
+
+def _canonical_asset_classes(symbols: list[str], *, max_workers: int) -> dict[str, str]:
+    if max_workers < 1:
+        raise SystemExit("--asset-class-workers must be positive.")
+    formatted = _format_ticker_dict(symbols, max_workers=max_workers)
+    asset_classes = formatted.get("asset_classes", {})
+    if not isinstance(asset_classes, dict):
+        raise ValueError("Canonical asset class formatting returned invalid payload.")
+    return {str(symbol): str(asset_classes[symbol]) for symbol in symbols}
 
 
 if __name__ == "__main__":

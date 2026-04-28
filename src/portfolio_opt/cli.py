@@ -14,18 +14,19 @@ from typing import Any, cast
 
 import exchange_calendars as xcals
 import numpy as np
-import pandas as pd
 
 from .alpaca_interface import AlpacaClient, format_order_plans
 from .backtest import (
     TRADING_DAYS_PER_YEAR,
     compute_dual_momentum_weights,
     compute_factor_momentum_weights,
+    compute_protective_momentum_weights,
     rolling_window_comparison,
     run_backtest,
     run_dual_momentum_backtest,
     run_factor_momentum_backtest,
     run_fixed_weight_benchmark,
+    run_protective_momentum_backtest,
 )
 from .config import AlpacaConfig, OptimizationConfig
 from .csv_data import (
@@ -417,7 +418,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--strategy",
-        choices=("mean-variance", "dual-momentum", "factor-momentum"),
+        choices=(
+            "mean-variance",
+            "dual-momentum",
+            "factor-momentum",
+            "protective-momentum",
+        ),
         default="mean-variance",
         help="Strategy for live or backtest rebalancing. Momentum strategies use live prices when --estimate-from-history is set.",
     )
@@ -492,6 +498,24 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=1.0,
         help="Risk aversion for basket mean-variance optimization.",
+    )
+    parser.add_argument(
+        "--breadth-min-risky",
+        type=float,
+        default=0.0,
+        help="Minimum total risky exposure for protective momentum.",
+    )
+    parser.add_argument(
+        "--breadth-max-risky",
+        type=float,
+        default=1.0,
+        help="Maximum total risky exposure for protective momentum.",
+    )
+    parser.add_argument(
+        "--defensive-weighting",
+        choices=("equal",),
+        default="equal",
+        help="How protective momentum allocates capital not assigned to risky assets.",
     )
     parser.add_argument(
         "--data-source",
@@ -632,6 +656,9 @@ def main() -> None:
     stockanalysis_start = getattr(args, "stockanalysis_start", "1980-01-01")
     stockanalysis_end = getattr(args, "stockanalysis_end", None)
     factor_top_k = getattr(args, "factor_top_k", 1)
+    breadth_min_risky = float(getattr(args, "breadth_min_risky", 0.0))
+    breadth_max_risky = float(getattr(args, "breadth_max_risky", 1.0))
+    defensive_weighting = str(getattr(args, "defensive_weighting", "equal"))
     dynamic_universe_cache_dir = getattr(
         args,
         "dynamic_universe_cache_dir",
@@ -651,6 +678,14 @@ def main() -> None:
         raise ValueError("--trailing-stop must be greater than 0.")
     if factor_top_k <= 0:
         raise ValueError("--factor-top-k must be greater than 0.")
+    if not 0.0 <= breadth_min_risky <= 1.0:
+        raise ValueError("--breadth-min-risky must be between 0 and 1.")
+    if not 0.0 <= breadth_max_risky <= 1.0:
+        raise ValueError("--breadth-max-risky must be between 0 and 1.")
+    if breadth_min_risky > breadth_max_risky:
+        raise ValueError("--breadth-min-risky cannot exceed --breadth-max-risky.")
+    if defensive_weighting != "equal":
+        raise ValueError("--defensive-weighting currently supports only 'equal'.")
     if yfinance_max_workers < 1:
         raise ValueError("--yfinance-max-workers must be at least 1.")
     if yfinance_retry_delay < 0:
@@ -841,7 +876,11 @@ def main() -> None:
             backtest_days=args.backtest_days,
         )
         if args.sweep:
-            if args.strategy in {"dual-momentum", "factor-momentum"}:
+            if args.strategy in {
+                "dual-momentum",
+                "factor-momentum",
+                "protective-momentum",
+            }:
                 raise ValueError(
                     "Sweep mode is only implemented for the mean-variance path."
                 )
@@ -993,6 +1032,27 @@ def main() -> None:
                 basket_risk_aversion=args.basket_risk_aversion,
                 trading_days_per_year=trading_days_per_year,
             )
+        elif args.strategy == "protective-momentum":
+            backtest = run_protective_momentum_backtest(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                asset_classes=model.asset_classes,
+                lookback_days=args.lookback_days,
+                rebalance_every=args.rebalance_every,
+                top_k=args.top_k,
+                absolute_threshold=args.absolute_momentum_threshold,
+                weighting=args.dual_momentum_weighting,
+                softmax_temperature=args.softmax_temperature,
+                target_vol=args.target_vol,
+                max_single_weight=args.max_single_weight,
+                vol_window=args.vol_window,
+                basket_opt=args.basket_opt,
+                basket_risk_aversion=args.basket_risk_aversion,
+                breadth_min_risky=breadth_min_risky,
+                breadth_max_risky=breadth_max_risky,
+                defensive_weighting=defensive_weighting,
+                trading_days_per_year=trading_days_per_year,
+            )
         else:
             backtest = run_backtest(
                 symbols=model.symbols,
@@ -1032,6 +1092,9 @@ def main() -> None:
                 absolute_threshold=args.absolute_momentum_threshold,
                 weighting=args.dual_momentum_weighting,
                 softmax_temperature=args.softmax_temperature,
+                breadth_min_risky=breadth_min_risky,
+                breadth_max_risky=breadth_max_risky,
+                defensive_weighting=defensive_weighting,
                 trading_days_per_year=trading_days_per_year,
             )
         benchmark_results = {
@@ -1088,23 +1151,41 @@ def main() -> None:
                 "strategy": args.strategy,
                 "dual_momentum_weighting": (
                     args.dual_momentum_weighting
-                    if args.strategy in {"dual-momentum", "factor-momentum"}
+                    if args.strategy
+                    in {"dual-momentum", "factor-momentum", "protective-momentum"}
                     else None
                 ),
                 "factor_top_k": (
                     factor_top_k if args.strategy == "factor-momentum" else None
                 ),
+                "breadth_min_risky": (
+                    breadth_min_risky
+                    if args.strategy == "protective-momentum"
+                    else None
+                ),
+                "breadth_max_risky": (
+                    breadth_max_risky
+                    if args.strategy == "protective-momentum"
+                    else None
+                ),
+                "defensive_weighting": (
+                    defensive_weighting
+                    if args.strategy == "protective-momentum"
+                    else None
+                ),
                 "target_vol": args.target_vol,
                 "vol_window": (
                     args.vol_window
-                    if args.strategy in {"dual-momentum", "factor-momentum"}
+                    if args.strategy
+                    in {"dual-momentum", "factor-momentum", "protective-momentum"}
                     else None
                 ),
                 "max_single_weight": args.max_single_weight,
                 "basket_opt": args.basket_opt,
                 "basket_risk_aversion": (
                     args.basket_risk_aversion
-                    if args.strategy in {"dual-momentum", "factor-momentum"}
+                    if args.strategy
+                    in {"dual-momentum", "factor-momentum", "protective-momentum"}
                     and args.basket_opt
                     else None
                 ),
@@ -1160,7 +1241,11 @@ def main() -> None:
 
     if args.estimate_from_history:
         history_days = args.lookback_days
-        if args.strategy in {"dual-momentum", "factor-momentum"}:
+        if args.strategy in {
+            "dual-momentum",
+            "factor-momentum",
+            "protective-momentum",
+        }:
             history_days = max(history_days, args.lookback_days + 1)
             if args.target_vol is not None:
                 history_days = max(history_days, args.vol_window + 1)
@@ -1264,6 +1349,38 @@ def main() -> None:
                 "weighting": args.dual_momentum_weighting,
                 "vol_window": args.vol_window,
             }
+        elif args.strategy == "protective-momentum":
+            pm_weights = compute_protective_momentum_weights(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                asset_classes=model.asset_classes,
+                lookback_days=args.lookback_days,
+                top_k=args.top_k,
+                weighting=args.dual_momentum_weighting,
+                softmax_temperature=args.softmax_temperature,
+                absolute_threshold=args.absolute_momentum_threshold,
+                basket_opt=args.basket_opt,
+                basket_risk_aversion=args.basket_risk_aversion,
+                target_vol=args.target_vol,
+                max_single_weight=args.max_single_weight,
+                vol_window=args.vol_window,
+                breadth_min_risky=breadth_min_risky,
+                breadth_max_risky=breadth_max_risky,
+                defensive_weighting=defensive_weighting,
+            )
+            target_weights = np.array(
+                [pm_weights[s] for s in model.symbols], dtype=float
+            )
+            estimation_metadata = {
+                "method": "protective_momentum",
+                "lookback_days": args.lookback_days,
+                "top_k": args.top_k,
+                "weighting": args.dual_momentum_weighting,
+                "breadth_min_risky": breadth_min_risky,
+                "breadth_max_risky": breadth_max_risky,
+                "defensive_weighting": defensive_weighting,
+                "vol_window": args.vol_window,
+            }
         elif args.return_model == "momentum":
             estimated = estimate_inputs_from_momentum(
                 symbols=model.symbols,
@@ -1342,7 +1459,7 @@ def main() -> None:
         estimation_metadata = {"method": "model_file"}
 
     if (
-        args.strategy not in {"dual-momentum", "factor-momentum"}
+        args.strategy not in {"dual-momentum", "factor-momentum", "protective-momentum"}
         and target_weights is None
     ):
         target_weights = optimize_weights(
@@ -1471,7 +1588,8 @@ def main() -> None:
                 symbol: round(float(value), 6)
                 for symbol, value in zip(model.symbols, expected_returns, strict=True)
             }
-            if args.strategy != "dual-momentum" and args.strategy != "factor-momentum"
+            if args.strategy
+            not in {"dual-momentum", "factor-momentum", "protective-momentum"}
             else None
         ),
         "cash": {

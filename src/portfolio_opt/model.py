@@ -52,8 +52,12 @@ def load_model_inputs(path: str | Path) -> ModelInputs:
         str(symbol): str(asset_class)
         for symbol, asset_class in asset_classes_raw.items()
     }
-    class_min_weights = _float_mapping(raw.get("class_min_weights", {}), "class_min_weights")
-    class_max_weights = _float_mapping(raw.get("class_max_weights", {}), "class_max_weights")
+    class_min_weights = _float_mapping(
+        raw.get("class_min_weights", {}), "class_min_weights"
+    )
+    class_max_weights = _float_mapping(
+        raw.get("class_max_weights", {}), "class_max_weights"
+    )
 
     # The file can either contain a complete static model or just a symbol
     # universe when inputs will be estimated from Alpaca history at runtime.

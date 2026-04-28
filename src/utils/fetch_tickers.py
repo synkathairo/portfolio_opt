@@ -61,6 +61,46 @@ DEFAULT_TICKER_BASKET: tuple[str, ...] = (
     "realestate",
 )
 
+SECTOR_ASSET_CLASSES = {
+    "XLK": "sector_technology",
+    "XLF": "sector_financials",
+    "XLE": "sector_energy",
+    "XLV": "sector_health_care",
+    "XLI": "sector_industrials",
+    "XLP": "sector_consumer_defensive",
+    "XLU": "sector_utilities",
+}
+INDEX_ASSET_CLASSES = {
+    "SPY": "equity_us_large",
+    "QQQ": "equity_us_growth",
+    "IWM": "equity_us_small",
+}
+CASHLIKE_ASSET_CLASSES = {
+    "SGOV": "cash_like",
+    "IEF": "bond_intermediate",
+    "TLT": "bond_long",
+    "TIP": "bond_inflation",
+}
+COMMODITY_ASSET_CLASSES = {
+    "GLD": "commodity_gold",
+    "SLV": "commodity_silver",
+    "DBC": "commodity_broad",
+}
+REALESTATE_ASSET_CLASSES = {"VNQ": "sector_real_estate"}
+YAHOO_SECTOR_ASSET_CLASSES = {
+    "Basic Materials": "sector_basic_materials",
+    "Communication Services": "sector_communication_services",
+    "Consumer Cyclical": "sector_consumer_cyclical",
+    "Consumer Defensive": "sector_consumer_defensive",
+    "Energy": "sector_energy",
+    "Financial Services": "sector_financials",
+    "Healthcare": "sector_health_care",
+    "Industrials": "sector_industrials",
+    "Real Estate": "sector_real_estate",
+    "Technology": "sector_technology",
+    "Utilities": "sector_utilities",
+}
+
 
 @dataclass(frozen=True)
 class NikkeiConstituent:
@@ -73,6 +113,13 @@ class NikkeiConstituent:
 
 # alternatively, if json provided, pipe into a dict.
 # these should match in layout
+
+
+def _asset_class_from_ticker_info(info: dict[str, Any]) -> str:
+    sector = info.get("sector")
+    if not isinstance(sector, str):
+        return "sector_unknown"
+    return YAHOO_SECTOR_ASSET_CLASSES.get(sector, "sector_unknown")
 
 
 def _get_ticker_info_payload(ticker: str) -> dict[str, Any]:
@@ -90,6 +137,7 @@ def _get_ticker_info_payload(ticker: str) -> dict[str, Any]:
         _TICKER_INFO_MEMORY_CACHE[ticker] = {}
         return {}
     if isinstance(info, dict) and info:
+        info["asset_class"] = _asset_class_from_ticker_info(info)
         write_cache(path, info)
         _TICKER_INFO_MEMORY_CACHE[ticker] = info
         return info
@@ -98,14 +146,13 @@ def _get_ticker_info_payload(ticker: str) -> dict[str, Any]:
 
 
 def _get_ticker_info(ticker: str) -> tuple[str, str]:
-    """Fetch info for a single ticker. Returns (symbol, formatted_name)."""
+    """Fetch info for a single ticker. Returns (symbol, asset_class)."""
     try:
         info = _get_ticker_info_payload(ticker)
-        name = info.get("shortName") or info.get("longName") or ticker
-        sector = info.get("sector") or "Unknown"
-        return ticker, f"{name} ({sector})"
+        asset_class = info.get("asset_class")
+        return ticker, asset_class if isinstance(asset_class, str) else "sector_unknown"
     except Exception:
-        return ticker, f"{ticker} (Unknown)"
+        return ticker, "sector_unknown"
 
 
 def _format_ticker_dict(tickers: list[str], max_workers: int = 3) -> dict:
@@ -576,35 +623,46 @@ def fetch_ticker_dict(
         ticker_basket = list(DEFAULT_TICKER_BASKET)
     else:
         ticker_basket = list(ticker_basket)
-    tickers = set()
+
+    dynamic_tickers = set()
+
     if "nasdaq100" in ticker_basket:
-        tickers |= set(_require_tickers("nasdaq100", fetch_nasdaq100_tickers()))
+        dynamic_tickers |= set(_require_tickers("nasdaq100", fetch_nasdaq100_tickers()))
     if "sp500" in ticker_basket:
-        tickers |= set(_require_tickers("sp500", fetch_sp500_tickers()))
+        dynamic_tickers |= set(_require_tickers("sp500", fetch_sp500_tickers()))
     if NIKKEI225_BASKET in ticker_basket:
-        tickers |= set(_require_tickers(NIKKEI225_BASKET, fetch_nikkei225_tickers()))
+        dynamic_tickers |= set(
+            _require_tickers(NIKKEI225_BASKET, fetch_nikkei225_tickers())
+        )
     for code in _yfiua_codes_from_basket(ticker_basket):
-        tickers |= set(
+        dynamic_tickers |= set(
             _require_tickers(
                 f"{YFIUA_BASKET_PREFIX}{code}",
                 fetch_yfiua_index_constituents(code),
             )
         )
+    dynamic_tickers |= set(preexisting)
+
     # note: below were statically coded, so need to be mindful of when the ETFs were created when querying
+    static_ticker_dict: dict[str, str] = {}
     if "sectors" in ticker_basket:
-        tickers |= {"XLK", "XLF", "XLE", "XLV", "XLI", "XLP", "XLU"}
+        static_ticker_dict.update(SECTOR_ASSET_CLASSES)
     if "indexes" in ticker_basket:
-        tickers |= {"SPY", "QQQ", "IWM"}
+        static_ticker_dict.update(INDEX_ASSET_CLASSES)
     if "cashlike" in ticker_basket:
-        tickers |= {"SGOV", "IEF", "TLT", "TIP"}
+        static_ticker_dict.update(CASHLIKE_ASSET_CLASSES)
     if "commodities" in ticker_basket:
-        tickers |= {"GLD", "SLV", "DBC"}
+        static_ticker_dict.update(COMMODITY_ASSET_CLASSES)
     if "realestate" in ticker_basket:
-        tickers |= {"VNQ"}
-    tickers |= set(preexisting)
-    ticker_list = list(tickers)
-    ticker_list.sort()
-    return _format_ticker_dict(ticker_list)
+        static_ticker_dict.update(REALESTATE_ASSET_CLASSES)
+
+    dynamic_tickers -= set(static_ticker_dict)
+    dynamic_ticker_list = list(dynamic_tickers)
+    dynamic_ticker_list.sort()
+    ticker_dict = _format_ticker_dict(dynamic_ticker_list)
+    ticker_dict["symbols"].extend(list(static_ticker_dict))
+    ticker_dict["asset_classes"].update(static_ticker_dict)
+    return ticker_dict
 
 
 def get_ticker_firstTradeDate(symbol: str) -> Optional[datetime]:

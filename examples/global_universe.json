@@ -31,7 +31,7 @@
     "EMB": "bond_emerging",
     "GLD": "commodity_gold",
     "DBC": "commodity_broad",
-    "VNQ": "real_estate"
+    "VNQ": "sector_real_estate"
   },
   "class_min_weights": {
     "equity_us_large": 0.1,
@@ -54,6 +54,6 @@
     "bond_emerging": 0.1,
     "commodity_gold": 0.15,
     "commodity_broad": 0.1,
-    "real_estate": 0.15
+    "sector_real_estate": 0.15
   }
 }

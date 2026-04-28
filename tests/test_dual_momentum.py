@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from portfolio_opt.backtest import (
     compute_dual_momentum_weights,
+    compute_protective_momentum_weights,
     rolling_window_comparison,
     run_dual_momentum_backtest,
     run_factor_momentum_backtest,
+    run_protective_momentum_backtest,
 )
 from portfolio_opt.config import OptimizationConfig
 
@@ -65,6 +67,85 @@ def test_dual_momentum_falls_back_to_defensive_assets_when_risk_assets_fail_filt
     assert result.latest_weights.tolist() == [0.0, 0.0, 0.5, 0.5]
 
 
+def test_protective_momentum_scales_risky_exposure_by_breadth() -> None:
+    weights = compute_protective_momentum_weights(
+        symbols=["A", "B", "C", "SGOV", "IEF"],
+        closes_by_symbol={
+            "A": [100.0, 130.0],
+            "B": [100.0, 120.0],
+            "C": [100.0, 90.0],
+            "SGOV": [100.0, 100.0],
+            "IEF": [100.0, 101.0],
+        },
+        asset_classes={
+            "A": "equity",
+            "B": "equity",
+            "C": "equity",
+            "SGOV": "cash_like",
+            "IEF": "bond_intermediate",
+        },
+        lookback_days=1,
+        top_k=1,
+    )
+
+    assert round(weights["A"], 6) == round(2.0 / 3.0, 6)
+    assert weights["B"] == 0.0
+    assert weights["C"] == 0.0
+    assert round(weights["SGOV"], 6) == round(1.0 / 6.0, 6)
+    assert round(weights["IEF"], 6) == round(1.0 / 6.0, 6)
+    assert round(sum(weights.values()), 6) == 1.0
+
+
+def test_protective_momentum_respects_breadth_exposure_clamps() -> None:
+    weights = compute_protective_momentum_weights(
+        symbols=["A", "B", "C", "SGOV", "IEF"],
+        closes_by_symbol={
+            "A": [100.0, 130.0],
+            "B": [100.0, 120.0],
+            "C": [100.0, 110.0],
+            "SGOV": [100.0, 100.0],
+            "IEF": [100.0, 101.0],
+        },
+        asset_classes={
+            "A": "equity",
+            "B": "equity",
+            "C": "equity",
+            "SGOV": "cash_like",
+            "IEF": "bond_intermediate",
+        },
+        lookback_days=1,
+        top_k=2,
+        breadth_max_risky=0.5,
+    )
+
+    assert round(weights["A"] + weights["B"], 6) == 0.5
+    assert round(weights["SGOV"] + weights["IEF"], 6) == 0.5
+
+
+def test_protective_momentum_uses_defensive_assets_when_no_risky_assets_pass() -> None:
+    result = run_protective_momentum_backtest(
+        symbols=["SPY", "QQQ", "SGOV", "IEF"],
+        closes_by_symbol={
+            "SPY": [100.0, 99.0, 98.0, 97.0],
+            "QQQ": [100.0, 99.5, 99.0, 98.5],
+            "SGOV": [100.0, 100.1, 100.2, 100.3],
+            "IEF": [100.0, 100.2, 100.4, 100.6],
+        },
+        asset_classes={
+            "SPY": "equity_us_large",
+            "QQQ": "equity_us_growth",
+            "SGOV": "cash_like",
+            "IEF": "bond_intermediate",
+        },
+        lookback_days=1,
+        rebalance_every=1,
+        top_k=1,
+        absolute_threshold=0.0,
+    )
+
+    assert result.latest_weights.tolist() == [0.0, 0.0, 0.5, 0.5]
+
+
 def test_rolling_window_comparison_counts_windows_against_spy() -> None:
     closes_by_symbol = {
         "SPY": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0],
@@ -100,6 +181,38 @@ def test_rolling_window_comparison_counts_windows_against_spy() -> None:
     assert comparison["windows"] == 2
     assert comparison["beat_spy_return_windows"] == 2
     assert comparison["beat_spy_sharpe_windows"] == 2
+
+
+def test_rolling_window_comparison_supports_protective_momentum() -> None:
+    comparison = rolling_window_comparison(
+        strategy="protective-momentum",
+        symbols=["SPY", "QQQ", "SGOV"],
+        closes_by_symbol={
+            "SPY": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0],
+            "QQQ": [100.0, 104.0, 108.0, 112.0, 116.0, 120.0, 124.0],
+            "SGOV": [100.0, 100.05, 100.1, 100.15, 100.2, 100.25, 100.3],
+        },
+        asset_classes={
+            "SPY": "equity_us_large",
+            "QQQ": "equity_us_growth",
+            "SGOV": "cash_like",
+        },
+        lookback_days=2,
+        window_days=3,
+        step_days=1,
+        rebalance_every=1,
+        return_model="momentum",
+        mean_shrinkage=0.75,
+        momentum_window=2,
+        opt_config=OptimizationConfig(),
+        asset_class_matrix=None,
+        top_k=1,
+        absolute_threshold=0.0,
+        weighting="equal",
+        softmax_temperature=0.05,
+    )
+
+    assert comparison["windows"] == 2
 
 
 def test_rolling_window_comparison_rejects_missing_spy() -> None:

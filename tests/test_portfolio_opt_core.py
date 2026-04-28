@@ -19,7 +19,11 @@ from portfolio_opt.backtest import (
 from portfolio_opt.config import AlpacaConfig, OptimizationConfig
 from portfolio_opt.execution import submit_rebalance_sell_first
 from portfolio_opt.model import ModelInputs, load_model_inputs
-from portfolio_opt.optimizer import _finalize_solution, optimize_weights, project_weights
+from portfolio_opt.optimizer import (
+    _finalize_solution,
+    optimize_weights,
+    project_weights,
+)
 from portfolio_opt.risk_parity import risk_parity_weights
 from portfolio_opt.rebalance import build_order_plan, build_trailing_stop_plan
 from portfolio_opt.types import (
