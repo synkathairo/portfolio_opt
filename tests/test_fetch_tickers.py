@@ -111,6 +111,46 @@ def test_ticker_info_uses_cached_asset_class_without_network(monkeypatch) -> Non
     assert fetch_tickers.get_ticker_firstTradeDate("AAPL") == datetime(2020, 1, 2)
 
 
+def test_ticker_info_uses_dash_alias_when_dot_symbol_cache_is_unknown(
+    monkeypatch,
+) -> None:
+    class DummyPath:
+        def __init__(self, symbol: str) -> None:
+            self.symbol = symbol
+
+        def exists(self) -> bool:
+            return self.symbol in cache
+
+    cache = {
+        "BRK.B": {
+            "symbol": "BRK.B",
+            "asset_class": "sector_unknown",
+        },
+        "BRK-B": {
+            "symbol": "BRK-B",
+            "sector": "Financial Services",
+            "asset_class": "sector_financials",
+        },
+    }
+
+    monkeypatch.setattr(fetch_tickers, "_TICKER_INFO_MEMORY_CACHE", {})
+    monkeypatch.setattr(
+        fetch_tickers,
+        "cache_path",
+        lambda _name, payload: DummyPath(str(payload["symbol"])),
+    )
+    monkeypatch.setattr(fetch_tickers, "read_cache", lambda path: cache[path.symbol])
+    monkeypatch.setattr(
+        fetch_tickers.yf,
+        "Ticker",
+        lambda _symbol: (_ for _ in ()).throw(
+            AssertionError("network should not be used on alias cache hit")
+        ),
+    )
+
+    assert fetch_tickers._get_ticker_info("BRK.B") == ("BRK.B", "sector_financials")
+
+
 def test_fetch_yfiua_index_constituents_uses_monthly_json(monkeypatch) -> None:
     requested: list[tuple[str, dict[str, str]]] = []
 

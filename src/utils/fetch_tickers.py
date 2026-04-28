@@ -11,6 +11,7 @@ from typing import Any, Optional, cast
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from portfolio_opt.cache import cache_path, read_cache, write_cache
+from portfolio_opt.yfinance_data import _yahoo_symbol_candidates
 
 _TICKER_INFO_MEMORY_CACHE: dict[str, dict[str, Any]] = {}
 
@@ -122,27 +123,49 @@ def _asset_class_from_ticker_info(info: dict[str, Any]) -> str:
     return YAHOO_SECTOR_ASSET_CLASSES.get(sector, "sector_unknown")
 
 
+def _has_known_asset_class(info: dict[str, Any]) -> bool:
+    asset_class = info.get("asset_class")
+    return isinstance(asset_class, str) and asset_class != "sector_unknown"
+
+
 def _get_ticker_info_payload(ticker: str) -> dict[str, Any]:
     if ticker in _TICKER_INFO_MEMORY_CACHE:
         return _TICKER_INFO_MEMORY_CACHE[ticker]
     path = cache_path("ticker_info", {"symbol": ticker})
+    cached_payload: dict[str, Any] | None = None
     if path.exists():
         cached = read_cache(path)
         if isinstance(cached, dict):
-            _TICKER_INFO_MEMORY_CACHE[ticker] = cached
-            return cached
-    try:
-        info = yf.Ticker(ticker).info or {}
-    except Exception:
-        _TICKER_INFO_MEMORY_CACHE[ticker] = {}
-        return {}
-    if isinstance(info, dict) and info:
-        info["asset_class"] = _asset_class_from_ticker_info(info)
-        write_cache(path, info)
-        _TICKER_INFO_MEMORY_CACHE[ticker] = info
-        return info
-    _TICKER_INFO_MEMORY_CACHE[ticker] = {}
-    return {}
+            cached_payload = cached
+            if _has_known_asset_class(cached):
+                _TICKER_INFO_MEMORY_CACHE[ticker] = cached
+                return cached
+
+    fetched_payload: dict[str, Any] | None = None
+    for yahoo_ticker in _yahoo_symbol_candidates(ticker):
+        candidate_path = cache_path("ticker_info", {"symbol": yahoo_ticker})
+        if yahoo_ticker != ticker and candidate_path.exists():
+            cached = read_cache(candidate_path)
+            if isinstance(cached, dict) and _has_known_asset_class(cached):
+                _TICKER_INFO_MEMORY_CACHE[ticker] = cached
+                return cached
+        if yahoo_ticker == ticker and cached_payload is not None:
+            continue
+        try:
+            info = yf.Ticker(yahoo_ticker).info or {}
+        except Exception:
+            continue
+        if isinstance(info, dict) and info:
+            info["asset_class"] = _asset_class_from_ticker_info(info)
+            write_cache(candidate_path, info)
+            if _has_known_asset_class(info):
+                _TICKER_INFO_MEMORY_CACHE[ticker] = info
+                return info
+            fetched_payload = info
+
+    payload = cached_payload or fetched_payload or {}
+    _TICKER_INFO_MEMORY_CACHE[ticker] = payload
+    return payload
 
 
 def _get_ticker_info(ticker: str) -> tuple[str, str]:

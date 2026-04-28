@@ -608,7 +608,7 @@
     "BLK": "sector_financials",
     "BMY": "sector_health_care",
     "BR": "sector_technology",
-    "BRK.B": "BRK.B (Unknown)",
+    "BRK.B": "sector_financials",
     "BRO": "sector_financials",
     "BSX": "sector_health_care",
     "BX": "sector_financials",
