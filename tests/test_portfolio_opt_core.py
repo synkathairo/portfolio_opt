@@ -966,6 +966,255 @@ def test_cli_cvxportfolio_engine_rejects_native_only_flags(monkeypatch) -> None:
     assert "--strategy" in message
 
 
+def test_cli_routes_cvxportfolio_dry_run_through_order_report(
+    monkeypatch,
+    capsys,
+) -> None:
+    args = _base_cli_args(
+        backtest_engine="cvxportfolio",
+        backtest_days=0,
+        dry_run=True,
+        data_source="yfinance",
+        offline=True,
+    )
+    captured: dict[str, object] = {}
+
+    class FakeAlpaca:
+        def __init__(self, _config) -> None:
+            pass
+
+        def get_account(self, **_kwargs):
+            return AccountSnapshot(equity=1000.0, buying_power=1000.0)
+
+        def get_positions(self, **_kwargs):
+            return []
+
+        def get_open_orders(self):
+            return []
+
+        def get_latest_prices(self, symbols, **_kwargs):
+            captured["priced_symbols"] = symbols
+            return {"SPY": 100.0}
+
+    monkeypatch.setattr(cli, "parse_args", lambda: args)
+    monkeypatch.setattr(cli, "AlpacaClient", FakeAlpaca)
+    monkeypatch.setattr(
+        cli,
+        "load_model_inputs",
+        lambda _path: ModelInputs(
+            symbols=["SPY"],
+            expected_returns=None,
+            covariance=None,
+            asset_classes={"SPY": "equity"},
+            class_min_weights={},
+            class_max_weights={},
+        ),
+    )
+
+    def fake_cvx_target(**kwargs):
+        captured["model_symbols"] = kwargs["model"].symbols
+        captured["data_source"] = kwargs["data_source"]
+        captured["offline"] = kwargs["offline"]
+        return np.array([0.5], dtype=float)
+
+    monkeypatch.setattr(cli, "run_cvxportfolio_current_target", fake_cvx_target)
+
+    cli.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert captured == {
+        "model_symbols": ["SPY"],
+        "data_source": "yfinance",
+        "offline": True,
+        "priced_symbols": ["SPY"],
+    }
+    assert payload["estimation"]["method"] == "cvxportfolio_current_target"
+    assert payload["orders"][0]["symbol"] == "SPY"
+    assert payload["orders"][0]["side"] == "buy"
+
+
+def test_cli_cvxportfolio_dry_run_supports_dynamic_universe(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    args = _base_cli_args(
+        backtest_engine="cvxportfolio",
+        backtest_days=0,
+        dry_run=True,
+        dynamic_universe=True,
+        dynamic_universe_cache_dir=str(tmp_path),
+        ticker_basket=["nasdaq100"],
+        filter_before="2000-01-01",
+    )
+    captured: dict[str, object] = {}
+
+    class FakeAlpaca:
+        def __init__(self, _config) -> None:
+            pass
+
+        def get_account(self, **_kwargs):
+            return AccountSnapshot(equity=1000.0, buying_power=1000.0)
+
+        def get_positions(self, **_kwargs):
+            return [Position(symbol="HELD", qty=1.0, market_value=100.0)]
+
+        def get_open_orders(self):
+            return []
+
+        def get_latest_prices(self, symbols, **_kwargs):
+            return {symbol: 100.0 for symbol in symbols}
+
+    monkeypatch.setattr(cli, "parse_args", lambda: args)
+    monkeypatch.setattr(cli, "AlpacaClient", FakeAlpaca)
+    monkeypatch.setattr(
+        cli,
+        "fetch_ticker_dict",
+        lambda *, ticker_basket: {
+            "symbols": ["SPY"],
+            "asset_classes": {"SPY": "equity"},
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "filter_tickers_before",
+        lambda symbols, _cutoff: list(symbols),
+    )
+
+    def fake_cvx_target(**kwargs):
+        captured["model_symbols"] = kwargs["model"].symbols
+        captured["asset_classes"] = kwargs["model"].asset_classes
+        return np.array([0.0, 0.5], dtype=float)
+
+    monkeypatch.setattr(cli, "run_cvxportfolio_current_target", fake_cvx_target)
+
+    cli.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert captured["model_symbols"] == ["HELD", "SPY"]
+    assert captured["asset_classes"] == {"SPY": "equity", "HELD": "HELD (Unknown)"}
+    assert payload["symbols"] == ["HELD", "SPY"]
+
+
+def test_cli_cvxportfolio_dry_run_supports_trailing_stop(
+    monkeypatch,
+    capsys,
+) -> None:
+    args = _base_cli_args(
+        backtest_engine="cvxportfolio",
+        backtest_days=0,
+        dry_run=True,
+        trailing_stop=0.15,
+        rebalance_threshold=0.02,
+    )
+
+    class FakeAlpaca:
+        def __init__(self, _config) -> None:
+            pass
+
+        def get_account(self, **_kwargs):
+            return AccountSnapshot(equity=1000.0, buying_power=1000.0)
+
+        def get_positions(self, **_kwargs):
+            return [Position(symbol="SPY", qty=12.345678, market_value=1000.0)]
+
+        def get_open_orders(self):
+            return []
+
+        def get_latest_prices(self, symbols, **_kwargs):
+            return {symbol: 100.0 for symbol in symbols}
+
+    monkeypatch.setattr(cli, "parse_args", lambda: args)
+    monkeypatch.setattr(cli, "AlpacaClient", FakeAlpaca)
+    monkeypatch.setattr(
+        cli,
+        "load_model_inputs",
+        lambda _path: ModelInputs(
+            symbols=["SPY"],
+            expected_returns=None,
+            covariance=None,
+            asset_classes={"SPY": "equity"},
+            class_min_weights={},
+            class_max_weights={},
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_cvxportfolio_current_target",
+        lambda **_kwargs: np.array([1.0], dtype=float),
+    )
+
+    cli.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["trailing_stop_orders"] == [
+        {
+            "symbol": "SPY",
+            "qty": 12.0,
+            "side": "sell",
+            "trail_percent": 15.0,
+            "time_in_force": "gtc",
+        }
+    ]
+
+
+def test_cli_cvxportfolio_submit_uses_shared_execution(monkeypatch, capsys) -> None:
+    args = _base_cli_args(
+        backtest_engine="cvxportfolio",
+        backtest_days=0,
+        submit=True,
+    )
+    captured: dict[str, object] = {}
+
+    class FakeAlpaca:
+        def __init__(self, _config) -> None:
+            pass
+
+        def get_account(self, **_kwargs):
+            return AccountSnapshot(equity=1000.0, buying_power=1000.0)
+
+        def get_positions(self, **_kwargs):
+            return []
+
+        def get_open_orders(self):
+            return []
+
+        def get_latest_prices(self, symbols, **_kwargs):
+            return {symbol: 100.0 for symbol in symbols}
+
+        def submit_order_plan(self, plans):
+            captured["submitted"] = [plan.symbol for plan in plans]
+            return [{"id": "order-1", "symbol": plans[0].symbol, "status": "accepted"}]
+
+        def wait_for_submitted_orders(self, submitted_orders, **_kwargs):
+            return [dict(order, status="filled") for order in submitted_orders]
+
+    monkeypatch.setattr(cli, "parse_args", lambda: args)
+    monkeypatch.setattr(cli, "AlpacaClient", FakeAlpaca)
+    monkeypatch.setattr(
+        cli,
+        "load_model_inputs",
+        lambda _path: ModelInputs(
+            symbols=["SPY"],
+            expected_returns=None,
+            covariance=None,
+            asset_classes={"SPY": "equity"},
+            class_min_weights={},
+            class_max_weights={},
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_cvxportfolio_current_target",
+        lambda **_kwargs: np.array([0.5], dtype=float),
+    )
+
+    cli.main()
+
+    capsys.readouterr()
+    assert captured["submitted"] == ["SPY"]
+
+
 def test_cli_native_engine_rejects_cvxportfolio_only_flags(monkeypatch) -> None:
     args = _base_cli_args(
         backtest_engine="native",

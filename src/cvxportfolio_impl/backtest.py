@@ -15,7 +15,8 @@ from portfolio_opt.backtest import (
 from portfolio_opt.backtest import run_backtest as run_custom_backtest
 from portfolio_opt.config import OptimizationConfig
 from portfolio_opt.market_data import DataSource, load_close_history
-from portfolio_opt.model import load_model_inputs
+from portfolio_opt.model import ModelInputs, load_model_inputs
+from portfolio_opt.types import AccountSnapshot, Position
 
 from .data import closes_to_market_data, momentum_forecast
 from .policy import build_policy
@@ -308,6 +309,137 @@ def prepare_cvxportfolio_context(
     closes_by_symbol = close_history.closes_by_symbol
     returns_frame, prices_frame = closes_to_market_data(closes_by_symbol)
     return model, closes_by_symbol, returns_frame, prices_frame, warmup_days
+
+
+def run_cvxportfolio_current_target(
+    *,
+    model: ModelInputs,
+    account: AccountSnapshot,
+    positions: list[Position],
+    lookback_days: int,
+    risk_aversion: float,
+    min_cash_weight: float,
+    min_invested_weight: float,
+    max_weight: float,
+    mean_shrinkage: float,
+    momentum_window: int,
+    core_symbol: str | None = None,
+    core_weight: float = 0.0,
+    target_volatility: float | None = None,
+    max_leverage: float | None = None,
+    benchmark_symbol: str | None = None,
+    benchmark_weight: float = 1.0,
+    planning_horizon: int = 1,
+    data_source: DataSource = "alpaca",
+    csv_dir: str = ".cache/csv",
+    csv_write_json_cache: bool = False,
+    stockanalysis_start: str = "1980-01-01",
+    stockanalysis_end: str | None = None,
+    yfinance_max_workers: int = 10,
+    yfinance_retry_delay: float = 1.0,
+    yfinance_symbol_delay: float = 0.02,
+    use_cache: bool = False,
+    refresh_cache: bool = False,
+    offline: bool = False,
+) -> np.ndarray:
+    try:
+        import cvxportfolio as cvx
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError(
+            "cvxportfolio is required for this path. Run `uv sync` after adding the dependency."
+        ) from exc
+
+    total_days = max(lookback_days, 252, momentum_window) + 1
+    close_history = load_close_history(
+        symbols=model.symbols,
+        total_days=total_days,
+        data_source=data_source,
+        csv_dir=csv_dir,
+        csv_write_json_cache=csv_write_json_cache,
+        stockanalysis_start=stockanalysis_start,
+        stockanalysis_end=stockanalysis_end,
+        yfinance_max_workers=yfinance_max_workers,
+        yfinance_retry_delay=yfinance_retry_delay,
+        yfinance_symbol_delay=yfinance_symbol_delay,
+        use_cache=use_cache,
+        refresh_cache=refresh_cache,
+        offline=offline,
+    )
+    returns_frame, prices_frame = closes_to_market_data(close_history.closes_by_symbol)
+    forecasts = momentum_forecast(
+        returns_frame=returns_frame,
+        momentum_window=momentum_window,
+        mean_shrinkage=mean_shrinkage,
+    )
+    benchmark = build_benchmark_weights(
+        returns_frame.index,
+        model.symbols,
+        benchmark_symbol=benchmark_symbol,
+        benchmark_weight=benchmark_weight,
+    )
+    policy = build_policy(
+        cvx=cvx,
+        symbols=model.symbols,
+        forecasts=forecasts,
+        risk_aversion=risk_aversion,
+        max_weight=max_weight,
+        min_cash_weight=min_cash_weight,
+        min_invested_weight=min_invested_weight,
+        class_min_weights=model.class_min_weights,
+        class_max_weights=model.class_max_weights,
+        asset_classes=model.asset_classes,
+        core_symbol=core_symbol,
+        core_weight=core_weight,
+        target_volatility=target_volatility,
+        max_leverage=max_leverage,
+        benchmark=benchmark,
+        planning_horizon=planning_horizon,
+    )
+    market_data = cvx.UserProvidedMarketData(
+        returns=returns_frame,
+        prices=prices_frame,
+        cash_key="USDOLLAR",
+        min_history=pd.Timedelta(0),
+    )
+    by_symbol = {position.symbol: position for position in positions}
+    holdings = pd.Series(
+        {
+            symbol: by_symbol.get(
+                symbol, Position(symbol=symbol, qty=0.0, market_value=0.0)
+            ).market_value
+            for symbol in model.symbols
+        }
+        | {
+            "USDOLLAR": max(
+                0.0,
+                account.equity
+                - sum(
+                    by_symbol.get(
+                        symbol,
+                        Position(symbol=symbol, qty=0.0, market_value=0.0),
+                    ).market_value
+                    for symbol in model.symbols
+                ),
+            )
+        },
+        dtype=float,
+    )
+    trades, _timestamp, _shares_traded = policy.execute(
+        holdings,
+        market_data,
+        t=returns_frame.index[-1],
+    )
+    target_holdings = holdings + trades.reindex(holdings.index).fillna(0.0)
+    target_value = float(target_holdings.sum())
+    if target_value <= 0.0:
+        raise ValueError("cvxportfolio target holdings have non-positive value.")
+    return np.array(
+        [
+            max(0.0, float(target_holdings.get(symbol, 0.0)) / target_value)
+            for symbol in model.symbols
+        ],
+        dtype=float,
+    )
 
 
 def run_cvxportfolio_backtest(

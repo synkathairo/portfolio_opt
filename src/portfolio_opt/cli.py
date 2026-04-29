@@ -44,6 +44,7 @@ from utils.fetch_tickers import (
     filter_tickers_before,
 )
 from cvxportfolio_impl.backtest import format_backtest as format_cvxportfolio_backtest
+from cvxportfolio_impl.backtest import run_cvxportfolio_current_target
 from cvxportfolio_impl.cli import run_from_args as run_cvxportfolio_from_args
 
 configure_local_cache_dirs()
@@ -171,6 +172,302 @@ def _calculate_trading_date_offset(trading_days: int) -> datetime:
             f"Cannot look back {trading_days} trading days; not enough history in calendar."
         )
     return cast(datetime, session_dates[cutoff_idx])
+
+
+def _resolve_model_inputs(
+    *,
+    args: argparse.Namespace,
+    alpaca: AlpacaClient | None,
+    dynamic_universe_cache_dir: str,
+    allow_stale_dynamic_universe: bool,
+    max_stale_dynamic_universe_days: float,
+) -> ModelInputs:
+    if not args.dynamic_universe:
+        return load_model_inputs(args.model)
+
+    ticker_basket = (
+        list(args.ticker_basket) if args.ticker_basket else list(DEFAULT_TICKER_BASKET)
+    )
+    try:
+        fetched = fetch_ticker_dict(ticker_basket=ticker_basket)
+        _write_dynamic_universe_cache(
+            fetched,
+            ticker_basket=ticker_basket,
+            cache_dir=dynamic_universe_cache_dir,
+        )
+    except Exception as exc:
+        if not allow_stale_dynamic_universe:
+            raise
+        try:
+            fetched = _read_dynamic_universe_cache(
+                ticker_basket=ticker_basket,
+                cache_dir=dynamic_universe_cache_dir,
+                max_age_days=max_stale_dynamic_universe_days,
+            )
+        except Exception as cache_exc:
+            raise RuntimeError(
+                "Dynamic universe fetch failed and no usable stale cache was found."
+            ) from cache_exc
+        print(
+            "WARNING: using stale dynamic universe cache after fresh fetch failed: "
+            f"{exc}",
+            file=sys.stderr,
+        )
+
+    dynamic_symbols = set(fetched["symbols"])
+    asset_classes = dict(fetched["asset_classes"])
+
+    client = alpaca if alpaca is not None else AlpacaClient(AlpacaConfig.from_env())
+    positions = client.get_positions(
+        use_cache=args.use_cache,
+        refresh_cache=args.refresh_cache,
+        offline=args.offline,
+    )
+    held_symbols = {position.symbol for position in positions}
+    all_symbols = sorted(dynamic_symbols | held_symbols)
+
+    for symbol in held_symbols:
+        if symbol not in asset_classes:
+            asset_classes[symbol] = f"{symbol} (Unknown)"
+
+    cutoff = None
+    if args.filter_before:
+        cutoff = datetime.strptime(args.filter_before, "%Y-%m-%d")
+    else:
+        try:
+            cutoff = _calculate_trading_date_offset(args.lookback_days)
+        except ValueError:
+            pass
+
+    if cutoff:
+        all_symbols = filter_tickers_before(all_symbols, cutoff)
+
+    return ModelInputs(
+        symbols=all_symbols,
+        expected_returns=None,
+        covariance=None,
+        asset_classes=asset_classes,
+        class_min_weights={},
+        class_max_weights={},
+    )
+
+
+def _emit_rebalance_result(
+    *,
+    args: argparse.Namespace,
+    alpaca: AlpacaClient,
+    model: ModelInputs,
+    target_weights: np.ndarray,
+    estimation_metadata: dict[str, Any],
+    opt_config: OptimizationConfig,
+    account,
+    positions,
+    existing_weights: np.ndarray,
+    expected_returns: np.ndarray | None = None,
+) -> None:
+    target_weights = clean_weights(target_weights)
+    target_cash_weight = max(0.0, 1.0 - float(target_weights.sum()))
+    current_cash_weight = max(0.0, 1.0 - float(existing_weights.sum()))
+    realized_turnover = float(np.abs(target_weights - existing_weights).sum())
+    current_weights_clean = clean_weights(existing_weights)
+    scaled_turnover_penalty = effective_turnover_penalty(opt_config, existing_weights)
+
+    open_orders = alpaca.get_open_orders()
+    symbols_with_open_orders = {
+        str(order.get("symbol"))
+        for order in open_orders
+        if order.get("symbol") in model.symbols
+    }
+    symbols_needing_prices = [
+        symbol
+        for symbol, target_weight, current_weight in zip(
+            model.symbols, target_weights, existing_weights, strict=True
+        )
+        if abs(float(target_weight - current_weight)) >= args.rebalance_threshold
+        or symbol in symbols_with_open_orders
+    ]
+    latest_prices = (
+        alpaca.get_latest_prices(
+            symbols_needing_prices,
+            use_cache=args.use_cache,
+            refresh_cache=args.refresh_cache,
+            offline=args.offline,
+        )
+        if symbols_needing_prices
+        else {}
+    )
+
+    plan = build_order_plan(
+        symbols=model.symbols,
+        target_weights=target_weights.tolist(),
+        account=account,
+        positions=positions,
+        latest_prices=latest_prices,
+        config=opt_config,
+        open_orders=open_orders,
+    )
+    changed_symbols = [item.symbol for item in plan]
+    trailing_stop_cancellations = (
+        [
+            {
+                "id": order.get("id"),
+                "symbol": order.get("symbol"),
+                "qty": order.get("qty"),
+                "trail_percent": order.get("trail_percent"),
+            }
+            for order in open_orders
+            if order.get("symbol") in changed_symbols
+            and order.get("type") == "trailing_stop"
+            and order.get("side") == "sell"
+        ]
+        if args.trailing_stop is not None
+        else []
+    )
+    trailing_stop_plan_result = (
+        build_trailing_stop_plan(
+            symbols=model.symbols,
+            target_weights=target_weights.tolist(),
+            positions=positions,
+            open_orders=open_orders,
+            trailing_stop=args.trailing_stop,
+            rebalance_threshold=args.rebalance_threshold,
+        )
+        if args.trailing_stop is not None
+        else None
+    )
+    trailing_stop_plan = (
+        trailing_stop_plan_result.orders
+        if trailing_stop_plan_result is not None
+        else []
+    )
+    unprotected_trailing_stop_qty = (
+        trailing_stop_plan_result.unprotected_qty
+        if trailing_stop_plan_result is not None
+        else []
+    )
+
+    result = {
+        "symbols": model.symbols,
+        "estimation": estimation_metadata,
+        "optimization": {
+            "risk_aversion": args.risk_aversion,
+            "turnover_penalty": args.turnover_penalty,
+            "effective_turnover_penalty": round(float(scaled_turnover_penalty), 6),
+            "max_turnover": args.max_turnover,
+            "min_weight": args.min_weight,
+            "max_weight": args.max_weight,
+            "rebalance_threshold": args.rebalance_threshold,
+            "allow_cash": args.allow_cash,
+            "min_cash_weight": args.min_cash_weight,
+            "min_invested_weight": args.min_invested_weight,
+            "class_min_weights": model.class_min_weights,
+            "class_max_weights": model.class_max_weights,
+        },
+        "target_weights": {
+            symbol: round(float(weight), 6)
+            for symbol, weight in zip(model.symbols, target_weights, strict=True)
+        },
+        "current_weights": {
+            symbol: round(float(weight), 6)
+            for symbol, weight in zip(model.symbols, current_weights_clean, strict=True)
+        },
+        "expected_returns": (
+            {
+                symbol: round(float(value), 6)
+                for symbol, value in zip(model.symbols, expected_returns, strict=True)
+            }
+            if expected_returns is not None
+            else None
+        ),
+        "cash": {
+            "current_weight": round(current_cash_weight, 6),
+            "target_weight": round(target_cash_weight, 6),
+            "buying_power": (
+                round(account.buying_power, 2)
+                if account.buying_power is not None
+                else None
+            ),
+        },
+        "asset_class_exposures": {
+            "current": asset_class_exposures(
+                symbols=model.symbols,
+                weights=current_weights_clean,
+                asset_classes=model.asset_classes,
+            ),
+            "target": asset_class_exposures(
+                symbols=model.symbols,
+                weights=target_weights,
+                asset_classes=model.asset_classes,
+            ),
+        },
+        "turnover": {
+            "proposed": round(realized_turnover, 6),
+            "max_allowed": args.max_turnover,
+        },
+        "orders": [asdict(item) for item in plan],
+        "trailing_stop_cancellations": trailing_stop_cancellations,
+        "trailing_stop_orders": [asdict(item) for item in trailing_stop_plan],
+        "unprotected_fractional_trailing_stop_qty": [
+            asdict(item) for item in unprotected_trailing_stop_qty
+        ],
+    }
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    if args.submit:
+        canceled_trailing_stops = (
+            alpaca.cancel_open_trailing_stops(changed_symbols, open_orders=open_orders)
+            if args.trailing_stop is not None
+            else []
+        )
+        execution_result = submit_rebalance_sell_first(
+            broker=alpaca,
+            plan=plan,
+            symbols=model.symbols,
+            target_weights=target_weights.tolist(),
+            config=opt_config,
+            use_cache=args.use_cache,
+            refresh_cache=args.refresh_cache,
+            offline=args.offline,
+        )
+        submitted_orders = execution_result.submitted_orders
+        fill_statuses: list[dict] = execution_result.sell_fill_statuses
+        submitted_trailing_stops: list[dict] = []
+        if args.trailing_stop is not None:
+            fill_statuses = alpaca.wait_for_submitted_orders(submitted_orders)
+            refreshed_positions = alpaca.get_positions()
+            refreshed_open_orders = alpaca.get_open_orders()
+            trailing_stop_plan_result = build_trailing_stop_plan(
+                symbols=model.symbols,
+                target_weights=target_weights.tolist(),
+                positions=refreshed_positions,
+                open_orders=refreshed_open_orders,
+                trailing_stop=args.trailing_stop,
+                rebalance_threshold=args.rebalance_threshold,
+            )
+            trailing_stop_plan = trailing_stop_plan_result.orders
+            unprotected_trailing_stop_qty = trailing_stop_plan_result.unprotected_qty
+            submitted_trailing_stops = alpaca.submit_trailing_stop_plan(
+                trailing_stop_plan
+            )
+        print(format_order_plans(plan))
+        if args.trailing_stop is not None:
+            print(
+                json.dumps(
+                    {
+                        "order_fill_statuses": fill_statuses,
+                        "canceled_trailing_stops": canceled_trailing_stops,
+                        "trailing_stop_orders": [
+                            asdict(item) for item in trailing_stop_plan
+                        ],
+                        "unprotected_fractional_trailing_stop_qty": [
+                            asdict(item) for item in unprotected_trailing_stop_qty
+                        ],
+                        "submitted_trailing_stops": submitted_trailing_stops,
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            )
 
 
 def _run_sweep_point(
@@ -334,20 +631,26 @@ def _value_differs(value: Any, default: Any) -> bool:
 
 
 def _validate_cvxportfolio_engine_args(args: argparse.Namespace) -> None:
-    if getattr(args, "backtest_days", 0) <= 0:
-        raise SystemExit("--backtest-engine cvxportfolio requires --backtest-days > 0")
+    backtest_days = getattr(args, "backtest_days", 0)
+    submit = bool(getattr(args, "submit", False))
+    dry_run = bool(getattr(args, "dry_run", False))
+    execution_mode = submit or dry_run
+    if backtest_days <= 0 and not execution_mode:
+        raise SystemExit(
+            "--backtest-engine cvxportfolio requires --backtest-days > 0, "
+            "--dry-run, or --submit"
+        )
+    if backtest_days > 0 and execution_mode:
+        raise SystemExit(
+            "--backtest-engine cvxportfolio cannot combine --backtest-days with "
+            "--dry-run or --submit"
+        )
+    if backtest_days > 0 and getattr(args, "dynamic_universe", False):
+        raise SystemExit("--dynamic-universe cannot be used with --backtest-days")
 
     unsupported_defaults = [
-        ("dynamic_universe", False, "--dynamic-universe"),
-        ("filter_before", None, "--filter-before"),
-        ("ticker_basket", [], "--ticker-basket"),
-        ("allow_stale_dynamic_universe", False, "--allow-stale-dynamic-universe"),
-        ("max_stale_dynamic_universe_days", 14.0, "--max-stale-dynamic-universe-days"),
         ("min_weight", 0.0, "--min-weight"),
-        ("rebalance_threshold", 0.02, "--rebalance-threshold"),
-        ("turnover_penalty", 0.02, "--turnover-penalty"),
         ("allow_cash", False, "--allow-cash"),
-        ("max_turnover", None, "--max-turnover"),
         ("estimate_from_history", False, "--estimate-from-history"),
         ("return_model", "sample-mean", "--return-model"),
         ("strategy", "mean-variance", "--strategy"),
@@ -359,7 +662,6 @@ def _validate_cvxportfolio_engine_args(args: argparse.Namespace) -> None:
         ("target_vol", None, "--target-vol"),
         ("vol_window", 63, "--vol-window"),
         ("max_single_weight", None, "--max-single-weight"),
-        ("trailing_stop", None, "--trailing-stop"),
         ("basket_opt", None, "--basket-opt"),
         ("basket_risk_aversion", 1.0, "--basket-risk-aversion"),
         ("breadth_min_risky", 0.0, "--breadth-min-risky"),
@@ -367,8 +669,6 @@ def _validate_cvxportfolio_engine_args(args: argparse.Namespace) -> None:
         ("defensive_weighting", "equal", "--defensive-weighting"),
         ("benchmark", [], "--benchmark"),
         ("rebalance_every", 21, "--rebalance-every"),
-        ("submit", False, "--submit"),
-        ("dry_run", False, "--dry-run"),
     ]
     unsupported = [
         flag
@@ -787,7 +1087,7 @@ def parse_args() -> argparse.Namespace:
     execution_options.add_argument(
         "--dry-run",
         action="store_true",
-        help="[native] Explicit dry-run mode.",
+        help="Explicit dry-run mode.",
     )
     return parser.parse_args()
 
@@ -849,9 +1149,11 @@ def main() -> None:
     backtest_engine = getattr(args, "backtest_engine", "native")
     if backtest_engine == "cvxportfolio":
         _validate_cvxportfolio_engine_args(args)
-        print(format_cvxportfolio_backtest(run_cvxportfolio_from_args(args)))
-        return
-    _validate_native_engine_args(args)
+        if args.backtest_days > 0:
+            print(format_cvxportfolio_backtest(run_cvxportfolio_from_args(args)))
+            return
+    else:
+        _validate_native_engine_args(args)
 
     # Dynamic universe is only useful for live/dry-run trading, not backtesting
     if args.dynamic_universe and args.backtest_days > 0:
@@ -859,81 +1161,15 @@ def main() -> None:
     if args.dynamic_universe and args.rolling_window_days > 0:
         raise SystemExit("--dynamic-universe cannot be used with --rolling-window-days")
 
-    # Build model inputs from either a static file or a dynamic universe
-    if args.dynamic_universe:
-        ticker_basket = (
-            list(args.ticker_basket)
-            if args.ticker_basket
-            else list(DEFAULT_TICKER_BASKET)
-        )
-        try:
-            fetched = fetch_ticker_dict(ticker_basket=ticker_basket)
-            _write_dynamic_universe_cache(
-                fetched,
-                ticker_basket=ticker_basket,
-                cache_dir=dynamic_universe_cache_dir,
-            )
-        except Exception as exc:
-            if not allow_stale_dynamic_universe:
-                raise
-            try:
-                fetched = _read_dynamic_universe_cache(
-                    ticker_basket=ticker_basket,
-                    cache_dir=dynamic_universe_cache_dir,
-                    max_age_days=max_stale_dynamic_universe_days,
-                )
-            except Exception as cache_exc:
-                raise RuntimeError(
-                    "Dynamic universe fetch failed and no usable stale cache was found."
-                ) from cache_exc
-            print(
-                "WARNING: using stale dynamic universe cache after fresh fetch failed: "
-                f"{exc}",
-                file=sys.stderr,
-            )
-        dynamic_symbols = set(fetched["symbols"])
-        asset_classes = dict(fetched["asset_classes"])
-
-        # Merge with currently held positions so the model can decide to exit
-        # even if a stock gets delisted between universe updates.
+    if args.dynamic_universe and alpaca is None:
         alpaca = AlpacaClient(AlpacaConfig.from_env())
-        positions = alpaca.get_positions(
-            use_cache=args.use_cache,
-            refresh_cache=args.refresh_cache,
-            offline=args.offline,
-        )
-        held_symbols = {p.symbol for p in positions}
-        all_symbols = sorted(dynamic_symbols | held_symbols)
-
-        # Ensure held symbols have an asset class entry
-        for sym in held_symbols:
-            if sym not in asset_classes:
-                asset_classes[sym] = f"{sym} (Unknown)"
-
-        # Filter out stocks that haven't been trading long enough for the lookback window.
-        # If the user didn't specify a date, calculate the exact date from trading days.
-        cutoff = None
-        if args.filter_before:
-            cutoff = datetime.strptime(args.filter_before, "%Y-%m-%d")
-        else:
-            try:
-                cutoff = _calculate_trading_date_offset(args.lookback_days)
-            except ValueError:
-                pass  # Ignore if we can't look back far enough (unlikely)
-
-        if cutoff:
-            all_symbols = filter_tickers_before(all_symbols, cutoff)
-
-        model = ModelInputs(
-            symbols=all_symbols,
-            expected_returns=None,
-            covariance=None,
-            asset_classes=asset_classes,
-            class_min_weights={},
-            class_max_weights={},
-        )
-    else:
-        model = load_model_inputs(args.model)
+    model = _resolve_model_inputs(
+        args=args,
+        alpaca=alpaca,
+        dynamic_universe_cache_dir=dynamic_universe_cache_dir,
+        allow_stale_dynamic_universe=allow_stale_dynamic_universe,
+        max_stale_dynamic_universe_days=max_stale_dynamic_universe_days,
+    )
 
     opt_config = OptimizationConfig(
         risk_aversion=args.risk_aversion,
@@ -1349,8 +1585,69 @@ def main() -> None:
     existing_weights = np.array(
         [existing_weights_map[symbol] for symbol in model.symbols], dtype=float
     )
-    scaled_turnover_penalty = effective_turnover_penalty(opt_config, existing_weights)
     target_weights: np.ndarray | None = None
+    expected_returns: np.ndarray | None = None
+    covariance: np.ndarray | None = None
+
+    if backtest_engine == "cvxportfolio":
+        target_weights = run_cvxportfolio_current_target(
+            model=model,
+            account=account,
+            positions=positions,
+            lookback_days=args.lookback_days,
+            risk_aversion=args.risk_aversion,
+            min_cash_weight=args.min_cash_weight,
+            min_invested_weight=args.min_invested_weight,
+            max_weight=args.max_weight,
+            mean_shrinkage=args.mean_shrinkage,
+            momentum_window=args.momentum_window,
+            core_symbol=args.core_symbol,
+            core_weight=args.core_weight,
+            target_volatility=args.target_volatility,
+            max_leverage=args.max_leverage,
+            benchmark_symbol=args.benchmark_symbol,
+            benchmark_weight=args.benchmark_weight,
+            planning_horizon=args.planning_horizon,
+            data_source=args.data_source,
+            csv_dir=csv_dir,
+            csv_write_json_cache=getattr(args, "csv_write_json_cache", False),
+            stockanalysis_start=stockanalysis_start,
+            stockanalysis_end=stockanalysis_end,
+            yfinance_max_workers=yfinance_max_workers,
+            yfinance_retry_delay=yfinance_retry_delay,
+            yfinance_symbol_delay=yfinance_symbol_delay,
+            use_cache=args.use_cache,
+            refresh_cache=args.refresh_cache,
+            offline=args.offline,
+        )
+        _emit_rebalance_result(
+            args=args,
+            alpaca=alpaca,
+            model=model,
+            target_weights=target_weights,
+            estimation_metadata={
+                "method": "cvxportfolio_current_target",
+                "risk_aversion": args.risk_aversion,
+                "mean_shrinkage": args.mean_shrinkage,
+                "momentum_window": args.momentum_window,
+                "max_weight": args.max_weight,
+                "min_cash_weight": args.min_cash_weight,
+                "min_invested_weight": args.min_invested_weight,
+                "core_symbol": args.core_symbol,
+                "core_weight": args.core_weight,
+                "target_volatility": args.target_volatility,
+                "max_leverage": args.max_leverage,
+                "benchmark_symbol": args.benchmark_symbol,
+                "benchmark_weight": args.benchmark_weight,
+                "linear_trade_cost": args.linear_trade_cost,
+                "planning_horizon": args.planning_horizon,
+            },
+            opt_config=opt_config,
+            account=account,
+            positions=positions,
+            existing_weights=existing_weights,
+        )
+        return
 
     if args.estimate_from_history:
         history_days = args.lookback_days
@@ -1402,9 +1699,6 @@ def main() -> None:
                 symbols=model.symbols,
                 asset_classes=model.asset_classes,
                 class_names=constrained_class_names,
-            )
-            scaled_turnover_penalty = effective_turnover_penalty(
-                opt_config, existing_weights
             )
 
         if args.strategy == "dual-momentum":
@@ -1575,6 +1869,8 @@ def main() -> None:
         args.strategy not in {"dual-momentum", "factor-momentum", "protective-momentum"}
         and target_weights is None
     ):
+        if expected_returns is None or covariance is None:
+            raise RuntimeError("Expected returns and covariance were not estimated.")
         target_weights = optimize_weights(
             expected_returns=expected_returns,
             covariance=covariance,
@@ -1586,214 +1882,23 @@ def main() -> None:
         raise RuntimeError(
             "Failed to produce target weights for the requested strategy."
         )
-    target_weights = clean_weights(target_weights)
-    target_cash_weight = max(0.0, 1.0 - float(target_weights.sum()))
-    current_cash_weight = max(0.0, 1.0 - float(existing_weights.sum()))
-    realized_turnover = float(np.abs(target_weights - existing_weights).sum())
-    current_weights_clean = clean_weights(existing_weights)
-
-    # Fetch open orders to prevent double-submission
-    open_orders = alpaca.get_open_orders()
-    symbols_with_open_orders = {
-        str(order.get("symbol"))
-        for order in open_orders
-        if order.get("symbol") in model.symbols
-    }
-    symbols_needing_prices = [
-        symbol
-        for symbol, target_weight, current_weight in zip(
-            model.symbols, target_weights, existing_weights, strict=True
-        )
-        if abs(float(target_weight - current_weight)) >= args.rebalance_threshold
-        or symbol in symbols_with_open_orders
-    ]
-
-    # Convert target weights into dollar notional orders using latest prices.
-    # Only request symbols that could actually produce an order; refreshing a
-    # 500-symbol dynamic universe can otherwise timeout on one slow quote.
-    latest_prices = (
-        alpaca.get_latest_prices(
-            symbols_needing_prices,
-            use_cache=args.use_cache,
-            refresh_cache=args.refresh_cache,
-            offline=args.offline,
-        )
-        if symbols_needing_prices
-        else {}
-    )
-
-    plan = build_order_plan(
-        symbols=model.symbols,
-        target_weights=target_weights.tolist(),
+    _emit_rebalance_result(
+        args=args,
+        alpaca=alpaca,
+        model=model,
+        target_weights=target_weights,
+        estimation_metadata=estimation_metadata,
+        opt_config=opt_config,
         account=account,
         positions=positions,
-        latest_prices=latest_prices,
-        config=opt_config,
-        open_orders=open_orders,
-    )
-    changed_symbols = [item.symbol for item in plan]
-    trailing_stop_cancellations = (
-        [
-            {
-                "id": order.get("id"),
-                "symbol": order.get("symbol"),
-                "qty": order.get("qty"),
-                "trail_percent": order.get("trail_percent"),
-            }
-            for order in open_orders
-            if order.get("symbol") in changed_symbols
-            and order.get("type") == "trailing_stop"
-            and order.get("side") == "sell"
-        ]
-        if args.trailing_stop is not None
-        else []
-    )
-    trailing_stop_plan_result = (
-        build_trailing_stop_plan(
-            symbols=model.symbols,
-            target_weights=target_weights.tolist(),
-            positions=positions,
-            open_orders=open_orders,
-            trailing_stop=args.trailing_stop,
-            rebalance_threshold=args.rebalance_threshold,
-        )
-        if args.trailing_stop is not None
-        else None
-    )
-    trailing_stop_plan = (
-        trailing_stop_plan_result.orders
-        if trailing_stop_plan_result is not None
-        else []
-    )
-    unprotected_trailing_stop_qty = (
-        trailing_stop_plan_result.unprotected_qty
-        if trailing_stop_plan_result is not None
-        else []
-    )
-
-    result = {
-        "symbols": model.symbols,
-        "estimation": estimation_metadata,
-        "optimization": {
-            "risk_aversion": args.risk_aversion,
-            "turnover_penalty": args.turnover_penalty,
-            "effective_turnover_penalty": round(float(scaled_turnover_penalty), 6),
-            "max_turnover": args.max_turnover,
-            "min_weight": args.min_weight,
-            "max_weight": args.max_weight,
-            "rebalance_threshold": args.rebalance_threshold,
-            "allow_cash": args.allow_cash,
-            "min_cash_weight": args.min_cash_weight,
-            "min_invested_weight": args.min_invested_weight,
-            "class_min_weights": model.class_min_weights,
-            "class_max_weights": model.class_max_weights,
-        },
-        "target_weights": {
-            symbol: round(float(weight), 6)
-            for symbol, weight in zip(model.symbols, target_weights, strict=True)
-        },
-        "current_weights": {
-            symbol: round(float(weight), 6)
-            for symbol, weight in zip(model.symbols, current_weights_clean, strict=True)
-        },
-        "expected_returns": (
-            {
-                symbol: round(float(value), 6)
-                for symbol, value in zip(model.symbols, expected_returns, strict=True)
-            }
+        existing_weights=existing_weights,
+        expected_returns=(
+            expected_returns
             if args.strategy
             not in {"dual-momentum", "factor-momentum", "protective-momentum"}
             else None
         ),
-        "cash": {
-            "current_weight": round(current_cash_weight, 6),
-            "target_weight": round(target_cash_weight, 6),
-            "buying_power": (
-                round(account.buying_power, 2)
-                if account.buying_power is not None
-                else None
-            ),
-        },
-        "asset_class_exposures": {
-            "current": asset_class_exposures(
-                symbols=model.symbols,
-                weights=current_weights_clean,
-                asset_classes=model.asset_classes,
-            ),
-            "target": asset_class_exposures(
-                symbols=model.symbols,
-                weights=target_weights,
-                asset_classes=model.asset_classes,
-            ),
-        },
-        "turnover": {
-            "proposed": round(realized_turnover, 6),
-            "max_allowed": args.max_turnover,
-        },
-        "orders": [asdict(item) for item in plan],
-        "trailing_stop_cancellations": trailing_stop_cancellations,
-        "trailing_stop_orders": [asdict(item) for item in trailing_stop_plan],
-        "unprotected_fractional_trailing_stop_qty": [
-            asdict(item) for item in unprotected_trailing_stop_qty
-        ],
-    }
-    print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    if args.submit:
-        canceled_trailing_stops = (
-            alpaca.cancel_open_trailing_stops(changed_symbols, open_orders=open_orders)
-            if args.trailing_stop is not None
-            else []
-        )
-        execution_result = submit_rebalance_sell_first(
-            broker=alpaca,
-            plan=plan,
-            symbols=model.symbols,
-            target_weights=target_weights.tolist(),
-            config=opt_config,
-            use_cache=args.use_cache,
-            refresh_cache=args.refresh_cache,
-            offline=args.offline,
-        )
-        submitted_orders = execution_result.submitted_orders
-        fill_statuses: list[dict] = execution_result.sell_fill_statuses
-        submitted_trailing_stops: list[dict] = []
-        if args.trailing_stop is not None:
-            fill_statuses = alpaca.wait_for_submitted_orders(submitted_orders)
-            refreshed_positions = alpaca.get_positions()
-            refreshed_open_orders = alpaca.get_open_orders()
-            trailing_stop_plan_result = build_trailing_stop_plan(
-                symbols=model.symbols,
-                target_weights=target_weights.tolist(),
-                positions=refreshed_positions,
-                open_orders=refreshed_open_orders,
-                trailing_stop=args.trailing_stop,
-                rebalance_threshold=args.rebalance_threshold,
-            )
-            trailing_stop_plan = trailing_stop_plan_result.orders
-            unprotected_trailing_stop_qty = trailing_stop_plan_result.unprotected_qty
-            submitted_trailing_stops = alpaca.submit_trailing_stop_plan(
-                trailing_stop_plan
-            )
-        print(format_order_plans(plan))
-        if args.trailing_stop is not None:
-            print(
-                json.dumps(
-                    {
-                        "order_fill_statuses": fill_statuses,
-                        "canceled_trailing_stops": canceled_trailing_stops,
-                        "trailing_stop_orders": [
-                            asdict(item) for item in trailing_stop_plan
-                        ],
-                        "unprotected_fractional_trailing_stop_qty": [
-                            asdict(item) for item in unprotected_trailing_stop_qty
-                        ],
-                        "submitted_trailing_stops": submitted_trailing_stops,
-                    },
-                    indent=2,
-                    ensure_ascii=False,
-                )
-            )
+    )
 
 
 if __name__ == "__main__":

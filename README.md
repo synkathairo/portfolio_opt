@@ -332,6 +332,17 @@ uv run portfolio-opt \
   --backtest-days 252
 ```
 
+It can also compute current target weights for order planning through the shared dry-run/submit flow:
+
+```bash
+uv run portfolio-opt \
+  --model examples/sample_universe.json \
+  --backtest-engine cvxportfolio \
+  --lookback-days 126 \
+  --data-source yfinance \
+  --dry-run
+```
+
 For repeatable offline comparison runs:
 
 ```bash

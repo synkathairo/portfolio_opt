@@ -1,7 +1,7 @@
 # cvxportfolio Implementation Scaffold
 
 This package is a placeholder for a parallel `cvxportfolio`-based implementation.
-It now includes a minimal backtest-only entrypoint intended for side-by-side comparison with the custom optimizer.
+It now includes a comparison backtest path and a current-target path that can feed the shared order planner.
 
 ## Goal
 
@@ -40,7 +40,7 @@ The old `cvxportfolio-backtest` command remains available as a compatibility wra
 
 This first version is intentionally narrow:
 
-- backtest only
+- backtest/report plus current target generation
 - momentum-style returns forecast
 - user-provided market data from the configured historical close source
 - cash and asset-class policy bounds where possible
