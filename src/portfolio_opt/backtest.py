@@ -685,54 +685,54 @@ def run_backtest(
                 for index, symbol in enumerate(symbols)
             }
             if return_model == "momentum":
-                estimated = estimate_inputs_from_momentum(
+                momentum_inputs = estimate_inputs_from_momentum(
                     symbols=symbols,
                     closes_by_symbol=window_closes,
                     mean_shrinkage=mean_shrinkage,
                     momentum_window=momentum_window,
                 )
                 target_weights = optimize_weights(
-                    expected_returns=estimated.expected_returns,
-                    covariance=estimated.covariance,
+                    expected_returns=momentum_inputs.expected_returns,
+                    covariance=momentum_inputs.covariance,
                     config=opt_config,
                     current_weights=weights,
                     asset_class_matrix=asset_class_matrix,
                 )
             elif return_model == "black-litterman":
-                estimated = estimate_inputs_from_black_litterman(
+                black_litterman_inputs = estimate_inputs_from_black_litterman(
                     symbols=symbols,
                     closes_by_symbol=window_closes,
                     momentum_window=momentum_window,
                     mean_shrinkage=mean_shrinkage,
                 )
                 target_weights = optimize_weights(
-                    expected_returns=estimated.expected_returns,
-                    covariance=estimated.covariance,
+                    expected_returns=black_litterman_inputs.expected_returns,
+                    covariance=black_litterman_inputs.covariance,
                     config=opt_config,
                     current_weights=weights,
                     asset_class_matrix=asset_class_matrix,
                 )
             elif return_model == "risk-parity":
-                estimated = estimate_inputs_risk_parity(
+                risk_parity_inputs = estimate_inputs_risk_parity(
                     symbols=symbols,
                     closes_by_symbol=window_closes,
                     lookback_days=lookback_days,
                 )
                 target_weights = project_weights(
-                    target_weights=estimated.weights,
+                    target_weights=risk_parity_inputs.weights,
                     config=opt_config,
                     current_weights=weights,
                     asset_class_matrix=asset_class_matrix,
                 )
             else:
-                estimated = estimate_inputs_from_prices(
+                sample_inputs = estimate_inputs_from_prices(
                     symbols=symbols,
                     closes_by_symbol=window_closes,
                     mean_shrinkage=mean_shrinkage,
                 )
                 target_weights = optimize_weights(
-                    expected_returns=estimated.expected_returns,
-                    covariance=estimated.covariance,
+                    expected_returns=sample_inputs.expected_returns,
+                    covariance=sample_inputs.covariance,
                     config=opt_config,
                     current_weights=weights,
                     asset_class_matrix=asset_class_matrix,

@@ -54,6 +54,7 @@ def load_close_history(
             all_closes = yf_fetch_closes(
                 requested_symbols,
                 period="max",
+                min_history_days=total_days,
                 use_cache=use_cache or data_source == "csv+yfinance",
                 refresh_cache=refresh_cache and data_source != "csv+yfinance",
                 offline=offline,
@@ -79,7 +80,11 @@ def load_close_history(
             symbol: closes[-total_days:] for symbol, closes in all_closes.items()
         }
         return CloseHistory(
-            closes_by_symbol={symbol: trimmed_closes[symbol] for symbol in symbols},
+            closes_by_symbol={
+                symbol: trimmed_closes[symbol]
+                for symbol in symbols
+                if symbol in trimmed_closes
+            },
             benchmark_closes_by_symbol=trimmed_closes,
             benchmark_symbols_universe=requested_symbols,
         )

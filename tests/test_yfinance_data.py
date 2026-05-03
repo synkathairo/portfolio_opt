@@ -203,7 +203,126 @@ def test_fetch_closes_use_cache_avoids_yfinance_download(monkeypatch) -> None:
     }
 
 
-def test_fetch_closes_refresh_fetches_only_missing_tail_for_v2_cache(
+def test_fetch_closes_refresh_backfills_short_v2_cache(
+    monkeypatch,
+) -> None:
+    cached = {
+        "SPY": {
+            "symbol": "SPY",
+            "source": "yfinance",
+            "adjustment": "auto",
+            "closes": {
+                "2024-01-01": 100.0,
+                "2024-01-02": 101.0,
+            },
+        },
+        "QQQ": {
+            "symbol": "QQQ",
+            "source": "yfinance",
+            "adjustment": "auto",
+            "closes": {
+                "2024-01-01": 200.0,
+                "2024-01-02": 201.0,
+            },
+        },
+    }
+    writes: dict[str, dict] = {}
+
+    class DummyPath:
+        def __init__(self, symbol: str) -> None:
+            self.symbol = symbol
+
+        def exists(self) -> bool:
+            return self.symbol in cached
+
+        @property
+        def name(self) -> str:
+            return f"{self.symbol}_hash.json"
+
+        def with_name(self, _name: str):
+            return self
+
+    def fake_cache_path(_name, payload):
+        return DummyPath(payload["symbol"])
+
+    def fake_fetch_symbols(symbols, **_kwargs):
+        assert symbols == ["SPY", "QQQ"]
+        fetched = {
+            "SPY": pd.Series(
+                [99.0, 100.0, 101.0, 102.0],
+                index=pd.to_datetime(
+                    ["2023-12-29", "2024-01-01", "2024-01-02", "2024-01-03"]
+                ),
+            ),
+            "QQQ": pd.Series(
+                [199.0, 200.0, 201.0, 202.0],
+                index=pd.to_datetime(
+                    ["2023-12-29", "2024-01-01", "2024-01-02", "2024-01-03"]
+                ),
+            ),
+        }
+        on_success = _kwargs.get("on_success")
+        if on_success is not None:
+            for symbol, series in fetched.items():
+                on_success(symbol, series)
+        return fetched
+
+    monkeypatch.setattr(yfinance_data, "cache_path", fake_cache_path)
+    monkeypatch.setattr(
+        yfinance_data,
+        "read_cache",
+        lambda path: cached[path.symbol],
+    )
+    monkeypatch.setattr(
+        yfinance_data,
+        "write_cache",
+        lambda path, payload: writes.__setitem__(path.symbol, payload),
+    )
+    monkeypatch.setattr(yfinance_data, "_fetch_symbols", fake_fetch_symbols)
+    monkeypatch.setattr(
+        yfinance_data,
+        "_fetch_symbols_since",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("tail refresh should not run for short cache")
+        ),
+    )
+
+    closes = yfinance_data.fetch_closes(
+        ["SPY", "QQQ"],
+        min_history_days=4,
+        use_cache=True,
+        refresh_cache=True,
+    )
+
+    assert closes == {
+        "SPY": [99.0, 100.0, 101.0, 102.0],
+        "QQQ": [199.0, 200.0, 201.0, 202.0],
+    }
+    assert writes["SPY"] == {
+        "symbol": "SPY",
+        "source": "yfinance",
+        "adjustment": "auto",
+        "closes": {
+            "2023-12-29": 99.0,
+            "2024-01-01": 100.0,
+            "2024-01-02": 101.0,
+            "2024-01-03": 102.0,
+        },
+    }
+    assert writes["QQQ"] == {
+        "symbol": "QQQ",
+        "source": "yfinance",
+        "adjustment": "auto",
+        "closes": {
+            "2023-12-29": 199.0,
+            "2024-01-01": 200.0,
+            "2024-01-02": 201.0,
+            "2024-01-03": 202.0,
+        },
+    }
+
+
+def test_fetch_closes_refresh_fetches_only_missing_tail_for_sufficient_v2_cache(
     monkeypatch,
 ) -> None:
     cached = {
@@ -286,6 +405,7 @@ def test_fetch_closes_refresh_fetches_only_missing_tail_for_v2_cache(
 
     closes = yfinance_data.fetch_closes(
         ["SPY", "QQQ"],
+        min_history_days=2,
         use_cache=True,
         refresh_cache=True,
     )
@@ -294,26 +414,63 @@ def test_fetch_closes_refresh_fetches_only_missing_tail_for_v2_cache(
         "SPY": [100.0, 101.0, 102.0],
         "QQQ": [200.0, 201.0, 202.0],
     }
-    assert writes["SPY"] == {
-        "symbol": "SPY",
-        "source": "yfinance",
-        "adjustment": "auto",
-        "closes": {
-            "2024-01-01": 100.0,
-            "2024-01-02": 101.0,
-            "2024-01-03": 102.0,
+    assert writes["SPY"]["closes"]["2024-01-03"] == 102.0
+    assert writes["QQQ"]["closes"]["2024-01-03"] == 202.0
+
+
+def test_fetch_closes_min_history_filters_before_common_alignment(monkeypatch) -> None:
+    cached = {
+        "OLD": {
+            "symbol": "OLD",
+            "source": "yfinance",
+            "adjustment": "auto",
+            "closes": {
+                "2024-01-01": 100.0,
+                "2024-01-02": 101.0,
+                "2024-01-03": 102.0,
+                "2024-01-04": 103.0,
+            },
+        },
+        "NEW": {
+            "symbol": "NEW",
+            "source": "yfinance",
+            "adjustment": "auto",
+            "closes": {
+                "2024-01-03": 50.0,
+                "2024-01-04": 51.0,
+            },
         },
     }
-    assert writes["QQQ"] == {
-        "symbol": "QQQ",
-        "source": "yfinance",
-        "adjustment": "auto",
-        "closes": {
-            "2024-01-01": 200.0,
-            "2024-01-02": 201.0,
-            "2024-01-03": 202.0,
-        },
-    }
+
+    class DummyPath:
+        def __init__(self, symbol: str) -> None:
+            self.symbol = symbol
+
+        def exists(self) -> bool:
+            return self.symbol in cached
+
+        @property
+        def name(self) -> str:
+            return f"{self.symbol}_hash.json"
+
+        def with_name(self, _name: str):
+            return self
+
+    monkeypatch.setattr(
+        yfinance_data,
+        "cache_path",
+        lambda _name, payload: DummyPath(payload["symbol"]),
+    )
+    monkeypatch.setattr(yfinance_data, "read_cache", lambda path: cached[path.symbol])
+
+    closes = yfinance_data.fetch_closes(
+        ["OLD", "NEW"],
+        min_history_days=4,
+        use_cache=True,
+        offline=True,
+    )
+
+    assert closes == {"OLD": [100.0, 101.0, 102.0, 103.0]}
 
 
 def test_fetch_closes_use_cache_fetches_only_missing_v2_symbols(monkeypatch) -> None:

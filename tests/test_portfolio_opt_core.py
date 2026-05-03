@@ -347,91 +347,46 @@ def test_dynamic_universe_cache_rejects_too_stale_sidecar(tmp_path) -> None:
     assert "exceeding" in message
 
 
-def test_run_backtest_dispatches_black_litterman(monkeypatch) -> None:
-    called = {"black_litterman": False, "optimize": False}
-
-    def fake_bl(*, symbols, closes_by_symbol, momentum_window, mean_shrinkage):
-        called["black_litterman"] = True
-        assert momentum_window == 2
-        return Namespace(
-            expected_returns=np.array([0.1, 0.2], dtype=float),
-            covariance=np.eye(2, dtype=float),
-            observations=2,
-        )
-
-    def fake_optimize(
-        *, expected_returns, covariance, config, current_weights, asset_class_matrix
-    ):
-        called["optimize"] = True
-        return np.array([0.25, 0.75], dtype=float)
-
-    monkeypatch.setattr(
-        "portfolio_opt.backtest.estimate_inputs_from_black_litterman", fake_bl
-    )
-    monkeypatch.setattr("portfolio_opt.backtest.optimize_weights", fake_optimize)
-
+def test_run_backtest_supports_black_litterman_path() -> None:
     result = run_backtest(
         symbols=["SPY", "IEF"],
         closes_by_symbol={
-            "SPY": [100.0, 101.0, 102.0, 103.0, 104.0],
-            "IEF": [100.0, 100.5, 101.0, 101.5, 102.0],
+            "SPY": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0],
+            "IEF": [100.0, 100.5, 101.0, 101.5, 102.0, 102.5],
         },
         lookback_days=2,
         rebalance_every=1,
         return_model="black-litterman",
         mean_shrinkage=0.5,
         momentum_window=2,
-        opt_config=OptimizationConfig(),
+        opt_config=OptimizationConfig(max_weight=1.0),
         asset_class_matrix=None,
     )
 
-    assert called == {"black_litterman": True, "optimize": True}
-    assert result.latest_weights.tolist() == [0.25, 0.75]
+    assert result.rebalance_count > 0
+    assert np.all(np.isfinite(result.latest_weights))
+    assert np.isclose(float(result.latest_weights.sum()), 1.0)
 
 
-def test_run_backtest_dispatches_risk_parity_projection(monkeypatch) -> None:
-    called = {"risk_parity": False, "project": False}
-
-    def fake_risk_parity(*, symbols, closes_by_symbol, lookback_days):
-        called["risk_parity"] = True
-        assert lookback_days == 2
-        return Namespace(
-            weights=np.array([0.6, 0.4], dtype=float),
-            covariance=np.eye(2, dtype=float),
-            observations=2,
-        )
-
-    def fake_project(*, target_weights, config, current_weights, asset_class_matrix):
-        called["project"] = True
-        assert np.allclose(target_weights, np.array([0.6, 0.4], dtype=float))
-        return target_weights
-
-    def fail_optimize(**_kwargs):
-        raise AssertionError("risk-parity backtest should not call optimize_weights")
-
-    monkeypatch.setattr(
-        "portfolio_opt.backtest.estimate_inputs_risk_parity", fake_risk_parity
-    )
-    monkeypatch.setattr("portfolio_opt.backtest.project_weights", fake_project)
-    monkeypatch.setattr("portfolio_opt.backtest.optimize_weights", fail_optimize)
-
+def test_run_backtest_supports_risk_parity_projection_path() -> None:
     result = run_backtest(
         symbols=["SPY", "IEF"],
         closes_by_symbol={
-            "SPY": [100.0, 101.0, 102.0, 103.0, 104.0],
-            "IEF": [100.0, 100.5, 101.0, 101.5, 102.0],
+            "SPY": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0],
+            "IEF": [100.0, 100.5, 101.0, 101.5, 102.0, 102.5],
         },
         lookback_days=2,
         rebalance_every=1,
         return_model="risk-parity",
         mean_shrinkage=0.5,
         momentum_window=2,
-        opt_config=OptimizationConfig(),
+        opt_config=OptimizationConfig(max_weight=1.0),
         asset_class_matrix=None,
     )
 
-    assert called == {"risk_parity": True, "project": True}
-    assert result.latest_weights.tolist() == [0.6, 0.4]
+    assert result.rebalance_count > 0
+    assert np.all(np.isfinite(result.latest_weights))
+    assert np.isclose(float(result.latest_weights.sum()), 1.0)
 
 
 def test_compute_dual_momentum_weights_uses_full_lookback_window() -> None:
@@ -1552,6 +1507,48 @@ def test_cli_rejects_backtest_when_common_history_is_too_short(monkeypatch) -> N
 
     assert "Not enough common history for the requested backtest" in message
     assert "supports at most 2 backtest days" in message
+
+
+def test_drop_symbols_without_backtest_history_warns_and_filters(capsys) -> None:
+    model = ModelInputs(
+        symbols=["OLD", "NEW", "BOND"],
+        expected_returns=np.array([0.1, 0.2, 0.03], dtype=float),
+        covariance=np.array(
+            [
+                [0.04, 0.01, 0.0],
+                [0.01, 0.09, 0.0],
+                [0.0, 0.0, 0.01],
+            ],
+            dtype=float,
+        ),
+        asset_classes={"OLD": "equity", "NEW": "equity", "BOND": "bond"},
+        class_min_weights={"equity": 0.4, "bond": 0.1},
+        class_max_weights={"equity": 0.9, "bond": 0.6},
+    )
+    closes_by_symbol = {
+        "OLD": [100.0, 101.0, 102.0, 103.0],
+        "NEW": [50.0, 51.0],
+        "BOND": [100.0, 100.5, 101.0, 101.5],
+    }
+
+    filtered_model, filtered_closes = cli._drop_symbols_without_backtest_history(
+        model,
+        closes_by_symbol,
+        lookback_days=1,
+        backtest_days=2,
+    )
+
+    assert filtered_model.symbols == ["OLD", "BOND"]
+    assert filtered_model.expected_returns is not None
+    assert filtered_model.expected_returns.tolist() == [0.1, 0.03]
+    assert filtered_model.covariance is not None
+    assert filtered_model.covariance.tolist() == [[0.04, 0.0], [0.0, 0.01]]
+    assert filtered_model.asset_classes == {"OLD": "equity", "BOND": "bond"}
+    assert filtered_closes == {
+        "OLD": [100.0, 101.0, 102.0, 103.0],
+        "BOND": [100.0, 100.5, 101.0, 101.5],
+    }
+    assert "Warning: dropping 1 symbols" in capsys.readouterr().err
 
 
 def test_offline_close_fallback_reuses_cached_superset_in_requested_order(

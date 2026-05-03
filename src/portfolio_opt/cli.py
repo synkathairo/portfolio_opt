@@ -620,6 +620,99 @@ def _validate_backtest_history(
     )
 
 
+def _drop_symbols_without_backtest_history(
+    model: ModelInputs,
+    closes_by_symbol: dict[str, list[float]],
+    *,
+    lookback_days: int,
+    backtest_days: int,
+) -> tuple[ModelInputs, dict[str, list[float]]]:
+    required_history_days = lookback_days + backtest_days + 1
+    kept_symbols = [
+        symbol
+        for symbol in model.symbols
+        if len(closes_by_symbol.get(symbol, [])) >= required_history_days
+    ]
+    dropped = [
+        (symbol, len(closes_by_symbol.get(symbol, [])))
+        for symbol in model.symbols
+        if symbol not in kept_symbols
+    ]
+    if not dropped:
+        return model, closes_by_symbol
+    if not kept_symbols:
+        _validate_backtest_history(
+            closes_by_symbol,
+            lookback_days=lookback_days,
+            backtest_days=backtest_days,
+        )
+
+    dropped_summary = ", ".join(
+        (
+            f"{symbol}={length}"
+            if symbol in closes_by_symbol
+            else f"{symbol}<{required_history_days}"
+        )
+        for symbol, length in dropped[:10]
+    )
+    suffix = "..." if len(dropped) > 10 else ""
+    print(
+        "Warning: dropping "
+        f"{len(dropped)} symbols without enough history for this backtest "
+        f"(need {required_history_days} prices): {dropped_summary}{suffix}",
+        file=sys.stderr,
+    )
+
+    kept_index = [model.symbols.index(symbol) for symbol in kept_symbols]
+    expected_returns = (
+        model.expected_returns[kept_index]
+        if model.expected_returns is not None
+        else None
+    )
+    covariance = (
+        model.covariance[np.ix_(kept_index, kept_index)]
+        if model.covariance is not None
+        else None
+    )
+    asset_classes = {
+        symbol: asset_class
+        for symbol, asset_class in model.asset_classes.items()
+        if symbol in kept_symbols
+    }
+    available_classes = set(asset_classes.values())
+    class_min_weights = {
+        name: weight
+        for name, weight in model.class_min_weights.items()
+        if name in available_classes
+    }
+    class_max_weights = {
+        name: weight
+        for name, weight in model.class_max_weights.items()
+        if name in available_classes
+    }
+    dropped_class_constraints = sorted(
+        (set(model.class_min_weights) | set(model.class_max_weights))
+        - (set(class_min_weights) | set(class_max_weights))
+    )
+    if dropped_class_constraints:
+        print(
+            "Warning: dropping class constraints with no remaining symbols: "
+            f"{', '.join(dropped_class_constraints)}",
+            file=sys.stderr,
+        )
+
+    filtered_model = ModelInputs(
+        symbols=kept_symbols,
+        expected_returns=expected_returns,
+        covariance=covariance,
+        asset_classes=asset_classes,
+        class_min_weights=class_min_weights,
+        class_max_weights=class_max_weights,
+    )
+    filtered_closes = {symbol: closes_by_symbol[symbol] for symbol in kept_symbols}
+    return filtered_model, filtered_closes
+
+
 def _json_key(value: str) -> str:
     return "".join(char.lower() if char.isalnum() else "_" for char in value).strip("_")
 
@@ -1219,6 +1312,35 @@ def main() -> None:
         closes_by_symbol = close_history.closes_by_symbol
         closes_for_benchmarks = close_history.benchmark_closes_by_symbol
         symbols_for_benchmarks = close_history.benchmark_symbols_universe
+        model, closes_by_symbol = _drop_symbols_without_backtest_history(
+            model,
+            closes_by_symbol,
+            lookback_days=args.lookback_days,
+            backtest_days=args.backtest_days,
+        )
+        opt_config = OptimizationConfig(
+            risk_aversion=args.risk_aversion,
+            min_weight=args.min_weight,
+            max_weight=args.max_weight,
+            rebalance_threshold=args.rebalance_threshold,
+            turnover_penalty=args.turnover_penalty,
+            force_full_investment=not args.allow_cash,
+            min_cash_weight=args.min_cash_weight,
+            max_turnover=args.max_turnover,
+            min_invested_weight=args.min_invested_weight,
+            class_min_weights=model.class_min_weights,
+            class_max_weights=model.class_max_weights,
+        )
+        constrained_class_names = list(model.class_min_weights) + [
+            name
+            for name in model.class_max_weights
+            if name not in model.class_min_weights
+        ]
+        asset_class_matrix = build_asset_class_matrix(
+            symbols=model.symbols,
+            asset_classes=model.asset_classes,
+            class_names=constrained_class_names,
+        )
         _validate_backtest_history(
             closes_by_symbol,
             lookback_days=args.lookback_days,

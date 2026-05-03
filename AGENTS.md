@@ -80,6 +80,29 @@ uvx ruff format
 
 **Before committing code changes, always run `uvx ty check`, `uvx ruff check`, and `uvx ruff format --check`.**
 
+Optional `mypyc` builds:
+
+```bash
+uv build --wheel
+uv pip install --force-reinstall dist/portfolio_opt-*.whl
+```
+
+Package wheel builds compile selected hot-path modules with `mypyc`. The build
+outputs a platform-specific wheel under `dist/` instead of writing compiled
+extensions into `src/`. Install that wheel to run the compiled package.
+
+For a local editable benchmark where `uv run portfolio-opt` should immediately
+import compiled modules, use:
+
+```bash
+uv run python setup.py build_ext --inplace
+uv run python -c "import portfolio_opt.backtest as b; print(b.__file__)"
+```
+
+If compiled `.so` files are present under `src/`, Python imports them before
+the corresponding `.py` files. Rebuild or remove those `.so` files after edits
+to compiled modules to avoid testing stale code.
+
 Also verify the plotter by piping a test backtest into it when changes touch:
 
 - `src/portfolio_opt/cli.py`

@@ -114,6 +114,7 @@ def _fetch_single_symbol_from(
 def fetch_closes(
     symbols: list[str],
     period: str = "max",
+    min_history_days: int | None = None,
     retries: int = 3,
     retry_delay: float = 1.0,
     max_workers: int = 10,
@@ -130,6 +131,9 @@ def fetch_closes(
         Ticker symbols (e.g. ``["SPY", "QQQ", "GLD"]``).
     period : str
         yfinance period string — ``"max"``, ``"10y"``, ``"5y"``, etc.
+    min_history_days : int | None
+        Minimum cached rows needed per symbol before refresh may use a tail-only
+        request. Shorter caches are backfilled with a full-period request.
     retries : int
         Number of retry attempts per symbol on transient failures.
     retry_delay : float
@@ -159,6 +163,7 @@ def fetch_closes(
         incremental = _incremental_fetch_closes(
             symbols=symbols,
             period=period,
+            min_history_days=min_history_days,
             retries=retries,
             retry_delay=retry_delay,
             max_workers=max_workers,
@@ -195,8 +200,13 @@ def fetch_closes(
         symbol_delay=symbol_delay,
     )
 
+    align_symbols = _symbols_with_min_history(
+        symbols,
+        closes_by_symbol,
+        min_history_days=min_history_days,
+    )
     close_frame = pd.concat(
-        [closes_by_symbol[symbol].rename(symbol) for symbol in symbols],
+        [closes_by_symbol[symbol].rename(symbol) for symbol in align_symbols],
         axis=1,
         join="inner",
     ).dropna(how="any")
@@ -210,7 +220,7 @@ def fetch_closes(
 
     aligned = {
         symbol: [float(value) for value in close_frame[symbol].to_numpy()]
-        for symbol in symbols
+        for symbol in align_symbols
     }
     if use_cache or refresh_cache:
         write_cache(path, aligned)
@@ -221,6 +231,7 @@ def _incremental_fetch_closes(
     *,
     symbols: list[str],
     period: str,
+    min_history_days: int | None,
     retries: int,
     retry_delay: float,
     max_workers: int,
@@ -242,9 +253,13 @@ def _incremental_fetch_closes(
         cached_by_symbol[symbol] = series
 
     if offline:
-        if missing_symbols:
+        if missing_symbols and min_history_days is None:
             return None
-        return _align_close_series(symbols, cached_by_symbol)
+        return _align_close_series(
+            symbols,
+            cached_by_symbol,
+            min_history_days=min_history_days,
+        )
 
     if not refresh_cache:
         if missing_symbols:
@@ -268,7 +283,20 @@ def _incremental_fetch_closes(
             )
             if any(symbol not in cached_by_symbol for symbol in symbols):
                 return None
-        return _align_close_series(symbols, cached_by_symbol)
+        return _align_close_series(
+            symbols,
+            cached_by_symbol,
+            min_history_days=min_history_days,
+        )
+
+    def cache_full_symbol(symbol: str, series: pd.Series) -> None:
+        if series.empty:
+            return
+        cached_by_symbol[symbol] = series
+        write_cache(
+            _symbol_closes_cache_path(symbol),
+            _series_to_cached_rows(symbol, series),
+        )
 
     def cache_merged_symbol(symbol: str, series: pd.Series) -> None:
         if series.empty and symbol in cached_by_symbol:
@@ -280,37 +308,52 @@ def _incremental_fetch_closes(
             _series_to_cached_rows(symbol, merged),
         )
 
+    full_refresh_symbols = list(missing_symbols)
+    if min_history_days is not None:
+        full_refresh_symbols.extend(
+            symbol
+            for symbol, series in cached_by_symbol.items()
+            if len(series) < min_history_days
+        )
+    full_refresh_symbols = list(dict.fromkeys(full_refresh_symbols))
+
     _fetch_symbols(
-        missing_symbols,
+        full_refresh_symbols,
         period=period,
         retries=retries,
         retry_delay=retry_delay,
         max_workers=max_workers,
         symbol_delay=symbol_delay,
-        on_success=cache_merged_symbol,
-        progress_label="Fetching missing yfinance cache",
+        on_success=cache_full_symbol,
+        progress_label="Backfilling yfinance cache",
     )
+
     today = pd.Timestamp.today().normalize()
     starts_by_symbol: dict[str, pd.Timestamp] = {}
     for symbol, series in cached_by_symbol.items():
-        if symbol in missing_symbols or series.empty:
+        if symbol in full_refresh_symbols or series.empty:
             continue
         next_start = series.index[-1] + pd.Timedelta(days=1)
         if next_start <= today:
             starts_by_symbol[symbol] = next_start
-    _fetch_symbols_since(
-        starts_by_symbol,
-        retries=retries,
-        retry_delay=retry_delay,
-        max_workers=max_workers,
-        symbol_delay=symbol_delay,
-        on_success=cache_merged_symbol,
-        progress_label="Refreshing yfinance cache",
-    )
+    if starts_by_symbol:
+        _fetch_symbols_since(
+            starts_by_symbol,
+            retries=retries,
+            retry_delay=retry_delay,
+            max_workers=max_workers,
+            symbol_delay=symbol_delay,
+            on_success=cache_merged_symbol,
+            progress_label="Refreshing yfinance cache",
+        )
 
     if any(symbol not in cached_by_symbol for symbol in symbols):
         return None
-    return _align_close_series(symbols, cached_by_symbol)
+    return _align_close_series(
+        symbols,
+        cached_by_symbol,
+        min_history_days=min_history_days,
+    )
 
 
 def _fetch_symbols(
@@ -520,11 +563,20 @@ def _merge_close_series(
 def _align_close_series(
     symbols: list[str],
     closes_by_symbol: dict[str, pd.Series],
+    *,
+    min_history_days: int | None = None,
 ) -> dict[str, list[float]] | None:
-    if any(symbol not in closes_by_symbol for symbol in symbols):
+    align_symbols = _symbols_with_min_history(
+        symbols,
+        closes_by_symbol,
+        min_history_days=min_history_days,
+    )
+    if min_history_days is None and len(align_symbols) != len(symbols):
+        return None
+    if not align_symbols:
         return None
     close_frame = pd.concat(
-        [closes_by_symbol[symbol].rename(symbol) for symbol in symbols],
+        [closes_by_symbol[symbol].rename(symbol) for symbol in align_symbols],
         axis=1,
         join="inner",
     ).dropna(how="any")
@@ -532,5 +584,22 @@ def _align_close_series(
         return None
     return {
         symbol: [float(value) for value in close_frame[symbol].to_numpy()]
-        for symbol in symbols
+        for symbol in align_symbols
     }
+
+
+def _symbols_with_min_history(
+    symbols: list[str],
+    closes_by_symbol: dict[str, pd.Series],
+    *,
+    min_history_days: int | None,
+) -> list[str]:
+    return [
+        symbol
+        for symbol in symbols
+        if symbol in closes_by_symbol
+        and (
+            min_history_days is None
+            or len(closes_by_symbol[symbol]) >= min_history_days
+        )
+    ]
