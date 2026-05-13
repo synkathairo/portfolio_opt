@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-TRADING_DAYS_PER_YEAR = 252
+from portfolio_opt.types import TRADING_DAYS_PER_YEAR
 
 
 @dataclass(frozen=True)

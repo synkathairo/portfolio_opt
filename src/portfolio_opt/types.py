@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+TRADING_DAYS_PER_YEAR = 252
+
 
 @dataclass(frozen=True)
 class Position:

@@ -14,6 +14,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from portfolio_opt.types import TRADING_DAYS_PER_YEAR
+
 
 @dataclass(frozen=True)
 class BlackLittermanInputs:
@@ -87,6 +89,7 @@ def estimate_inputs_from_black_litterman(
     tau: float = 0.05,
     risk_aversion: float = 2.5,
     view_confidence: float = 0.5,
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
 ) -> BlackLittermanInputs:
     """Estimate expected returns and covariance using Black-Litterman.
 
@@ -112,7 +115,7 @@ def estimate_inputs_from_black_litterman(
         raise ValueError("Not enough price history for Black-Litterman estimation.")
 
     returns = price_matrix[:, 1:] / price_matrix[:, :-1] - 1.0
-    cov_252 = np.cov(returns) * 252
+    cov_252 = np.cov(returns) * trading_days_per_year
     # Add diagonal ridge
     cov_252 += 1e-8 * np.eye(len(symbols))
 
@@ -120,17 +123,14 @@ def estimate_inputs_from_black_litterman(
     effective_window = min(momentum_window, price_matrix.shape[1] - 1)
     if effective_window < 1:
         raise ValueError("Momentum window must allow at least one return observation.")
-    mom_returns = (
-        np.array(
-            [
-                price_matrix[i, -1] / price_matrix[i, -(effective_window + 1)] - 1.0
-                for i in range(len(symbols))
-            ],
-            dtype=float,
-        )
-        * 252
-        / effective_window
+    cumulative = np.array(
+        [
+            price_matrix[i, -1] / price_matrix[i, -(effective_window + 1)] - 1.0
+            for i in range(len(symbols))
+        ],
+        dtype=float,
     )
+    mom_returns = (1.0 + cumulative) ** (trading_days_per_year / effective_window) - 1.0
 
     # Apply shrinkage to views
     mom_returns = mom_returns * (1.0 - mean_shrinkage)

@@ -7,6 +7,7 @@ from setuptools import setup
 setup(
     ext_modules=mypycify(
         [
+            # "src/cvxportfolio_impl/backtest.py",
             "src/portfolio_opt/black_litterman.py",
             "src/portfolio_opt/backtest.py",
             "src/portfolio_opt/estimation.py",

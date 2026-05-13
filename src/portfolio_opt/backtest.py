@@ -10,8 +10,7 @@ from .config import OptimizationConfig
 from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
 from .optimizer import optimize_basket_weights, optimize_weights, project_weights
 from .risk_parity import estimate_inputs_risk_parity
-
-TRADING_DAYS_PER_YEAR = 252
+from .types import TRADING_DAYS_PER_YEAR
 
 
 @dataclass(frozen=True)
@@ -704,6 +703,7 @@ def run_backtest(
                     closes_by_symbol=window_closes,
                     momentum_window=momentum_window,
                     mean_shrinkage=mean_shrinkage,
+                    trading_days_per_year=trading_days_per_year,
                 )
                 target_weights = optimize_weights(
                     expected_returns=black_litterman_inputs.expected_returns,
@@ -843,6 +843,32 @@ def run_dual_momentum_backtest(
     asset_peak_price: np.ndarray | None = None
 
     for step in range(lookback_days, returns.shape[1]):
+        # Trailing stop-loss: evaluate against pre-rebalance weights so stops
+        # fire before new signals can re-enter a breached position on the same day.
+        if trailing_stop is not None:
+            if asset_peak_price is None:
+                asset_peak_price = np.zeros(len(symbols), dtype=float)
+            for i in range(len(symbols)):
+                if weights[i] > 0 and asset_peak_price[i] <= 0.0:
+                    asset_peak_price[i] = price_matrix[i, step]
+                elif weights[i] <= 0.0:
+                    asset_peak_price[i] = 0.0
+            # Update peaks for held positions
+            for i in range(len(symbols)):
+                if weights[i] > 0:
+                    asset_peak_price[i] = max(
+                        asset_peak_price[i], price_matrix[i, step]
+                    )
+            # Check for stop breaches and flatten
+            for i in range(len(symbols)):
+                if weights[i] > 0 and asset_peak_price[i] > 0:
+                    drawdown_from_peak = (
+                        asset_peak_price[i] - price_matrix[i, step]
+                    ) / asset_peak_price[i]
+                    if drawdown_from_peak > trailing_stop:
+                        weights[i] = 0.0
+                        asset_peak_price[i] = 0.0  # reset until re-entered
+
         if (step - lookback_days) % rebalance_every == 0:
             trailing_returns = (
                 price_matrix[:, step] / price_matrix[:, step - lookback_days] - 1.0
@@ -873,31 +899,6 @@ def run_dual_momentum_backtest(
             turnovers.append(float(np.abs(target_weights - previous_weights).sum()))
             weights = target_weights
             rebalance_count += 1
-
-        # Trailing stop-loss: track peak prices since entry per asset
-        if trailing_stop is not None:
-            if asset_peak_price is None:
-                asset_peak_price = np.zeros(len(symbols), dtype=float)
-            for i in range(len(symbols)):
-                if weights[i] > 0 and asset_peak_price[i] <= 0.0:
-                    asset_peak_price[i] = price_matrix[i, step]
-                elif weights[i] <= 0.0:
-                    asset_peak_price[i] = 0.0
-            # Update peaks for held positions
-            for i in range(len(symbols)):
-                if weights[i] > 0:
-                    asset_peak_price[i] = max(
-                        asset_peak_price[i], price_matrix[i, step]
-                    )
-            # Check for stop breaches and flatten
-            for i in range(len(symbols)):
-                if weights[i] > 0 and asset_peak_price[i] > 0:
-                    drawdown_from_peak = (
-                        asset_peak_price[i] - price_matrix[i, step]
-                    ) / asset_peak_price[i]
-                    if drawdown_from_peak > trailing_stop:
-                        weights[i] = 0.0
-                        asset_peak_price[i] = 0.0  # reset until re-entered
 
         period_return = float(np.dot(weights, returns[:, step]))
         portfolio_returns.append(period_return)

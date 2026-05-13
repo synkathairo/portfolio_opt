@@ -9,7 +9,7 @@ A tactical portfolio optimizer with various strategy paths that can rebalance an
 
 It can also backtest against historical data (primarily [yfinance](https://pypi.org/project/yfinance/) data, but other data sources can be manually uploaded via csv), and output various metrics of performance.
 
-(**AI Disclosure**: some of the code in this repo was generated using the aid of coding tools such as Qwen Code and Codex)
+(**AI Disclosure**: some of the code in this repo was generated using the aid of coding tools such as Claude, Qwen Code and Codex)
 
 ## Usage
 Run commands through `uv run`:
