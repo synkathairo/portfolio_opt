@@ -362,10 +362,10 @@ class AlpacaClient:
         missing_symbols: list[str] = []
 
         for symbol in symbols:
-            path = self._daily_closes_v2_cache_path(symbol)
+            path = self._closes_cache_path(symbol)
             if path.exists():
                 payload = read_cache(path)
-                rows = self._normalize_daily_bar_rows(payload)
+                rows = self._read_closes_cache(payload)
                 if rows:
                     cached_rows[symbol] = rows
                     continue
@@ -435,13 +435,13 @@ class AlpacaClient:
                 if merged:
                     cached_rows[symbol] = merged
                     write_cache(
-                        self._daily_closes_v2_cache_path(symbol),
-                        self._daily_closes_v2_payload(symbol, merged),
+                        self._closes_cache_path(symbol),
+                        self._closes_cache_payload(symbol, merged),
                     )
 
         return self._daily_close_rows_to_close_map(cached_rows, symbols, lookback_days)
 
-    def _daily_closes_v2_cache_path(self, symbol: str) -> Path:
+    def _closes_cache_path(self, symbol: str) -> Path:
         safe_symbol = "".join(
             char if char.isalnum() else "_" for char in symbol.upper()
         )
@@ -458,7 +458,7 @@ class AlpacaClient:
             f"daily_closes_v2_{safe_symbol}_{path.name.rsplit('_', 1)[-1]}"
         )
 
-    def _daily_closes_v2_payload(
+    def _closes_cache_payload(
         self,
         symbol: str,
         closes: dict[str, float],
@@ -529,13 +529,11 @@ class AlpacaClient:
             return timestamp.date().isoformat()
         return str(timestamp)[:10]
 
-    def _normalize_daily_bar_rows(self, payload: Any) -> dict[str, float]:
+    def _read_closes_cache(self, payload: Any) -> dict[str, float]:
         if isinstance(payload, dict):
             closes = payload.get("closes")
             if isinstance(closes, dict):
                 return {str(date): float(close) for date, close in closes.items()}
-        if isinstance(payload, list):
-            return self._merge_daily_bar_rows({}, payload, lookback_days=len(payload))
         return {}
 
     def _merge_daily_bar_rows(

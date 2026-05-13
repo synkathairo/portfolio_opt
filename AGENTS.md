@@ -139,6 +139,8 @@ Mock Alpaca API calls instead of hitting live endpoints in unit tests.
 
 Current history uses short, simple commit subjects such as `single period opt`. Keep commit titles concise and descriptive. Prefer one logical change per commit.
 
+Bump `version` in `pyproject.toml` with each meaningful change using semver: patch (`0.1.x`) for bugfixes, minor (`0.x.0`) for new features or behavior changes, major (`x.0.0`) for breaking changes.
+
 Pull requests should include:
 
 - a short summary of behavior changes

@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "portfolio-opt"
-version = "0.1.0"
+version = "0.2.0"
 description = "Minimal cvxpy-based portfolio optimizer with Alpaca integration"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -47,8 +47,13 @@ python = ".venv/bin/python"
 [tool.ty.src]
 include = ["src"]
 
+# [[tool.mypy.overrides]]
+# module = ["cvxportfolio", "cvxportfolio.*"]
+# follow_untyped_imports = true
+
 [dependency-groups]
 dev = [
     "mypy>=1.20",
+    "pandas-stubs>=3.0.0.260204",
     "pytest>=9.0.2",
 ]

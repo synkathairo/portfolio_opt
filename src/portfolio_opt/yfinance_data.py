@@ -174,23 +174,6 @@ def fetch_closes(
         if incremental is not None:
             return incremental
 
-    path = cache_path(
-        "yfinance_closes",
-        {"kind": "yfinance_closes", "symbols": symbols, "period": period},
-    )
-    if offline:
-        if not path.exists():
-            raise RuntimeError(f"Offline mode requested but cache is missing: {path}")
-        return {
-            symbol: [float(value) for value in values]
-            for symbol, values in read_cache(path).items()
-        }
-    if use_cache and path.exists() and not refresh_cache:
-        return {
-            symbol: [float(value) for value in values]
-            for symbol, values in read_cache(path).items()
-        }
-
     closes_by_symbol = _fetch_symbols(
         symbols,
         period=period,
@@ -218,13 +201,10 @@ def fetch_closes(
             f"with {min(lengths.values())} bars."
         )
 
-    aligned = {
+    return {
         symbol: [float(value) for value in close_frame[symbol].to_numpy()]
         for symbol in align_symbols
     }
-    if use_cache or refresh_cache:
-        write_cache(path, aligned)
-    return aligned
 
 
 def _incremental_fetch_closes(
