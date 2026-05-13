@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import BrokenExecutor, ProcessPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
@@ -1255,7 +1255,7 @@ def rolling_window_comparison(
             ]
             for future in futures:
                 window_results.append(future.result())
-    except (NotImplementedError, PermissionError, OSError):
+    except (NotImplementedError, PermissionError, BlockingIOError, BrokenExecutor):
         for wc in window_args:
             window_results.append(
                 _run_single_window(

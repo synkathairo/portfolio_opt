@@ -5,7 +5,7 @@ import bisect
 import itertools
 import json
 import sys
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import BrokenExecutor, ProcessPoolExecutor
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -1401,7 +1401,12 @@ def main() -> None:
                         for risk_aversion, min_cash_weight, min_invested_weight, turnover_penalty, momentum_window in grid_params
                     ]
                     outcomes = [future.result() for future in futures]
-            except (NotImplementedError, PermissionError, OSError):
+            except (
+                NotImplementedError,
+                PermissionError,
+                BlockingIOError,
+                BrokenExecutor,
+            ):
                 outcomes = [
                     _run_sweep_point(
                         symbols=model.symbols,
