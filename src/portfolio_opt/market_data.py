@@ -89,22 +89,24 @@ def load_close_history(
             benchmark_symbols_universe=requested_symbols,
         )
 
-    if benchmark_symbols:
+    index_benchmarks = [s for s in benchmark_symbols if s.startswith("^")]
+    if index_benchmarks:
         raise ValueError(
-            "--benchmark is only supported with --data-source yfinance, csv, "
-            "csv+yfinance, or stockanalysis."
+            f"Alpaca does not support index symbols as benchmarks: {', '.join(index_benchmarks)}. "
+            "Use --data-source yfinance to benchmark against indices."
         )
 
     client = alpaca if alpaca is not None else AlpacaClient(AlpacaConfig.from_env())
-    closes_by_symbol = client.get_daily_closes_for_period(
-        symbols,
+    requested_symbols = list(dict.fromkeys([*symbols, *benchmark_symbols]))
+    all_closes = client.get_daily_closes_for_period(
+        requested_symbols,
         total_days,
         use_cache=use_cache,
         refresh_cache=refresh_cache,
         offline=offline,
     )
     return CloseHistory(
-        closes_by_symbol=closes_by_symbol,
-        benchmark_closes_by_symbol={},
-        benchmark_symbols_universe=symbols,
+        closes_by_symbol={s: all_closes[s] for s in symbols if s in all_closes},
+        benchmark_closes_by_symbol=all_closes,
+        benchmark_symbols_universe=requested_symbols,
     )
