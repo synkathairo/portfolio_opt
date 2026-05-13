@@ -801,6 +801,38 @@ def _validate_native_engine_args(args: argparse.Namespace) -> None:
         )
 
 
+def _build_opt_config(
+    args: argparse.Namespace, model: ModelInputs
+) -> OptimizationConfig:
+    return OptimizationConfig(
+        risk_aversion=args.risk_aversion,
+        min_weight=args.min_weight,
+        max_weight=args.max_weight,
+        rebalance_threshold=args.rebalance_threshold,
+        turnover_penalty=args.turnover_penalty,
+        force_full_investment=not args.allow_cash,
+        min_cash_weight=args.min_cash_weight,
+        max_turnover=args.max_turnover,
+        min_invested_weight=args.min_invested_weight,
+        class_min_weights=model.class_min_weights,
+        class_max_weights=model.class_max_weights,
+    )
+
+
+def _build_constrained_classes(
+    model: ModelInputs,
+) -> tuple[list[str], np.ndarray]:
+    class_names = list(model.class_min_weights) + [
+        name for name in model.class_max_weights if name not in model.class_min_weights
+    ]
+    matrix = build_asset_class_matrix(
+        symbols=model.symbols,
+        asset_classes=model.asset_classes,
+        class_names=class_names,
+    )
+    return class_names, matrix
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run native portfolio rebalances/backtests or the cvxportfolio comparison engine."
@@ -1264,28 +1296,8 @@ def main() -> None:
         max_stale_dynamic_universe_days=max_stale_dynamic_universe_days,
     )
 
-    opt_config = OptimizationConfig(
-        risk_aversion=args.risk_aversion,
-        min_weight=args.min_weight,
-        max_weight=args.max_weight,
-        rebalance_threshold=args.rebalance_threshold,
-        turnover_penalty=args.turnover_penalty,
-        force_full_investment=not args.allow_cash,
-        min_cash_weight=args.min_cash_weight,
-        max_turnover=args.max_turnover,
-        min_invested_weight=args.min_invested_weight,
-        class_min_weights=model.class_min_weights,
-        class_max_weights=model.class_max_weights,
-    )
-
-    constrained_class_names = list(model.class_min_weights) + [
-        name for name in model.class_max_weights if name not in model.class_min_weights
-    ]
-    asset_class_matrix = build_asset_class_matrix(
-        symbols=model.symbols,
-        asset_classes=model.asset_classes,
-        class_names=constrained_class_names,
-    )
+    opt_config = _build_opt_config(args, model)
+    constrained_class_names, asset_class_matrix = _build_constrained_classes(model)
 
     if args.backtest_days > 0:
         total_days = args.lookback_days + args.backtest_days + 1
@@ -1318,29 +1330,8 @@ def main() -> None:
             lookback_days=args.lookback_days,
             backtest_days=args.backtest_days,
         )
-        opt_config = OptimizationConfig(
-            risk_aversion=args.risk_aversion,
-            min_weight=args.min_weight,
-            max_weight=args.max_weight,
-            rebalance_threshold=args.rebalance_threshold,
-            turnover_penalty=args.turnover_penalty,
-            force_full_investment=not args.allow_cash,
-            min_cash_weight=args.min_cash_weight,
-            max_turnover=args.max_turnover,
-            min_invested_weight=args.min_invested_weight,
-            class_min_weights=model.class_min_weights,
-            class_max_weights=model.class_max_weights,
-        )
-        constrained_class_names = list(model.class_min_weights) + [
-            name
-            for name in model.class_max_weights
-            if name not in model.class_min_weights
-        ]
-        asset_class_matrix = build_asset_class_matrix(
-            symbols=model.symbols,
-            asset_classes=model.asset_classes,
-            class_names=constrained_class_names,
-        )
+        opt_config = _build_opt_config(args, model)
+        constrained_class_names, asset_class_matrix = _build_constrained_classes(model)
         _validate_backtest_history(
             closes_by_symbol,
             lookback_days=args.lookback_days,
