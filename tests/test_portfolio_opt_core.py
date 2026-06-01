@@ -1947,9 +1947,7 @@ def test_daily_closes_refresh_appends_only_missing_bars(monkeypatch, tmp_path) -
         calls.append((symbols, start, limit))
         return {"SPY": [{"timestamp": "2026-01-05", "close": 103.0}]}
 
-    monkeypatch.setattr(
-        client, "_closes_cache_path", lambda _symbol: cache_file
-    )
+    monkeypatch.setattr(client, "_closes_cache_path", lambda _symbol: cache_file)
     monkeypatch.setattr(client, "_daily_bar_rows_payload", fake_daily_bar_rows_payload)
     monkeypatch.setattr(
         "portfolio_opt.alpaca_interface.datetime",

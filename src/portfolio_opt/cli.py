@@ -10,7 +10,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import exchange_calendars as xcals
 import numpy as np
@@ -156,22 +156,21 @@ def _calculate_trading_date_offset(trading_days: int) -> datetime:
     cal = xcals.get_calendar("XNYS")
     sessions = cal.sessions
 
-    # Convert index to list of datetime objects for easy bisect
-    session_dates: list[datetime] = sessions.tolist()
-    # exchange_calendars returns naive timestamps (no timezone)
+    # Convert exchange_calendars timestamps to naive datetime objects for bisect.
+    session_dates = [session.to_pydatetime() for session in sessions]
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # Find the index of the last trading day on or before today
-    idx = bisect.bisect_right(session_dates, today)
-    if idx == len(session_dates) or session_dates[idx] > today:
-        idx -= 1
+    # Find the index of the last trading day on or before today.
+    idx = bisect.bisect_right(session_dates, today) - 1
+    if idx < 0:
+        raise ValueError("Calendar has no trading sessions on or before today.")
 
     cutoff_idx = idx - trading_days
     if cutoff_idx < 0:
         raise ValueError(
             f"Cannot look back {trading_days} trading days; not enough history in calendar."
         )
-    return cast(datetime, session_dates[cutoff_idx])
+    return session_dates[cutoff_idx]
 
 
 def _resolve_model_inputs(

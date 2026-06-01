@@ -9,7 +9,7 @@ today = str(date.today())
 
 # MODEL_NAME = "Nasdaq 100"
 # MODEL_NAME = "Nasdaq100+SP500+sectors"
-# MODEL_NAME = "nasdaq100_sp500_sector_universe_b2016filtered"
+MODEL_NAME = "nasdaq100_sp500_sector_universe_b2016filtered"
 # MODEL_NAME = "yfiua_hsi_202307_current_valid_universe"
 # MODEL_NAME = "yfiua_ftse100_202307_current_valid_universe"
 # MODEL_NAME = "yfiua_csi300_202307_current_valid_universe"
@@ -18,7 +18,7 @@ today = str(date.today())
 # MODEL_NAME = "yfiua_csi_combined_202402_current_valid_with_benchmarks_universe"
 # MODEL_NAME = "yfiua_sse_202307_current_valid_universe"
 # MODEL_NAME = "nikkei225_current_backtest_valid_universe"
-MODEL_NAME = "sector_universe_pre2016_nomax"
+# MODEL_NAME = "sector_universe_pre2016_nomax"
 # MODEL_NAME = "sector_universe"
 # MODEL_NAME = "nasdaq100_universe"
 # MODEL = "examples/nasdaq100_universe.json"
@@ -26,9 +26,15 @@ MODEL_NAME = "sector_universe_pre2016_nomax"
 MODEL = f"examples/{MODEL_NAME}.json"
 # LOOKBACK_DAYS = 60
 LOOKBACK_DAYS = 252
+# LOOKBACK_DAYS = 126
+# LOOKBACK_DAYS = 21
 # BACKTEST_DAYS = 252*9
-# BACKTEST_DAYS = 252*15
-BACKTEST_DAYS = 4454
+# BACKTEST_DAYS = 252 * 15
+# BACKTEST_DAYS = 2748
+BACKTEST_DAYS = 2722
+# BACKTEST_DAYS = 4454
+# BACKTEST_DAYS = 4439
+# BACKTEST_DAYS = 4300
 # BACKTEST_DAYS = 680
 # BACKTEST_DAYS = 675
 # BACKTEST_DAYS = 470
@@ -221,6 +227,29 @@ dm_data2c = run_backtest(
     ],
 )
 
+# Run Dual Momentum Backtest (Top-5, rebalance daily)
+dm_data2d = run_backtest(
+    "Dual Momentum (Top-5 daily rebalance)",
+    [
+        "--model",
+        f"{MODEL}",
+        "--data-source",
+        f"{DATASOURCE}",
+        "--strategy",
+        "dual-momentum",
+        "--lookback-days",
+        f"{LOOKBACK_DAYS}",
+        "--backtest-days",
+        f"{BACKTEST_DAYS}",
+        "--rebalance-every",
+        "1",
+        "--top-k",
+        "5",
+        "--use-cache",
+        # , "--offline"
+    ],
+)
+
 # dm_data2cb = run_backtest(
 #     f"Dual Momentum (Top-3 daily rebalance, vol {LIMIT_VOL})",
 #     [
@@ -288,6 +317,31 @@ dm_data3a = run_backtest(
         "1",
         "--top-k",
         "2",
+        "--trailing-stop",
+        "0.15",
+        "--use-cache",
+        # , "--offline"
+    ],
+)
+
+# Run Dual Momentum Backtest (Top-5, rebalance daily), trail stop 0.15
+dm_data3b = run_backtest(
+    "Dual Momentum (Top-5 daily rebalance, trail-stop 0.15)",
+    [
+        "--model",
+        f"{MODEL}",
+        "--data-source",
+        f"{DATASOURCE}",
+        "--strategy",
+        "dual-momentum",
+        "--lookback-days",
+        f"{LOOKBACK_DAYS}",
+        "--backtest-days",
+        f"{BACKTEST_DAYS}",
+        "--rebalance-every",
+        "1",
+        "--top-k",
+        "5",
         "--trailing-stop",
         "0.15",
         "--use-cache",
@@ -376,9 +430,11 @@ strategy_results = [
     dm_data2,
     dm_data2b,
     dm_data2c,
+    dm_data2d,
     # dm_data2cb,
     dm_data3,
     dm_data3a,
+    dm_data3b,
     dm_data4,
     dm_data4b,
     dm_data_limit_volatility,
@@ -480,6 +536,7 @@ for label, curve in benchmark_norms.items():
         color=benchmark_colors[label],
     )
 
+plt.yscale("log")
 plt.title(f"{MODEL_NAME} Strategy Comparison {today}", fontsize=14)
 plt.xlabel("Trading Days", fontsize=12)
 plt.ylabel("Growth of $1", fontsize=12)
