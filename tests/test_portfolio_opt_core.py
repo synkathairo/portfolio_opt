@@ -347,6 +347,172 @@ def test_dynamic_universe_cache_rejects_too_stale_sidecar(tmp_path) -> None:
     assert "exceeding" in message
 
 
+def test_dynamic_universe_cache_allowed_uses_fresh_cache_first(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    ticker_basket = ["nasdaq100"]
+    cached = {
+        "symbols": ["AAPL"],
+        "asset_classes": {"AAPL": "Apple Inc. Common Stock"},
+    }
+    args = _base_cli_args(
+        dynamic_universe=True,
+        ticker_basket=ticker_basket,
+        dynamic_universe_cache_dir=str(tmp_path),
+        allow_stale_dynamic_universe=True,
+    )
+
+    class FakeAlpaca:
+        def get_positions(self, **_kwargs):
+            return []
+
+    cli._write_dynamic_universe_cache(
+        cached,
+        ticker_basket=ticker_basket,
+        cache_dir=tmp_path,
+    )
+    monkeypatch.setattr(
+        cli,
+        "fetch_ticker_dict",
+        lambda *, ticker_basket: (_ for _ in ()).throw(
+            AssertionError("fresh fetch should not run on cache hit")
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_calculate_trading_date_offset",
+        lambda _days: (_ for _ in ()).throw(ValueError("skip cutoff")),
+    )
+
+    model = cli._resolve_model_inputs(
+        args=args,
+        alpaca=FakeAlpaca(),
+        dynamic_universe_cache_dir=str(tmp_path),
+        allow_stale_dynamic_universe=True,
+        max_stale_dynamic_universe_days=14.0,
+    )
+
+    assert model.symbols == ["AAPL"]
+    assert model.asset_classes == cached["asset_classes"]
+
+
+def test_dynamic_universe_cache_allowed_refreshes_too_stale_cache(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    ticker_basket = ["nasdaq100"]
+    stale = {
+        "symbols": ["AAPL"],
+        "asset_classes": {"AAPL": "Apple Inc. Common Stock"},
+    }
+    fresh = {
+        "symbols": ["MSFT"],
+        "asset_classes": {"MSFT": "Microsoft Corporation"},
+    }
+    args = _base_cli_args(
+        dynamic_universe=True,
+        ticker_basket=ticker_basket,
+        dynamic_universe_cache_dir=str(tmp_path),
+        allow_stale_dynamic_universe=True,
+        max_stale_dynamic_universe_days=1.0,
+    )
+    fetch_calls: list[list[str]] = []
+
+    class FakeAlpaca:
+        def get_positions(self, **_kwargs):
+            return []
+
+    cli._write_dynamic_universe_cache(
+        stale,
+        ticker_basket=ticker_basket,
+        cache_dir=tmp_path,
+    )
+    _model_path, meta_path = cli._dynamic_universe_cache_paths(
+        ticker_basket,
+        tmp_path,
+    )
+    meta = json.loads(meta_path.read_text())
+    meta["fetched_at"] = (datetime.now(UTC) - timedelta(days=3)).isoformat()
+    meta_path.write_text(json.dumps(meta))
+
+    def fake_fetch_ticker_dict(*, ticker_basket):
+        fetch_calls.append(list(ticker_basket))
+        return fresh
+
+    monkeypatch.setattr(cli, "fetch_ticker_dict", fake_fetch_ticker_dict)
+    monkeypatch.setattr(
+        cli,
+        "_calculate_trading_date_offset",
+        lambda _days: (_ for _ in ()).throw(ValueError("skip cutoff")),
+    )
+
+    model = cli._resolve_model_inputs(
+        args=args,
+        alpaca=FakeAlpaca(),
+        dynamic_universe_cache_dir=str(tmp_path),
+        allow_stale_dynamic_universe=True,
+        max_stale_dynamic_universe_days=1.0,
+    )
+
+    assert fetch_calls == [ticker_basket]
+    assert model.symbols == ["MSFT"]
+    assert (
+        cli._read_dynamic_universe_cache(
+            ticker_basket=ticker_basket,
+            cache_dir=tmp_path,
+            max_age_days=1.0,
+        )
+        == fresh
+    )
+
+
+def test_dynamic_universe_cache_allowed_fetches_when_cache_missing(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    ticker_basket = ["nasdaq100"]
+    fresh = {
+        "symbols": ["MSFT"],
+        "asset_classes": {"MSFT": "Microsoft Corporation"},
+    }
+    args = _base_cli_args(
+        dynamic_universe=True,
+        ticker_basket=ticker_basket,
+        dynamic_universe_cache_dir=str(tmp_path),
+        allow_stale_dynamic_universe=True,
+    )
+
+    class FakeAlpaca:
+        def get_positions(self, **_kwargs):
+            return []
+
+    monkeypatch.setattr(cli, "fetch_ticker_dict", lambda *, ticker_basket: fresh)
+    monkeypatch.setattr(
+        cli,
+        "_calculate_trading_date_offset",
+        lambda _days: (_ for _ in ()).throw(ValueError("skip cutoff")),
+    )
+
+    model = cli._resolve_model_inputs(
+        args=args,
+        alpaca=FakeAlpaca(),
+        dynamic_universe_cache_dir=str(tmp_path),
+        allow_stale_dynamic_universe=True,
+        max_stale_dynamic_universe_days=14.0,
+    )
+
+    assert model.symbols == ["MSFT"]
+    assert (
+        cli._read_dynamic_universe_cache(
+            ticker_basket=ticker_basket,
+            cache_dir=tmp_path,
+            max_age_days=14.0,
+        )
+        == fresh
+    )
+
+
 def test_run_backtest_supports_black_litterman_path() -> None:
     result = run_backtest(
         symbols=["SPY", "IEF"],
