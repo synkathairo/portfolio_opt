@@ -98,6 +98,7 @@ def _base_cli_args(**overrides) -> Namespace:
         "benchmark_symbol": None,
         "benchmark_weight": 1.0,
         "linear_trade_cost": 0.0,
+        "risk_free_rate": 0.0,
         "planning_horizon": 1,
         "compare_custom": False,
         "submit": False,
@@ -750,6 +751,8 @@ def test_cli_dry_run_reports_unprotected_fractional_trailing_stop_qty(
         data_source="alpaca",
         backtest_days=0,
         rebalance_every=21,
+        linear_trade_cost=0.0,
+        risk_free_rate=0.0,
         rolling_window_days=0,
         rolling_step_days=21,
         sweep=False,
@@ -848,6 +851,8 @@ def test_cli_yfinance_backtest_does_not_require_alpaca(monkeypatch, capsys) -> N
         data_source="yfinance",
         backtest_days=3,
         rebalance_every=1,
+        linear_trade_cost=0.0,
+        risk_free_rate=0.0,
         rolling_window_days=0,
         rolling_step_days=1,
         sweep=False,
@@ -1340,7 +1345,7 @@ def test_cli_native_engine_rejects_cvxportfolio_only_flags(monkeypatch) -> None:
     args = _base_cli_args(
         backtest_engine="native",
         backtest_days=252,
-        linear_trade_cost=0.001,
+        core_symbol="SPY",
     )
 
     monkeypatch.setattr(cli, "parse_args", lambda: args)
@@ -1352,7 +1357,7 @@ def test_cli_native_engine_rejects_cvxportfolio_only_flags(monkeypatch) -> None:
     else:
         raise AssertionError("native engine should reject cvxportfolio-only flags")
 
-    assert "--linear-trade-cost" in message
+    assert "--core-symbol" in message
 
 
 def test_cli_dual_momentum_backtest_passes_vol_window(monkeypatch, capsys) -> None:
@@ -1389,6 +1394,8 @@ def test_cli_dual_momentum_backtest_passes_vol_window(monkeypatch, capsys) -> No
         data_source="yfinance",
         backtest_days=3,
         rebalance_every=1,
+        linear_trade_cost=0.0,
+        risk_free_rate=0.0,
         rolling_window_days=0,
         rolling_step_days=1,
         sweep=False,
@@ -1507,6 +1514,8 @@ def test_cli_yfinance_backtest_supports_external_benchmark(
         benchmark=["^HSI"],
         backtest_days=3,
         rebalance_every=1,
+        linear_trade_cost=0.0,
+        risk_free_rate=0.0,
         rolling_window_days=0,
         rolling_step_days=1,
         sweep=False,
@@ -1627,6 +1636,8 @@ def test_cli_rejects_backtest_when_common_history_is_too_short(monkeypatch) -> N
         data_source="yfinance",
         backtest_days=10,
         rebalance_every=1,
+        linear_trade_cost=0.0,
+        risk_free_rate=0.0,
         rolling_window_days=0,
         rolling_step_days=1,
         sweep=False,

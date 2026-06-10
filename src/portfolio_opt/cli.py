@@ -491,6 +491,8 @@ def _run_sweep_point(
     momentum_window: int,
     asset_class_matrix: np.ndarray | None,
     trading_days_per_year: int,
+    linear_trade_cost: float = 0.0,
+    risk_free_rate: float = 0.0,
 ) -> dict[str, float | int | dict[str, float]] | tuple[str, str]:
     """Run a single sweep parameter combination. Returns result or error tuple."""
     sweep_config = OptimizationConfig(
@@ -518,6 +520,8 @@ def _run_sweep_point(
             opt_config=sweep_config,
             asset_class_matrix=asset_class_matrix,
             trading_days_per_year=trading_days_per_year,
+            linear_trade_cost=linear_trade_cost,
+            risk_free_rate=risk_free_rate,
         )
     except RuntimeError as exc:
         return (
@@ -784,7 +788,6 @@ def _validate_native_engine_args(args: argparse.Namespace) -> None:
         ("max_leverage", None, "--max-leverage"),
         ("benchmark_symbol", None, "--benchmark-symbol"),
         ("benchmark_weight", 1.0, "--benchmark-weight"),
-        ("linear_trade_cost", 0.0, "--linear-trade-cost"),
         ("planning_horizon", 1, "--planning-horizon"),
         ("compare_custom", False, "--compare-custom"),
     ]
@@ -1169,11 +1172,20 @@ def parse_args() -> argparse.Namespace:
         default=1.0,
         help="[cvxportfolio] Weight assigned to --benchmark-symbol.",
     )
-    cvxportfolio_options.add_argument(
+    core_options.add_argument(
         "--linear-trade-cost",
         type=float,
         default=0.0,
-        help="[cvxportfolio] Simple proportional transaction-cost adjustment.",
+        help=(
+            "Proportional transaction cost applied to turnover at each rebalance "
+            "(e.g. 0.001 = 10 bps per unit of weight traded)."
+        ),
+    )
+    core_options.add_argument(
+        "--risk-free-rate",
+        type=float,
+        default=0.0,
+        help="Annual risk-free rate subtracted in Sortino/Sharpe ratios (e.g. 0.04).",
     )
     cvxportfolio_options.add_argument(
         "--planning-horizon",
@@ -1330,6 +1342,40 @@ def main() -> None:
             lookback_days=args.lookback_days,
             backtest_days=args.backtest_days,
         )
+        # The benchmark universe must drop the same short-history symbols, or
+        # run_fixed_weight_benchmark fails on symbols absent from the closes.
+        required_benchmark_history = args.lookback_days + args.backtest_days + 1
+        dropped_benchmark_symbols = [
+            symbol
+            for symbol in symbols_for_benchmarks
+            if len(closes_for_benchmarks.get(symbol, [])) < required_benchmark_history
+        ]
+        if dropped_benchmark_symbols:
+            symbols_for_benchmarks = [
+                symbol
+                for symbol in symbols_for_benchmarks
+                if symbol not in dropped_benchmark_symbols
+            ]
+            closes_for_benchmarks = {
+                symbol: closes_for_benchmarks[symbol]
+                for symbol in symbols_for_benchmarks
+            }
+            unavailable_benchmarks = [
+                symbol
+                for symbol in benchmark_symbols
+                if symbol in dropped_benchmark_symbols
+            ]
+            if unavailable_benchmarks:
+                print(
+                    "Warning: skipping benchmarks without enough history: "
+                    f"{', '.join(unavailable_benchmarks)}",
+                    file=sys.stderr,
+                )
+                benchmark_symbols = [
+                    symbol
+                    for symbol in benchmark_symbols
+                    if symbol not in unavailable_benchmarks
+                ]
         opt_config = _build_opt_config(args, model)
         constrained_class_names, asset_class_matrix = _build_constrained_classes(model)
         _validate_backtest_history(
@@ -1388,6 +1434,8 @@ def main() -> None:
                                 asset_class_matrix if constrained_class_names else None
                             ),
                             trading_days_per_year=trading_days_per_year,
+                            linear_trade_cost=args.linear_trade_cost,
+                            risk_free_rate=args.risk_free_rate,
                         )
                         for risk_aversion, min_cash_weight, min_invested_weight, turnover_penalty, momentum_window in grid_params
                     ]
@@ -1421,6 +1469,8 @@ def main() -> None:
                             asset_class_matrix if constrained_class_names else None
                         ),
                         trading_days_per_year=trading_days_per_year,
+                        linear_trade_cost=args.linear_trade_cost,
+                        risk_free_rate=args.risk_free_rate,
                     )
                     for risk_aversion, min_cash_weight, min_invested_weight, turnover_penalty, momentum_window in grid_params
                 ]
@@ -1478,6 +1528,8 @@ def main() -> None:
                 basket_opt=args.basket_opt,
                 basket_risk_aversion=args.basket_risk_aversion,
                 trading_days_per_year=trading_days_per_year,
+                linear_trade_cost=args.linear_trade_cost,
+                risk_free_rate=args.risk_free_rate,
             )
         elif args.strategy == "factor-momentum":
             backtest = run_factor_momentum_backtest(
@@ -1498,6 +1550,8 @@ def main() -> None:
                 basket_opt=args.basket_opt,
                 basket_risk_aversion=args.basket_risk_aversion,
                 trading_days_per_year=trading_days_per_year,
+                linear_trade_cost=args.linear_trade_cost,
+                risk_free_rate=args.risk_free_rate,
             )
         elif args.strategy == "protective-momentum":
             backtest = run_protective_momentum_backtest(
@@ -1519,6 +1573,8 @@ def main() -> None:
                 breadth_max_risky=breadth_max_risky,
                 defensive_weighting=defensive_weighting,
                 trading_days_per_year=trading_days_per_year,
+                linear_trade_cost=args.linear_trade_cost,
+                risk_free_rate=args.risk_free_rate,
             )
         else:
             backtest = run_backtest(
@@ -1534,6 +1590,8 @@ def main() -> None:
                     asset_class_matrix if constrained_class_names else None
                 ),
                 trading_days_per_year=trading_days_per_year,
+                linear_trade_cost=args.linear_trade_cost,
+                risk_free_rate=args.risk_free_rate,
             )
         latest_weights = clean_weights(backtest.latest_weights)
         rolling_comparison = None
@@ -1563,6 +1621,8 @@ def main() -> None:
                 breadth_max_risky=breadth_max_risky,
                 defensive_weighting=defensive_weighting,
                 trading_days_per_year=trading_days_per_year,
+                linear_trade_cost=args.linear_trade_cost,
+                risk_free_rate=args.risk_free_rate,
             )
         benchmark_results = {
             "spy": run_fixed_weight_benchmark(
@@ -1571,6 +1631,7 @@ def main() -> None:
                 weights_by_symbol={"SPY": 1.0},
                 start_day=args.lookback_days,
                 trading_days_per_year=trading_days_per_year,
+                risk_free_rate=args.risk_free_rate,
             ),
             "qqq": run_fixed_weight_benchmark(
                 symbols=model.symbols,
@@ -1578,6 +1639,7 @@ def main() -> None:
                 weights_by_symbol={"QQQ": 1.0},
                 start_day=args.lookback_days,
                 trading_days_per_year=trading_days_per_year,
+                risk_free_rate=args.risk_free_rate,
             ),
             "sixty_forty_spy_tlt": run_fixed_weight_benchmark(
                 symbols=model.symbols,
@@ -1585,6 +1647,7 @@ def main() -> None:
                 weights_by_symbol={"SPY": 0.6, "TLT": 0.4},
                 start_day=args.lookback_days,
                 trading_days_per_year=trading_days_per_year,
+                risk_free_rate=args.risk_free_rate,
             ),
             "equal_weight": run_fixed_weight_benchmark(
                 symbols=model.symbols,
@@ -1594,6 +1657,7 @@ def main() -> None:
                 },
                 start_day=args.lookback_days,
                 trading_days_per_year=trading_days_per_year,
+                risk_free_rate=args.risk_free_rate,
             ),
             "half_spy_half_cash": run_fixed_weight_benchmark(
                 symbols=model.symbols,
@@ -1601,6 +1665,7 @@ def main() -> None:
                 weights_by_symbol={"SPY": 0.5},
                 start_day=args.lookback_days,
                 trading_days_per_year=trading_days_per_year,
+                risk_free_rate=args.risk_free_rate,
             ),
         }
         for symbol in benchmark_symbols:
@@ -1611,6 +1676,7 @@ def main() -> None:
                 weights_by_symbol={symbol: 1.0},
                 start_day=args.lookback_days,
                 trading_days_per_year=trading_days_per_year,
+                risk_free_rate=args.risk_free_rate,
             )
         result = {
             "symbols": model.symbols,
@@ -1659,6 +1725,8 @@ def main() -> None:
                 "days": args.backtest_days,
                 "rebalance_every": args.rebalance_every,
                 "trading_days_per_year": trading_days_per_year,
+                "linear_trade_cost": args.linear_trade_cost,
+                "risk_free_rate": args.risk_free_rate,
                 "final_value": round(float(backtest.final_value), 6),
                 "total_return": round(float(backtest.total_return), 6),
                 "annualized_return": round(float(backtest.annualized_return), 6),
