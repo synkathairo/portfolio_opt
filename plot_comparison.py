@@ -156,6 +156,31 @@ dm_data = run_backtest(
     ],
 )
 
+# Run Dual Momentum Backtest (Top-5), mean variance basket, rebalance daily
+# dm_data_1b = run_backtest(
+#     "Dual Momentum (Top-5), basket-op",
+#     [
+#         "--model",
+#         f"{MODEL}",
+#         "--data-source",
+#         f"{DATASOURCE}",
+#         "--strategy",
+#         "dual-momentum",
+#         "--lookback-days",
+#         f"{LOOKBACK_DAYS}",
+#         "--backtest-days",
+#         f"{BACKTEST_DAYS}",
+#         "--rebalance-every",
+#         "1",
+#         "--top-k",
+#         "5",
+#         "--basket-opt", "mean-variance", "--basket-risk-aversion", "0.25",
+#         "--max-single-weight", "0.8",
+#         "--use-cache",
+#         # , "--offline"
+#     ],
+# )
+
 # 3. Run Dual Momentum Backtest (Top-2)
 dm_data2 = run_backtest(
     "Dual Momentum (Top-2)",
@@ -427,6 +452,7 @@ dm_data_limit_volatility = run_backtest(
 strategy_results = [
     mv_data,
     dm_data,
+    # dm_data_1b,
     dm_data2,
     dm_data2b,
     dm_data2c,

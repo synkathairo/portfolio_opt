@@ -187,30 +187,31 @@ def _resolve_model_inputs(
     ticker_basket = (
         list(args.ticker_basket) if args.ticker_basket else list(DEFAULT_TICKER_BASKET)
     )
-    try:
-        fetched = fetch_ticker_dict(ticker_basket=ticker_basket)
-        _write_dynamic_universe_cache(
-            fetched,
-            ticker_basket=ticker_basket,
-            cache_dir=dynamic_universe_cache_dir,
-        )
-    except Exception as exc:
-        if not allow_stale_dynamic_universe:
-            raise
+    if allow_stale_dynamic_universe:
         try:
             fetched = _read_dynamic_universe_cache(
                 ticker_basket=ticker_basket,
                 cache_dir=dynamic_universe_cache_dir,
                 max_age_days=max_stale_dynamic_universe_days,
             )
-        except Exception as cache_exc:
-            raise RuntimeError(
-                "Dynamic universe fetch failed and no usable stale cache was found."
-            ) from cache_exc
-        print(
-            "WARNING: using stale dynamic universe cache after fresh fetch failed: "
-            f"{exc}",
-            file=sys.stderr,
+        except Exception:
+            try:
+                fetched = fetch_ticker_dict(ticker_basket=ticker_basket)
+                _write_dynamic_universe_cache(
+                    fetched,
+                    ticker_basket=ticker_basket,
+                    cache_dir=dynamic_universe_cache_dir,
+                )
+            except Exception as fetch_exc:
+                raise RuntimeError(
+                    "Dynamic universe fetch failed and no usable stale cache was found."
+                ) from fetch_exc
+    else:
+        fetched = fetch_ticker_dict(ticker_basket=ticker_basket)
+        _write_dynamic_universe_cache(
+            fetched,
+            ticker_basket=ticker_basket,
+            cache_dir=dynamic_universe_cache_dir,
         )
 
     dynamic_symbols = set(fetched["symbols"])
@@ -869,13 +870,13 @@ def parse_args() -> argparse.Namespace:
     native_options.add_argument(
         "--allow-stale-dynamic-universe",
         action="store_true",
-        help="[native] Use the previous cached dynamic universe if a fresh fetch fails.",
+        help="[native] Reuse a cached dynamic universe within the allowed age before fetching fresh.",
     )
     native_options.add_argument(
         "--max-stale-dynamic-universe-days",
         type=float,
         default=14.0,
-        help="[native] Maximum age in days for --allow-stale-dynamic-universe fallback.",
+        help="[native] Maximum cache age in days for --allow-stale-dynamic-universe.",
     )
     core_options.add_argument("--risk-aversion", type=float, default=4.0)
     native_options.add_argument("--min-weight", type=float, default=0.0)
