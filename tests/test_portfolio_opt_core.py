@@ -12,8 +12,10 @@ from portfolio_opt import cli
 from portfolio_opt.cache import read_cache, write_cache
 from portfolio_opt.backtest import (
     BacktestResult,
+    _ensemble_trailing_returns,
     compute_dual_momentum_weights,
     run_backtest,
+    run_dual_momentum_backtest,
     summarize_return_series,
 )
 from portfolio_opt.config import AlpacaConfig, OptimizationConfig
@@ -99,6 +101,7 @@ def _base_cli_args(**overrides) -> Namespace:
         "benchmark_weight": 1.0,
         "linear_trade_cost": 0.0,
         "risk_free_rate": 0.0,
+        "ensemble_lookbacks": None,
         "planning_horizon": 1,
         "compare_custom": False,
         "submit": False,
@@ -753,6 +756,7 @@ def test_cli_dry_run_reports_unprotected_fractional_trailing_stop_qty(
         rebalance_every=21,
         linear_trade_cost=0.0,
         risk_free_rate=0.0,
+        ensemble_lookbacks=None,
         rolling_window_days=0,
         rolling_step_days=21,
         sweep=False,
@@ -853,6 +857,7 @@ def test_cli_yfinance_backtest_does_not_require_alpaca(monkeypatch, capsys) -> N
         rebalance_every=1,
         linear_trade_cost=0.0,
         risk_free_rate=0.0,
+        ensemble_lookbacks=None,
         rolling_window_days=0,
         rolling_step_days=1,
         sweep=False,
@@ -1396,6 +1401,7 @@ def test_cli_dual_momentum_backtest_passes_vol_window(monkeypatch, capsys) -> No
         rebalance_every=1,
         linear_trade_cost=0.0,
         risk_free_rate=0.0,
+        ensemble_lookbacks=None,
         rolling_window_days=0,
         rolling_step_days=1,
         sweep=False,
@@ -1516,6 +1522,7 @@ def test_cli_yfinance_backtest_supports_external_benchmark(
         rebalance_every=1,
         linear_trade_cost=0.0,
         risk_free_rate=0.0,
+        ensemble_lookbacks=None,
         rolling_window_days=0,
         rolling_step_days=1,
         sweep=False,
@@ -1638,6 +1645,7 @@ def test_cli_rejects_backtest_when_common_history_is_too_short(monkeypatch) -> N
         rebalance_every=1,
         linear_trade_cost=0.0,
         risk_free_rate=0.0,
+        ensemble_lookbacks=None,
         rolling_window_days=0,
         rolling_step_days=1,
         sweep=False,
@@ -2157,3 +2165,51 @@ def test_daily_closes_refresh_appends_only_missing_bars(monkeypatch, tmp_path) -
             "2026-01-05": 103.0,
         },
     }
+
+
+def test_ensemble_trailing_returns_blends_annualized_windows() -> None:
+    prices = np.array([[1.0, 1.0, 1.0, 1.1]])
+
+    single = _ensemble_trailing_returns(prices, 3, [2], trading_days_per_year=4)
+    assert abs(float(single[0]) - (1.1**2 - 1.0)) < 1e-12
+
+    blended = _ensemble_trailing_returns(prices, 3, [1, 2], trading_days_per_year=4)
+    expected = ((1.1**4 - 1.0) + (1.1**2 - 1.0)) / 2.0
+    assert abs(float(blended[0]) - expected) < 1e-12
+
+
+def test_dual_momentum_backtest_accepts_ensemble_lookbacks() -> None:
+    closes = {
+        "UPUP": [100.0 * 1.01**i for i in range(16)],
+        "DOWN": [100.0 * 0.99**i for i in range(16)],
+    }
+    asset_classes = {"UPUP": "equity", "DOWN": "equity"}
+
+    result = run_dual_momentum_backtest(
+        symbols=["UPUP", "DOWN"],
+        closes_by_symbol=closes,
+        asset_classes=asset_classes,
+        lookback_days=4,
+        rebalance_every=2,
+        top_k=1,
+        absolute_threshold=0.0,
+        ensemble_lookbacks=[2, 4],
+    )
+    assert result.rebalance_count > 0
+    assert float(result.latest_weights[0]) > 0.99
+
+    try:
+        run_dual_momentum_backtest(
+            symbols=["UPUP", "DOWN"],
+            closes_by_symbol=closes,
+            asset_classes=asset_classes,
+            lookback_days=4,
+            rebalance_every=2,
+            top_k=1,
+            absolute_threshold=0.0,
+            ensemble_lookbacks=[8],
+        )
+    except ValueError as exc:
+        assert "lookback" in str(exc).lower()
+    else:
+        raise AssertionError("ensemble lookbacks longer than lookback_days should fail")

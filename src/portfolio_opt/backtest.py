@@ -361,6 +361,38 @@ def _protective_momentum_target_weights(
     return target_weights
 
 
+def _validate_ensemble_lookbacks(
+    ensemble_lookbacks: list[int] | None,
+    lookback_days: int,
+) -> None:
+    if not ensemble_lookbacks:
+        return
+    if min(ensemble_lookbacks) < 1:
+        raise ValueError("Ensemble lookbacks must be positive.")
+    if max(ensemble_lookbacks) > lookback_days:
+        raise ValueError(
+            "Ensemble lookbacks cannot exceed lookback_days "
+            f"({max(ensemble_lookbacks)} > {lookback_days})."
+        )
+
+
+def _ensemble_trailing_returns(
+    price_matrix: np.ndarray,
+    end_index: int,
+    lookbacks: list[int],
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
+) -> np.ndarray:
+    # Annualize each window's return so short and long horizons contribute on
+    # a comparable scale before averaging.
+    scores = [
+        (price_matrix[:, end_index] / price_matrix[:, end_index - lookback])
+        ** (trading_days_per_year / lookback)
+        - 1.0
+        for lookback in lookbacks
+    ]
+    return np.asarray(np.mean(scores, axis=0), dtype=float)
+
+
 def compute_dual_momentum_weights(
     symbols: list[str],
     closes_by_symbol: dict[str, list[float]],
@@ -377,6 +409,7 @@ def compute_dual_momentum_weights(
     vol_window: int = 63,
     trailing_stop: float | None = None,
     factor_top_k: int | None = None,
+    ensemble_lookbacks: list[int] | None = None,
 ) -> dict[str, float]:
     """Compute dual-momentum target weights for a single point in time.
 
@@ -390,8 +423,16 @@ def compute_dual_momentum_weights(
     if price_matrix.ndim != 2 or price_matrix.shape[1] < lookback_days + 1:
         raise ValueError("Not enough price history to compute dual momentum weights.")
 
+    _validate_ensemble_lookbacks(ensemble_lookbacks, lookback_days)
     returns = price_matrix[:, 1:] / price_matrix[:, :-1] - 1.0
-    trailing_returns = price_matrix[:, -1] / price_matrix[:, -(lookback_days + 1)] - 1.0
+    if ensemble_lookbacks:
+        trailing_returns = _ensemble_trailing_returns(
+            price_matrix, price_matrix.shape[1] - 1, ensemble_lookbacks
+        )
+    else:
+        trailing_returns = (
+            price_matrix[:, -1] / price_matrix[:, -(lookback_days + 1)] - 1.0
+        )
     trailing_volatility = returns.std(axis=1, ddof=0)
 
     target_weights = _momentum_target_weights(
@@ -433,6 +474,7 @@ def compute_protective_momentum_weights(
     breadth_min_risky: float = 0.0,
     breadth_max_risky: float = 1.0,
     defensive_weighting: str = "equal",
+    ensemble_lookbacks: list[int] | None = None,
 ) -> dict[str, float]:
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
@@ -441,8 +483,16 @@ def compute_protective_momentum_weights(
             "Not enough price history to compute protective momentum weights."
         )
 
+    _validate_ensemble_lookbacks(ensemble_lookbacks, lookback_days)
     returns = price_matrix[:, 1:] / price_matrix[:, :-1] - 1.0
-    trailing_returns = price_matrix[:, -1] / price_matrix[:, -(lookback_days + 1)] - 1.0
+    if ensemble_lookbacks:
+        trailing_returns = _ensemble_trailing_returns(
+            price_matrix, price_matrix.shape[1] - 1, ensemble_lookbacks
+        )
+    else:
+        trailing_returns = (
+            price_matrix[:, -1] / price_matrix[:, -(lookback_days + 1)] - 1.0
+        )
     trailing_volatility = returns.std(axis=1, ddof=0)
 
     target_weights = _protective_momentum_target_weights(
@@ -484,6 +534,7 @@ def compute_factor_momentum_weights(
     target_vol: float | None = None,
     max_single_weight: float | None = None,
     vol_window: int = 63,
+    ensemble_lookbacks: list[int] | None = None,
 ) -> dict[str, float]:
     return compute_dual_momentum_weights(
         symbols=symbols,
@@ -500,6 +551,7 @@ def compute_factor_momentum_weights(
         max_single_weight=max_single_weight,
         vol_window=vol_window,
         factor_top_k=factor_top_k,
+        ensemble_lookbacks=ensemble_lookbacks,
     )
 
 
@@ -843,7 +895,9 @@ def run_dual_momentum_backtest(
     trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
     linear_trade_cost: float = 0.0,
     risk_free_rate: float = 0.0,
+    ensemble_lookbacks: list[int] | None = None,
 ) -> BacktestResult:
+    _validate_ensemble_lookbacks(ensemble_lookbacks, lookback_days)
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
     if price_matrix.ndim != 2 or price_matrix.shape[1] < lookback_days + 1:
@@ -893,9 +947,17 @@ def run_dual_momentum_backtest(
                         asset_peak_price[i] = 0.0  # reset until re-entered
 
         if (step - lookback_days) % rebalance_every == 0:
-            trailing_returns = (
-                price_matrix[:, step] / price_matrix[:, step - lookback_days] - 1.0
-            )
+            if ensemble_lookbacks:
+                trailing_returns = _ensemble_trailing_returns(
+                    price_matrix,
+                    step,
+                    ensemble_lookbacks,
+                    trading_days_per_year=trading_days_per_year,
+                )
+            else:
+                trailing_returns = (
+                    price_matrix[:, step] / price_matrix[:, step - lookback_days] - 1.0
+                )
             trailing_volatility = returns[:, step - lookback_days : step].std(
                 axis=1, ddof=0
             )
@@ -975,6 +1037,7 @@ def run_factor_momentum_backtest(
     trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
     linear_trade_cost: float = 0.0,
     risk_free_rate: float = 0.0,
+    ensemble_lookbacks: list[int] | None = None,
 ) -> BacktestResult:
     return run_dual_momentum_backtest(
         symbols=symbols,
@@ -996,6 +1059,7 @@ def run_factor_momentum_backtest(
         trading_days_per_year=trading_days_per_year,
         linear_trade_cost=linear_trade_cost,
         risk_free_rate=risk_free_rate,
+        ensemble_lookbacks=ensemble_lookbacks,
     )
 
 
@@ -1021,7 +1085,9 @@ def run_protective_momentum_backtest(
     trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
     linear_trade_cost: float = 0.0,
     risk_free_rate: float = 0.0,
+    ensemble_lookbacks: list[int] | None = None,
 ) -> BacktestResult:
+    _validate_ensemble_lookbacks(ensemble_lookbacks, lookback_days)
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
     if price_matrix.ndim != 2 or price_matrix.shape[1] < lookback_days + 1:
@@ -1040,9 +1106,17 @@ def run_protective_momentum_backtest(
 
     for step in range(lookback_days, returns.shape[1]):
         if (step - lookback_days) % rebalance_every == 0:
-            trailing_returns = (
-                price_matrix[:, step] / price_matrix[:, step - lookback_days] - 1.0
-            )
+            if ensemble_lookbacks:
+                trailing_returns = _ensemble_trailing_returns(
+                    price_matrix,
+                    step,
+                    ensemble_lookbacks,
+                    trading_days_per_year=trading_days_per_year,
+                )
+            else:
+                trailing_returns = (
+                    price_matrix[:, step] / price_matrix[:, step - lookback_days] - 1.0
+                )
             trailing_volatility = returns[:, step - lookback_days : step].std(
                 axis=1, ddof=0
             )
@@ -1129,6 +1203,7 @@ def _run_single_window(
     trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
     linear_trade_cost: float = 0.0,
     risk_free_rate: float = 0.0,
+    ensemble_lookbacks: list[int] | None = None,
 ) -> dict[str, float | bool]:
     """Run a single rolling window backtest and compare against SPY."""
     if strategy == "dual-momentum":
@@ -1145,6 +1220,7 @@ def _run_single_window(
             trading_days_per_year=trading_days_per_year,
             linear_trade_cost=linear_trade_cost,
             risk_free_rate=risk_free_rate,
+            ensemble_lookbacks=ensemble_lookbacks,
         )
     elif strategy == "factor-momentum":
         backtest = run_factor_momentum_backtest(
@@ -1161,6 +1237,7 @@ def _run_single_window(
             trading_days_per_year=trading_days_per_year,
             linear_trade_cost=linear_trade_cost,
             risk_free_rate=risk_free_rate,
+            ensemble_lookbacks=ensemble_lookbacks,
         )
     elif strategy == "protective-momentum":
         backtest = run_protective_momentum_backtest(
@@ -1179,6 +1256,7 @@ def _run_single_window(
             trading_days_per_year=trading_days_per_year,
             linear_trade_cost=linear_trade_cost,
             risk_free_rate=risk_free_rate,
+            ensemble_lookbacks=ensemble_lookbacks,
         )
     else:
         backtest = run_backtest(
@@ -1250,6 +1328,7 @@ def rolling_window_comparison(
     trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
     linear_trade_cost: float = 0.0,
     risk_free_rate: float = 0.0,
+    ensemble_lookbacks: list[int] | None = None,
 ) -> dict[str, float | int]:
     if window_days <= 0 or step_days <= 0:
         raise ValueError("window_days and step_days must be positive.")
@@ -1302,6 +1381,7 @@ def rolling_window_comparison(
                     trading_days_per_year=trading_days_per_year,
                     linear_trade_cost=linear_trade_cost,
                     risk_free_rate=risk_free_rate,
+                    ensemble_lookbacks=ensemble_lookbacks,
                 )
                 for wc in window_args
             ]
@@ -1333,6 +1413,7 @@ def rolling_window_comparison(
                     trading_days_per_year=trading_days_per_year,
                     linear_trade_cost=linear_trade_cost,
                     risk_free_rate=risk_free_rate,
+                    ensemble_lookbacks=ensemble_lookbacks,
                 )
             )
 

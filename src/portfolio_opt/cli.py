@@ -764,6 +764,7 @@ def _validate_cvxportfolio_engine_args(args: argparse.Namespace) -> None:
         ("breadth_min_risky", 0.0, "--breadth-min-risky"),
         ("breadth_max_risky", 1.0, "--breadth-max-risky"),
         ("defensive_weighting", "equal", "--defensive-weighting"),
+        ("ensemble_lookbacks", None, "--ensemble-lookbacks"),
         ("benchmark", [], "--benchmark"),
         ("rebalance_every", 21, "--rebalance-every"),
     ]
@@ -1187,6 +1188,18 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="Annual risk-free rate subtracted in Sortino/Sharpe ratios (e.g. 0.04).",
     )
+    native_options.add_argument(
+        "--ensemble-lookbacks",
+        nargs="+",
+        type=int,
+        default=None,
+        help=(
+            "[native] Average annualized momentum across these trailing windows "
+            "(e.g. 63 126 252) instead of the single --lookback-days window for "
+            "momentum strategies. --lookback-days is raised to the longest "
+            "window when shorter."
+        ),
+    )
     cvxportfolio_options.add_argument(
         "--planning-horizon",
         type=int,
@@ -1231,6 +1244,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    ensemble_lookbacks = getattr(args, "ensemble_lookbacks", None)
+    if ensemble_lookbacks:
+        if min(ensemble_lookbacks) < 1:
+            raise SystemExit("--ensemble-lookbacks values must be positive.")
+        args.lookback_days = max(args.lookback_days, max(ensemble_lookbacks))
     trading_days_per_year = int(
         getattr(args, "trading_days_per_year", TRADING_DAYS_PER_YEAR)
     )
@@ -1530,6 +1548,7 @@ def main() -> None:
                 trading_days_per_year=trading_days_per_year,
                 linear_trade_cost=args.linear_trade_cost,
                 risk_free_rate=args.risk_free_rate,
+                ensemble_lookbacks=ensemble_lookbacks,
             )
         elif args.strategy == "factor-momentum":
             backtest = run_factor_momentum_backtest(
@@ -1552,6 +1571,7 @@ def main() -> None:
                 trading_days_per_year=trading_days_per_year,
                 linear_trade_cost=args.linear_trade_cost,
                 risk_free_rate=args.risk_free_rate,
+                ensemble_lookbacks=ensemble_lookbacks,
             )
         elif args.strategy == "protective-momentum":
             backtest = run_protective_momentum_backtest(
@@ -1575,6 +1595,7 @@ def main() -> None:
                 trading_days_per_year=trading_days_per_year,
                 linear_trade_cost=args.linear_trade_cost,
                 risk_free_rate=args.risk_free_rate,
+                ensemble_lookbacks=ensemble_lookbacks,
             )
         else:
             backtest = run_backtest(
@@ -1623,6 +1644,7 @@ def main() -> None:
                 trading_days_per_year=trading_days_per_year,
                 linear_trade_cost=args.linear_trade_cost,
                 risk_free_rate=args.risk_free_rate,
+                ensemble_lookbacks=ensemble_lookbacks,
             )
         benchmark_results = {
             "spy": run_fixed_weight_benchmark(
@@ -1727,6 +1749,7 @@ def main() -> None:
                 "trading_days_per_year": trading_days_per_year,
                 "linear_trade_cost": args.linear_trade_cost,
                 "risk_free_rate": args.risk_free_rate,
+                "ensemble_lookbacks": ensemble_lookbacks,
                 "final_value": round(float(backtest.final_value), 6),
                 "total_return": round(float(backtest.total_return), 6),
                 "annualized_return": round(float(backtest.annualized_return), 6),
@@ -1903,6 +1926,7 @@ def main() -> None:
                 max_single_weight=args.max_single_weight,
                 vol_window=args.vol_window,
                 trailing_stop=None,
+                ensemble_lookbacks=ensemble_lookbacks,
             )
             target_weights = np.array(
                 [dm_weights[s] for s in model.symbols], dtype=float
@@ -1910,6 +1934,7 @@ def main() -> None:
             estimation_metadata = {
                 "method": "dual_momentum",
                 "lookback_days": args.lookback_days,
+                "ensemble_lookbacks": ensemble_lookbacks,
                 "top_k": args.top_k,
                 "weighting": args.dual_momentum_weighting,
                 "vol_window": args.vol_window,
@@ -1930,6 +1955,7 @@ def main() -> None:
                 target_vol=args.target_vol,
                 max_single_weight=args.max_single_weight,
                 vol_window=args.vol_window,
+                ensemble_lookbacks=ensemble_lookbacks,
             )
             target_weights = np.array(
                 [fm_weights[s] for s in model.symbols], dtype=float
@@ -1937,6 +1963,7 @@ def main() -> None:
             estimation_metadata = {
                 "method": "factor_momentum",
                 "lookback_days": args.lookback_days,
+                "ensemble_lookbacks": ensemble_lookbacks,
                 "top_k": args.top_k,
                 "factor_top_k": factor_top_k,
                 "weighting": args.dual_momentum_weighting,
@@ -1960,6 +1987,7 @@ def main() -> None:
                 breadth_min_risky=breadth_min_risky,
                 breadth_max_risky=breadth_max_risky,
                 defensive_weighting=defensive_weighting,
+                ensemble_lookbacks=ensemble_lookbacks,
             )
             target_weights = np.array(
                 [pm_weights[s] for s in model.symbols], dtype=float
@@ -1967,6 +1995,7 @@ def main() -> None:
             estimation_metadata = {
                 "method": "protective_momentum",
                 "lookback_days": args.lookback_days,
+                "ensemble_lookbacks": ensemble_lookbacks,
                 "top_k": args.top_k,
                 "weighting": args.dual_momentum_weighting,
                 "breadth_min_risky": breadth_min_risky,
