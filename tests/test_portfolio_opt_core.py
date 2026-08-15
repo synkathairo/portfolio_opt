@@ -1,15 +1,14 @@
 from __future__ import annotations
 
+import json
 from argparse import Namespace
 from datetime import UTC, datetime, timedelta
-import json
 from uuid import UUID
 
 import numpy as np
 
-from portfolio_opt.alpaca_interface import AlpacaClient
 from portfolio_opt import cli
-from portfolio_opt.cache import read_cache, write_cache
+from portfolio_opt.alpaca_interface import AlpacaClient
 from portfolio_opt.backtest import (
     BacktestResult,
     _ensemble_trailing_returns,
@@ -18,6 +17,7 @@ from portfolio_opt.backtest import (
     run_dual_momentum_backtest,
     summarize_return_series,
 )
+from portfolio_opt.cache import read_cache, write_cache
 from portfolio_opt.config import AlpacaConfig, OptimizationConfig
 from portfolio_opt.execution import submit_rebalance_sell_first
 from portfolio_opt.market_data import CloseHistory
@@ -27,8 +27,8 @@ from portfolio_opt.optimizer import (
     optimize_weights,
     project_weights,
 )
-from portfolio_opt.risk_parity import risk_parity_weights
 from portfolio_opt.rebalance import build_order_plan, build_trailing_stop_plan
+from portfolio_opt.risk_parity import risk_parity_weights
 from portfolio_opt.types import (
     AccountSnapshot,
     OrderPlan,
@@ -315,6 +315,21 @@ def test_dynamic_universe_cache_writes_model_and_sidecar(tmp_path) -> None:
         )
         == fetched
     )
+
+
+def test_dynamic_universe_payload_rejects_invalid_asset_classes() -> None:
+    invalid_payloads = [
+        {"symbols": ["AAPL"], "asset_classes": {1: "equity"}},
+        {"symbols": ["AAPL"], "asset_classes": {"AAPL": None}},
+    ]
+
+    for payload in invalid_payloads:
+        try:
+            cli._dynamic_universe_payload(payload)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"Invalid asset classes should fail: {payload}")
 
 
 def test_dynamic_universe_cache_rejects_too_stale_sidecar(tmp_path) -> None:

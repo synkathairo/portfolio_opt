@@ -1,3 +1,1 @@
-## Instructions
-
-refer to AGENTS.md
+AGENTS.md

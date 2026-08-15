@@ -556,7 +556,7 @@ def run_cvxportfolio_backtest(
     )
     first_timestamp = str(result.v.index[0])
     last_timestamp = str(result.v.index[-1])
-    realized_periods = int(len(realized_returns))
+    realized_periods = len(realized_returns)
     latest_class_exposures = clean_constraint_mapping(
         {
             class_name: round(

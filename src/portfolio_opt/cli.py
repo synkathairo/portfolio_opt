@@ -15,6 +15,15 @@ from typing import Any
 import exchange_calendars as xcals
 import numpy as np
 
+from cvxportfolio_impl.backtest import format_backtest as format_cvxportfolio_backtest
+from cvxportfolio_impl.backtest import run_cvxportfolio_current_target
+from cvxportfolio_impl.cli import run_from_args as run_cvxportfolio_from_args
+from utils.fetch_tickers import (
+    DEFAULT_TICKER_BASKET,
+    fetch_ticker_dict,
+    filter_tickers_before,
+)
+
 from .alpaca_interface import AlpacaClient, format_order_plans
 from .backtest import (
     TRADING_DAYS_PER_YEAR,
@@ -28,24 +37,16 @@ from .backtest import (
     run_fixed_weight_benchmark,
     run_protective_momentum_backtest,
 )
+from .black_litterman import estimate_inputs_from_black_litterman
 from .config import AlpacaConfig, OptimizationConfig
 from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
 from .execution import submit_rebalance_sell_first
-from .black_litterman import estimate_inputs_from_black_litterman
 from .market_data import load_close_history
-from .risk_parity import estimate_inputs_risk_parity
 from .model import ModelInputs, load_model_inputs
 from .optimizer import effective_turnover_penalty, optimize_weights, project_weights
 from .rebalance import build_order_plan, build_trailing_stop_plan, current_weights
+from .risk_parity import estimate_inputs_risk_parity
 from .runtime import configure_local_cache_dirs
-from utils.fetch_tickers import (
-    DEFAULT_TICKER_BASKET,
-    fetch_ticker_dict,
-    filter_tickers_before,
-)
-from cvxportfolio_impl.backtest import format_backtest as format_cvxportfolio_backtest
-from cvxportfolio_impl.backtest import run_cvxportfolio_current_target
-from cvxportfolio_impl.cli import run_from_args as run_cvxportfolio_from_args
 
 configure_local_cache_dirs()
 
@@ -79,15 +80,27 @@ def _dynamic_universe_payload(fetched: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Dynamic universe fetch returned duplicate symbols.")
     if not isinstance(asset_classes, dict):
         raise ValueError("Dynamic universe fetch returned invalid asset classes.")
-    unknown_asset_class_symbols = sorted(set(asset_classes) - set(symbols))
+    if any(
+        not isinstance(symbol, str)
+        or not symbol
+        or not isinstance(asset_class, str)
+        or not asset_class
+        for symbol, asset_class in asset_classes.items()
+    ):
+        raise ValueError("Dynamic universe fetch returned invalid asset classes.")
+    validated_symbols = list(symbols)
+    validated_asset_classes = dict(asset_classes)
+    unknown_asset_class_symbols = sorted(
+        set(validated_asset_classes) - set(validated_symbols)
+    )
     if unknown_asset_class_symbols:
         raise ValueError(
             "Dynamic universe asset classes reference unknown symbols: "
             f"{unknown_asset_class_symbols}"
         )
     return {
-        "symbols": list(symbols),
-        "asset_classes": dict(asset_classes),
+        "symbols": list(validated_symbols),
+        "asset_classes": dict(validated_asset_classes),
     }
 
 
@@ -493,7 +506,7 @@ def _run_sweep_point(
     trading_days_per_year: int,
     linear_trade_cost: float = 0.0,
     risk_free_rate: float = 0.0,
-) -> dict[str, float | int | dict[str, float]] | tuple[str, str]:
+) -> dict[str, float] | tuple[str, str]:
     """Run a single sweep parameter combination. Returns result or error tuple."""
     sweep_config = OptimizationConfig(
         risk_aversion=risk_aversion,
@@ -1493,7 +1506,7 @@ def main() -> None:
                     for risk_aversion, min_cash_weight, min_invested_weight, turnover_penalty, momentum_window in grid_params
                 ]
 
-            results: list[dict[str, float | int | dict[str, float]]] = []
+            results: list[dict[str, float]] = []
             skipped: list[dict[str, float | int | str]] = []
 
             for outcome in outcomes:
@@ -1927,6 +1940,7 @@ def main() -> None:
                 vol_window=args.vol_window,
                 trailing_stop=None,
                 ensemble_lookbacks=ensemble_lookbacks,
+                trading_days_per_year=trading_days_per_year,
             )
             target_weights = np.array(
                 [dm_weights[s] for s in model.symbols], dtype=float
@@ -1956,6 +1970,7 @@ def main() -> None:
                 max_single_weight=args.max_single_weight,
                 vol_window=args.vol_window,
                 ensemble_lookbacks=ensemble_lookbacks,
+                trading_days_per_year=trading_days_per_year,
             )
             target_weights = np.array(
                 [fm_weights[s] for s in model.symbols], dtype=float
@@ -1988,6 +2003,7 @@ def main() -> None:
                 breadth_max_risky=breadth_max_risky,
                 defensive_weighting=defensive_weighting,
                 ensemble_lookbacks=ensemble_lookbacks,
+                trading_days_per_year=trading_days_per_year,
             )
             target_weights = np.array(
                 [pm_weights[s] for s in model.symbols], dtype=float

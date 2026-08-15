@@ -88,6 +88,11 @@ def _apply_max_single_weight(
     return result
 
 
+def _validate_trading_days_per_year(trading_days_per_year: int) -> None:
+    if trading_days_per_year <= 0:
+        raise ValueError("trading_days_per_year must be positive.")
+
+
 def _momentum_asset_indices(
     symbols: list[str],
     asset_classes: dict[str, str],
@@ -133,7 +138,10 @@ def _momentum_target_weights(
     max_single_weight: float | None,
     vol_window: int,
     factor_top_k: int | None,
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
+    blocked_indices: set[int] | None = None,
 ) -> np.ndarray:
+    _validate_trading_days_per_year(trading_days_per_year)
     risky_indices, defensive_indices, cash_like_index = _momentum_asset_indices(
         symbols,
         asset_classes,
@@ -155,10 +163,12 @@ def _momentum_target_weights(
         factor_top_k=factor_top_k,
         threshold=threshold,
     )
+    blocked = blocked_indices or set()
     risky_ranked = sorted(
         (
             (idx, float(trailing_returns[idx]))
             for idx in candidate_risky_indices
+            if idx not in blocked
             if float(trailing_returns[idx]) > threshold
         ),
         key=lambda item: item[1],
@@ -175,10 +185,16 @@ def _momentum_target_weights(
             basket_returns_history = returns[
                 :, max(0, returns.shape[1] - lookback_days) :
             ][selected_indices]
+            # Annualize the covariance so it matches the scale of the
+            # trailing_returns (252-day cumulative return, i.e. annual-scale).
+            # Without this, the return term dominates the risk term by ~252x
+            # and risk_aversion has no effect until it reaches ~500.
             if len(selected_indices) == 1:
-                basket_cov = np.array([[np.var(basket_returns_history[0])]])
+                basket_cov = np.array(
+                    [[np.var(basket_returns_history[0]) * trading_days_per_year]]
+                )
             else:
-                basket_cov = np.cov(basket_returns_history)
+                basket_cov = np.cov(basket_returns_history) * trading_days_per_year
             basket_cov += 1e-8 * np.eye(len(selected_indices))
             basket_weights = optimize_basket_weights(
                 expected_returns=basket_returns,
@@ -213,7 +229,7 @@ def _momentum_target_weights(
                 portfolio_recent_returns = np.dot(w, recent_risky_returns)
                 portfolio_vol = float(
                     np.std(portfolio_recent_returns, ddof=0)
-                ) * np.sqrt(TRADING_DAYS_PER_YEAR)
+                ) * np.sqrt(trading_days_per_year)
             else:
                 portfolio_vol = 0.0
 
@@ -264,7 +280,9 @@ def _protective_momentum_target_weights(
     breadth_min_risky: float,
     breadth_max_risky: float,
     defensive_weighting: str,
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
 ) -> np.ndarray:
+    _validate_trading_days_per_year(trading_days_per_year)
     if not 0.0 <= breadth_min_risky <= 1.0:
         raise ValueError("breadth_min_risky must be between 0 and 1.")
     if not 0.0 <= breadth_max_risky <= 1.0:
@@ -309,10 +327,13 @@ def _protective_momentum_target_weights(
             basket_returns_history = returns[
                 :, max(0, returns.shape[1] - lookback_days) :
             ][selected_indices]
+            # Annualize covariance to match trailing_returns scale (see above).
             if len(selected_indices) == 1:
-                basket_cov = np.array([[np.var(basket_returns_history[0])]])
+                basket_cov = np.array(
+                    [[np.var(basket_returns_history[0]) * trading_days_per_year]]
+                )
             else:
-                basket_cov = np.cov(basket_returns_history)
+                basket_cov = np.cov(basket_returns_history) * trading_days_per_year
             basket_cov += 1e-8 * np.eye(len(selected_indices))
             basket_weights = optimize_basket_weights(
                 expected_returns=basket_returns,
@@ -347,7 +368,7 @@ def _protective_momentum_target_weights(
                 )
                 portfolio_vol = float(
                     np.std(portfolio_recent_returns, ddof=0)
-                ) * np.sqrt(TRADING_DAYS_PER_YEAR)
+                ) * np.sqrt(trading_days_per_year)
                 if portfolio_vol > 0 and portfolio_vol > target_vol:
                     target_weights = target_weights * (target_vol / portfolio_vol)
 
@@ -410,6 +431,7 @@ def compute_dual_momentum_weights(
     trailing_stop: float | None = None,
     factor_top_k: int | None = None,
     ensemble_lookbacks: list[int] | None = None,
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
 ) -> dict[str, float]:
     """Compute dual-momentum target weights for a single point in time.
 
@@ -452,6 +474,7 @@ def compute_dual_momentum_weights(
         max_single_weight=max_single_weight,
         vol_window=vol_window,
         factor_top_k=factor_top_k,
+        trading_days_per_year=trading_days_per_year,
     )
 
     return {s: float(target_weights[i]) for i, s in enumerate(symbols)}
@@ -475,6 +498,7 @@ def compute_protective_momentum_weights(
     breadth_max_risky: float = 1.0,
     defensive_weighting: str = "equal",
     ensemble_lookbacks: list[int] | None = None,
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
 ) -> dict[str, float]:
     aligned_closes = align_close_history(symbols, closes_by_symbol)
     price_matrix = np.array([aligned_closes[symbol] for symbol in symbols], dtype=float)
@@ -514,6 +538,7 @@ def compute_protective_momentum_weights(
         breadth_min_risky=breadth_min_risky,
         breadth_max_risky=breadth_max_risky,
         defensive_weighting=defensive_weighting,
+        trading_days_per_year=trading_days_per_year,
     )
 
     return {s: float(target_weights[i]) for i, s in enumerate(symbols)}
@@ -535,6 +560,7 @@ def compute_factor_momentum_weights(
     max_single_weight: float | None = None,
     vol_window: int = 63,
     ensemble_lookbacks: list[int] | None = None,
+    trading_days_per_year: int = TRADING_DAYS_PER_YEAR,
 ) -> dict[str, float]:
     return compute_dual_momentum_weights(
         symbols=symbols,
@@ -552,6 +578,7 @@ def compute_factor_momentum_weights(
         vol_window=vol_window,
         factor_top_k=factor_top_k,
         ensemble_lookbacks=ensemble_lookbacks,
+        trading_days_per_year=trading_days_per_year,
     )
 
 
@@ -919,6 +946,7 @@ def run_dual_momentum_backtest(
 
     for step in range(lookback_days, returns.shape[1]):
         trade_cost_today = 0.0
+        stopped_indices: set[int] = set()
         # Trailing stop-loss: evaluate against pre-rebalance weights so stops
         # fire before new signals can re-enter a breached position on the same day.
         if trailing_stop is not None:
@@ -945,6 +973,7 @@ def run_dual_momentum_backtest(
                         trade_cost_today += linear_trade_cost * weights[i]
                         weights[i] = 0.0
                         asset_peak_price[i] = 0.0  # reset until re-entered
+                        stopped_indices.add(i)
 
         if (step - lookback_days) % rebalance_every == 0:
             if ensemble_lookbacks:
@@ -978,13 +1007,18 @@ def run_dual_momentum_backtest(
                 max_single_weight=max_single_weight,
                 vol_window=vol_window,
                 factor_top_k=factor_top_k,
+                trading_days_per_year=trading_days_per_year,
+                blocked_indices=stopped_indices,
             )
-
             previous_weights = weights
             turnover = float(np.abs(target_weights - previous_weights).sum())
             turnovers.append(turnover)
             trade_cost_today += linear_trade_cost * turnover
             weights = target_weights
+            if trailing_stop is not None and asset_peak_price is not None:
+                for i, weight in enumerate(weights):
+                    if weight > 0.0:
+                        asset_peak_price[i] = price_matrix[i, step]
             rebalance_count += 1
 
         period_return = float(np.dot(weights, returns[:, step])) - trade_cost_today
@@ -1139,6 +1173,7 @@ def run_protective_momentum_backtest(
                 breadth_min_risky=breadth_min_risky,
                 breadth_max_risky=breadth_max_risky,
                 defensive_weighting=defensive_weighting,
+                trading_days_per_year=trading_days_per_year,
             )
 
             previous_weights = weights

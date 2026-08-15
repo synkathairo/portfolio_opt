@@ -6,7 +6,6 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import cast
 
 import pandas as pd
 import requests
@@ -90,10 +89,9 @@ def main() -> None:
         raise SystemExit("--year and --month must be provided together.")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    today = cast(pd.Timestamp, pd.Timestamp(datetime.now()))
-    start_check = cast(
-        pd.Timestamp,
-        today.normalize() - pd.Timedelta(days=args.current_valid_lookback_days),
+    today = pd.Timestamp(datetime.now())
+    start_check = today.normalize() - pd.Timedelta(
+        days=args.current_valid_lookback_days
     )
 
     for code in args.codes:

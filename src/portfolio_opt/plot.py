@@ -18,10 +18,9 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .runtime import configure_local_cache_dirs
-
 from .alpaca_interface import AlpacaClient
 from .config import AlpacaConfig
+from .runtime import configure_local_cache_dirs
 
 
 def _plot_from_result(result: dict, save_path: str, benchmark: str = "SPY") -> None:

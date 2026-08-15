@@ -44,6 +44,10 @@ BACKTEST_DAYS = 2722
 # BACKTEST_DAYS = 1220
 MOMENTUM_WINDOW = 40
 LIMIT_VOL = "0.3"
+# ENSEMBLE_LOOKBACKS = [21, 63, 126]
+ENSEMBLE_LOOKBACKS = [21, 42, 60, 90, 126, 252]
+# ENSEMBLE_LOOKBACKS = [126, 252]
+ENSEMBLE_LABEL = "/".join(str(days) for days in ENSEMBLE_LOOKBACKS)
 MODEL_FILENAME = f"{MODEL_NAME}_{BACKTEST_DAYS}_{LOOKBACK_DAYS}_{today}"
 # INDEX_PERIOD = "10y"
 INDEX_PERIOD = "20y"
@@ -151,6 +155,81 @@ dm_data = run_backtest(
         "5",
         "--top-k",
         "5",
+        "--use-cache",
+        # , "--offline"
+    ],
+)
+
+# Run Dual Momentum Backtest (Top-5, ensemble lookbacks)
+dm_data_ens = run_backtest(
+    f"Dual Momentum (Top-5, ensemble {ENSEMBLE_LABEL})",
+    [
+        "--model",
+        f"{MODEL}",
+        "--data-source",
+        f"{DATASOURCE}",
+        "--strategy",
+        "dual-momentum",
+        "--lookback-days",
+        f"{LOOKBACK_DAYS}",
+        "--ensemble-lookbacks",
+        *[str(days) for days in ENSEMBLE_LOOKBACKS],
+        "--backtest-days",
+        f"{BACKTEST_DAYS}",
+        "--rebalance-every",
+        "5",
+        "--top-k",
+        "5",
+        "--use-cache",
+        # , "--offline"
+    ],
+)
+
+# Run Dual Momentum Backtest (Top-5, ensemble lookbacks, rebalance daily)
+dm_data_ens2 = run_backtest(
+    f"Dual Momentum (Top-5 daily rebalance, ensemble {ENSEMBLE_LABEL})",
+    [
+        "--model",
+        f"{MODEL}",
+        "--data-source",
+        f"{DATASOURCE}",
+        "--strategy",
+        "dual-momentum",
+        "--lookback-days",
+        f"{LOOKBACK_DAYS}",
+        "--ensemble-lookbacks",
+        *[str(days) for days in ENSEMBLE_LOOKBACKS],
+        "--backtest-days",
+        f"{BACKTEST_DAYS}",
+        "--rebalance-every",
+        "1",
+        "--top-k",
+        "5",
+        "--use-cache",
+        # , "--offline"
+    ],
+)
+
+# Run Dual Momentum Backtest (Top-2, ensemble lookbacks, rebalance daily)
+dm_data_ens3 = run_backtest(
+    f"Dual Momentum (Top-2 daily rebalance, ensemble {ENSEMBLE_LABEL})",
+    [
+        "--model",
+        f"{MODEL}",
+        "--data-source",
+        f"{DATASOURCE}",
+        "--strategy",
+        "dual-momentum",
+        "--lookback-days",
+        f"{LOOKBACK_DAYS}",
+        "--ensemble-lookbacks",
+        *[str(days) for days in ENSEMBLE_LOOKBACKS],
+        "--backtest-days",
+        f"{BACKTEST_DAYS}",
+        "--rebalance-every",
+        "1",
+        "--top-k",
+        "2",
         "--use-cache",
         # , "--offline"
     ],
@@ -452,6 +531,9 @@ dm_data_limit_volatility = run_backtest(
 strategy_results = [
     mv_data,
     dm_data,
+    dm_data_ens,
+    dm_data_ens2,
+    dm_data_ens3,
     # dm_data_1b,
     dm_data2,
     dm_data2b,
@@ -537,6 +619,16 @@ def line_width_for_curve_count(count):
     return 1.0
 
 
+def legend_fontsize_for_curve_count(count):
+    if count <= 8:
+        return 10
+    if count <= 12:
+        return 8
+    if count <= 18:
+        return 7
+    return 6
+
+
 curve_count = len(strategy_norms) + len(benchmark_norms)
 strategy_line_width = line_width_for_curve_count(curve_count)
 benchmark_line_width = max(0.8, strategy_line_width - 0.2)
@@ -566,7 +658,7 @@ plt.yscale("log")
 plt.title(f"{MODEL_NAME} Strategy Comparison {today}", fontsize=14)
 plt.xlabel("Trading Days", fontsize=12)
 plt.ylabel("Growth of $1", fontsize=12)
-plt.legend(fontsize=10)
+plt.legend(fontsize=legend_fontsize_for_curve_count(curve_count))
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.savefig(f"plots/strategy_comparison_{MODEL_FILENAME}.png", dpi=150)

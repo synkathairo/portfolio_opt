@@ -1,14 +1,15 @@
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from datetime import datetime
+from html.parser import HTMLParser
+from io import StringIO
+from typing import Any
+
+import pandas as pd
 import requests
 import yfinance as yf
-import pandas as pd
-from io import StringIO
-from datetime import datetime
-from dataclasses import dataclass
-from html.parser import HTMLParser
-from typing import Any, Optional, cast
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from portfolio_opt.cache import cache_path, read_cache, write_cache
 from portfolio_opt.yfinance_data import _yahoo_symbol_candidates
@@ -256,7 +257,7 @@ def fetch_historical_sp500_tickers(
     refresh_cache: bool = False,
 ) -> list[str]:
     """Fetch S&P 500 constituents for the latest available row on/before a date."""
-    snapshot = cast(pd.Timestamp, pd.Timestamp(snapshot_date))
+    snapshot = pd.Timestamp(snapshot_date)
     if pd.isna(snapshot):
         raise ValueError(f"Invalid snapshot date: {snapshot_date!r}")
     snapshot = snapshot.normalize()
@@ -303,7 +304,7 @@ def _historical_sp500_symbols_from_payload(
         raw_date = row.get("date")
         if raw_date is None:
             continue
-        row_date = cast(pd.Timestamp, pd.Timestamp(str(raw_date)))
+        row_date = pd.Timestamp(str(raw_date))
         if pd.isna(row_date):
             continue
         row_date = row_date.normalize()
@@ -688,7 +689,7 @@ def fetch_ticker_dict(
     return ticker_dict
 
 
-def get_ticker_firstTradeDate(symbol: str) -> Optional[datetime]:
+def get_ticker_firstTradeDate(symbol: str) -> datetime | None:
     try:
         info = _get_ticker_info_payload(symbol)
 
@@ -715,7 +716,7 @@ def get_ticker_firstTradeDate(symbol: str) -> Optional[datetime]:
 def filter_tickers_before(
     tickers: list[str], date: datetime, max_workers: int = 3
 ) -> list[str]:
-    results: dict[str, Optional[datetime]] = {}
+    results: dict[str, datetime | None] = {}
 
     # Process in small batches to avoid Yahoo rate limiting
     batch_size = max_workers * 2

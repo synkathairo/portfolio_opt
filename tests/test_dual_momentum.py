@@ -353,6 +353,108 @@ def test_dual_momentum_trailing_stop_peak_starts_at_entry() -> None:
     assert result.latest_weights.tolist() == [0.0, 1.0, 0.0]
 
 
+def test_dual_momentum_trailing_stop_does_not_reenter_same_rebalance() -> None:
+    result = run_dual_momentum_backtest(
+        symbols=["A", "B", "SGOV"],
+        closes_by_symbol={
+            "A": [100.0, 120.0, 140.0, 125.0, 125.0],
+            "B": [100.0, 100.0, 100.0, 100.0, 100.0],
+            "SGOV": [100.0, 100.0, 100.0, 100.0, 100.0],
+        },
+        asset_classes={
+            "A": "equity_a",
+            "B": "equity_b",
+            "SGOV": "cash_like",
+        },
+        lookback_days=2,
+        rebalance_every=1,
+        top_k=1,
+        absolute_threshold=0.0,
+        trailing_stop=0.1,
+    )
+
+    assert result.latest_weights.tolist() == [0.0, 0.0, 1.0]
+
+
+def test_dual_momentum_trailing_stop_blocked_asset_respects_max_weight() -> None:
+    result = run_dual_momentum_backtest(
+        symbols=["A", "B", "C", "SGOV"],
+        closes_by_symbol={
+            "A": [100.0, 120.0, 140.0, 125.0, 125.0],
+            "B": [100.0, 100.0, 100.0, 100.0, 100.0],
+            "C": [100.0, 100.0, 100.0, 100.0, 100.0],
+            "SGOV": [100.0, 100.0, 100.0, 100.0, 100.0],
+        },
+        asset_classes={
+            "A": "equity_a",
+            "B": "equity_b",
+            "C": "equity_c",
+            "SGOV": "cash_like",
+        },
+        lookback_days=2,
+        rebalance_every=2,
+        top_k=1,
+        absolute_threshold=0.0,
+        weighting="score",
+        max_single_weight=0.4,
+        trailing_stop=0.1,
+    )
+
+    assert result.latest_weights[0] == 0.0
+    assert result.latest_weights[1] + result.latest_weights[2] == 0.0
+
+
+def test_dual_momentum_covariance_honors_trading_days_per_year() -> None:
+    closes_by_symbol = {
+        "A": [100.0, 110.0, 100.0, 110.0, 100.0],
+        "B": [100.0, 105.0, 100.0, 105.0, 100.0],
+    }
+
+    def weights_for(trading_days_per_year: int) -> list[float]:
+        result = run_dual_momentum_backtest(
+            symbols=["A", "B"],
+            closes_by_symbol=closes_by_symbol,
+            asset_classes={"A": "equity_a", "B": "equity_b"},
+            lookback_days=3,
+            rebalance_every=1,
+            top_k=2,
+            absolute_threshold=-1.0,
+            weighting="equal",
+            basket_opt="mean-variance",
+            basket_risk_aversion=0.5,
+            trading_days_per_year=trading_days_per_year,
+        )
+        return result.latest_weights.tolist()
+
+    short_year = weights_for(100)
+    long_year = weights_for(500)
+    assert short_year != long_year
+
+
+def test_factor_momentum_passes_trailing_stop_to_backtest() -> None:
+    result = run_factor_momentum_backtest(
+        symbols=["A", "B", "SGOV"],
+        closes_by_symbol={
+            "A": [100.0, 120.0, 140.0, 125.0, 125.0],
+            "B": [100.0, 100.0, 100.0, 100.0, 100.0],
+            "SGOV": [100.0, 100.0, 100.0, 100.0, 100.0],
+        },
+        asset_classes={
+            "A": "Alpha (factor_a)",
+            "B": "Beta (factor_b)",
+            "SGOV": "cash_like",
+        },
+        lookback_days=2,
+        rebalance_every=1,
+        top_k=1,
+        factor_top_k=1,
+        absolute_threshold=0.0,
+        trailing_stop=0.1,
+    )
+
+    assert result.latest_weights.tolist() == [0.0, 0.0, 1.0]
+
+
 def test_factor_momentum_selects_names_inside_top_factor_sleeve() -> None:
     closes_by_symbol = {
         "A_FAST": [100.0, 105.0, 111.0, 118.0, 126.0],
@@ -381,3 +483,64 @@ def test_factor_momentum_selects_names_inside_top_factor_sleeve() -> None:
     )
 
     assert result.latest_weights.tolist() == [1.0, 0.0, 0.0, 0.0, 0.0]
+
+
+def test_basket_mean_variance_responds_to_risk_aversion() -> None:
+    """Regression test: annualized covariance must make risk_aversion bite.
+
+    Before the fix, daily-return covariance (~1e-4) was paired with trailing
+    cumulative returns (~0.1-0.5), so the return term dominated by ~252x and
+    risk_aversion had only a negligible (~1e-9) effect on weights. With two
+    risky assets that both clear the absolute-momentum filter, a correct
+    optimizer must shift material weight to the lower-volatility asset at high
+    risk aversion.
+    """
+    import numpy as np
+
+    rng = np.random.default_rng(42)
+    n_days = 120
+    lookback = 60
+    # A: strong uptrend, low noise. B: milder uptrend, higher noise. Both +.
+    a = 100.0 * np.cumprod(1.0 + 0.006 + rng.normal(0, 0.004, n_days))
+    b = 100.0 * np.cumprod(1.0 + 0.003 + rng.normal(0, 0.012, n_days))
+    cash = 100.0 * np.cumprod(1.0 + np.full(n_days, 0.0001))
+    closes_by_symbol = {"A": a.tolist(), "B": b.tolist(), "CASH": cash.tolist()}
+    asset_classes = {
+        "A": "equity_us_large",
+        "B": "equity_us_growth",
+        "CASH": "cash_like",
+    }
+
+    def weights_for(ra: float) -> list[float]:
+        r = run_dual_momentum_backtest(
+            symbols=["A", "B", "CASH"],
+            closes_by_symbol=closes_by_symbol,
+            asset_classes=asset_classes,
+            lookback_days=lookback,
+            rebalance_every=1,
+            top_k=2,
+            absolute_threshold=0.0,
+            weighting="equal",
+            basket_opt="mean-variance",
+            basket_risk_aversion=ra,
+        )
+        return r.latest_weights.tolist()
+
+    # Sanity: both risky assets must clear the filter so the basket has 2 names.
+    assert a[-1] / a[-(lookback + 1)] - 1.0 > 0.0
+    assert b[-1] / b[-(lookback + 1)] - 1.0 > 0.0
+
+    low_ra = weights_for(0.5)  # B is idx 1
+    high_ra = weights_for(50.0)
+    # High risk aversion must diversify materially toward B (lower-vol asset).
+    # Before the fix this spread was ~1e-9; after the fix it is ~7 percentage
+    # points. A 5pp threshold cleanly separates bug from fix.
+    spread = high_ra[1] - low_ra[1]
+    assert spread > 0.05, (
+        f"risk_aversion had no material effect (bug): low={low_ra} high={high_ra} "
+        f"B spread={spread:.4g}"
+    )
+    # And low risk aversion must concentrate more in the higher-return asset A.
+    assert low_ra[0] > high_ra[0], (
+        f"expected low ra to hold more of A: low={low_ra} high={high_ra}"
+    )

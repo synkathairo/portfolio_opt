@@ -634,7 +634,7 @@ def test_format_ticker_dict_normalizes_yahoo_real_estate_sector(monkeypatch) -> 
 
 
 def test_fetch_ticker_dict_rejects_empty_builtin_basket(monkeypatch) -> None:
-    monkeypatch.setattr(fetch_tickers, "fetch_nasdaq100_tickers", lambda: [])
+    monkeypatch.setattr(fetch_tickers, "fetch_nasdaq100_tickers", list)
 
     try:
         fetch_tickers.fetch_ticker_dict(ticker_basket=["nasdaq100"])

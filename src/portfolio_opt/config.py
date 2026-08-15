@@ -15,7 +15,7 @@ class AlpacaConfig:
     data_feed: str = "iex"
 
     @classmethod
-    def from_env(cls) -> "AlpacaConfig":
+    def from_env(cls) -> AlpacaConfig:
         load_dotenv()
         api_key = getenv("APCA_API_KEY_ID")
         api_secret = getenv("APCA_API_SECRET_KEY")

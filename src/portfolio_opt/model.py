@@ -20,7 +20,7 @@ class ModelInputs:
 
 def _require_mapping(value: Any, name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ValueError(f"{name} must be an object.")
+        raise TypeError(f"{name} must be an object.")
     return value
 
 
@@ -35,10 +35,10 @@ def _float_mapping(value: Any, name: str) -> dict[str, float]:
 def load_model_inputs(path: str | Path) -> ModelInputs:
     raw = json.loads(Path(path).read_text())
     if not isinstance(raw, dict):
-        raise ValueError("Model file must contain a JSON object.")
+        raise TypeError("Model file must contain a JSON object.")
     symbols = raw["symbols"]
     if not isinstance(symbols, list):
-        raise ValueError("Model symbols must be a list.")
+        raise TypeError("Model symbols must be a list.")
     if not symbols:
         raise ValueError("Model must contain at least one symbol.")
     if any(not isinstance(symbol, str) or not symbol for symbol in symbols):

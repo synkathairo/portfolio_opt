@@ -214,11 +214,13 @@ class AlpacaClient:
     def _latest_prices_payload(self, symbols: list[str]) -> dict[str, Any]:
         req = StockLatestTradeRequest(symbol_or_symbols=symbols)
         result = self._data.get_stock_latest_trade(req)
-        trades = {}
+        trades: dict[str, dict[str, float]] = {}
         # Handle both TradeSet object and dict return types
         data = result.data if hasattr(result, "data") else result
         if isinstance(data, dict):
             for symbol, trade_data in data.items():
+                if not isinstance(symbol, str):
+                    continue
                 trade = (
                     trade_data[0]
                     if isinstance(trade_data, list) and trade_data
@@ -400,8 +402,11 @@ class AlpacaClient:
             if len(rows) < lookback_days:
                 fetch_groups[full_fetch_key][1].append(symbol)
                 continue
+            if not all(self._is_valid_daily_close_date(date) for date in rows):
+                fetch_groups[full_fetch_key][1].append(symbol)
+                continue
 
-            last_date = sorted(rows)[-1]
+            last_date = max(rows)
             try:
                 next_start = datetime.strptime(last_date, "%Y-%m-%d").replace(
                     tzinfo=UTC
@@ -536,6 +541,14 @@ class AlpacaClient:
                 return {str(date): float(close) for date, close in closes.items()}
         return {}
 
+    @staticmethod
+    def _is_valid_daily_close_date(date: str) -> bool:
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except (TypeError, ValueError):
+            return False
+        return True
+
     def _merge_daily_bar_rows(
         self,
         existing: dict[str, float],
@@ -634,10 +647,11 @@ class AlpacaClient:
         )
         bars = cast(BarSet, self._data.get_stock_bars(request))
         result: list[dict[str, Any]] = []
-        for symbol, bar_list in bars.data.items():
+        for bar_symbol, bar_list in bars.data.items():
             for b in bar_list:
                 result.append(
                     {
+                        "symbol": bar_symbol,
                         "timestamp": b.timestamp,
                         "open": b.open,
                         "high": b.high,

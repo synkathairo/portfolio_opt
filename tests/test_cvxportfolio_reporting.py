@@ -1,10 +1,10 @@
-from argparse import Namespace
 import json
+from argparse import Namespace
 
 import pandas as pd
 
-from cvxportfolio_impl import cli as cvx_cli
 from cvxportfolio_impl import backtest as cvx_backtest
+from cvxportfolio_impl import cli as cvx_cli
 from cvxportfolio_impl.backtest import clamp_for_display, clean_constraint_mapping
 from portfolio_opt.market_data import CloseHistory
 from portfolio_opt.model import ModelInputs

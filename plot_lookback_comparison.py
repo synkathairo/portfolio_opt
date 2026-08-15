@@ -126,8 +126,7 @@ if not all(lookback_results):
     exit()
 
 strategy_curves = [
-    (result["label"], result["backtest"]["daily_values"])
-    for result in lookback_results
+    (result["label"], result["backtest"]["daily_values"]) for result in lookback_results
 ]
 
 print("Fetching Benchmarks...")
