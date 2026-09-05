@@ -6,8 +6,13 @@ A tactical portfolio optimizer with various strategy paths that can rebalance an
 2. `dual-momentum` — ranks assets by trailing return, holds the top-k, exits positions that fall more than a trailing stop threshold.
 3. `factor-momentum` — ranks asset-class or sleeve groups first, then selects top assets inside the strongest groups.
 4. `protective-momentum` — scales risky exposure based on market breadth and moves the rest into defensive assets.
+5. `regime-adaptive` — research-only daily-bar ensemble which switches between protective trend and trend-filtered short-term mean reversion using prior sleeve performance.
+6. `fixed-allocation` — research-only benchmark baseline with cost-aware targets that drift between scheduled rebalances; it is not treated as an alpha strategy.
+7. `SEC quality research layer` — point-in-time quality ranking sourced from SEC EDGAR filing dates; it is not a CLI strategy or enabled for live orders.
 
 It can also backtest against historical data (primarily [yfinance](https://pypi.org/project/yfinance/) data, but other data sources can be manually uploaded via csv), and output various metrics of performance.
+
+The SEC research layer in `src/portfolio_opt/sec_edgar.py` caches EDGAR responses and enforces a conservative request interval. Set `SEC_USER_AGENT` to an identifying application name and contact address before using it. `src/portfolio_opt/fundamental_quality.py` filters every annual fact by its SEC `filed` date, and `src/portfolio_opt/quality_backtest.py` requires explicit trading dates so a filing cannot affect the return that occurred before it was public. These modules are research-only and make no claim of outperformance.
 
 (**AI Disclosure**: some of the code in this repo was generated using the aid of coding tools such as Claude, Qwen Code and Codex)
 
@@ -256,6 +261,23 @@ uv run portfolio-opt \
   --offline
 ```
 
+To test a cost-aware fixed allocation whose weights drift between quarterly
+rebalances:
+
+```bash
+uv run portfolio-opt \
+  --model examples/sector_universe_pre2020.json \
+  --strategy fixed-allocation \
+  --fixed-weight SPY=0.6 \
+  --fixed-weight QQQ=0.4 \
+  --lookback-days 252 \
+  --backtest-days 4500 \
+  --rebalance-every 63 \
+  --linear-trade-cost 0.001 \
+  --data-source yfinance \
+  --use-cache
+```
+
 For a wider ETF research universe with sector sleeves in addition to the broad asset-class sleeves, see `examples/sector_universe.json`. This is useful when you want to test:
 
 - broad-beta rotation: `SPY`, `QQQ`, `IWM`, `VEA`, `VWO`
@@ -500,7 +522,7 @@ The built-in benchmark block is still anchored to `SPY`, `TLT`, and equal-weight
 - Dual-momentum backtests survive the 2008 crisis with a 29% drawdown vs SPY's 47% (~18 year history).
 - The `--trailing-stop 0.15` parameter adds per-asset stop-loss protection (15% from peak).
 - Asset-class bounds can be defined in the model file to keep allocations within a portfolio policy.
-- Native backtest mode supports `mean-variance`, `dual-momentum`, `factor-momentum`, and `protective-momentum`, with built-in benchmark comparisons against SPY, QQQ, 60/40 SPY/TLT, equal-weight, and half-SPY/half-cash portfolios.
+- Native backtest mode supports `mean-variance`, `dual-momentum`, `factor-momentum`, `protective-momentum`, and the research-only `regime-adaptive` strategy, with built-in benchmark comparisons against SPY, QQQ, 60/40 SPY/TLT, equal-weight, and half-SPY/half-cash portfolios.
 - Backtest output includes final value, total and annualized return, annualized volatility, max drawdown, Sortino ratio, rebalance count, average turnover, latest target weights, cash weight, asset-class exposures, daily equity values, and benchmark summaries.
 - Rolling-window comparison currently measures strategy results against SPY.
 - Sweep mode runs a backtest grid over core policy parameters and returns the top results.

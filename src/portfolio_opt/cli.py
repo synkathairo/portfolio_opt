@@ -41,10 +41,12 @@ from .black_litterman import estimate_inputs_from_black_litterman
 from .config import AlpacaConfig, OptimizationConfig
 from .estimation import estimate_inputs_from_momentum, estimate_inputs_from_prices
 from .execution import submit_rebalance_sell_first
+from .fixed_allocation import parse_fixed_weights, run_fixed_allocation_backtest
 from .market_data import load_close_history
 from .model import ModelInputs, load_model_inputs
 from .optimizer import effective_turnover_penalty, optimize_weights, project_weights
 from .rebalance import build_order_plan, build_trailing_stop_plan, current_weights
+from .regime_adaptive import run_regime_adaptive_backtest
 from .risk_parity import estimate_inputs_risk_parity
 from .runtime import configure_local_cache_dirs
 
@@ -778,6 +780,9 @@ def _validate_cvxportfolio_engine_args(args: argparse.Namespace) -> None:
         ("breadth_max_risky", 1.0, "--breadth-max-risky"),
         ("defensive_weighting", "equal", "--defensive-weighting"),
         ("ensemble_lookbacks", None, "--ensemble-lookbacks"),
+        ("selection_window", 63, "--selection-window"),
+        ("mean_reversion_window", 5, "--mean-reversion-window"),
+        ("fixed_weight", [], "--fixed-weight"),
         ("benchmark", [], "--benchmark"),
         ("rebalance_every", 21, "--rebalance-every"),
     ]
@@ -948,9 +953,11 @@ def parse_args() -> argparse.Namespace:
             "dual-momentum",
             "factor-momentum",
             "protective-momentum",
+            "regime-adaptive",
+            "fixed-allocation",
         ),
         default="mean-variance",
-        help="[native] Strategy for live or native backtest rebalancing. Momentum strategies use live prices when --estimate-from-history is set.",
+        help="[native] Strategy for live or native backtest rebalancing. regime-adaptive is research-only and requires --backtest-days.",
     )
     core_options.add_argument(
         "--momentum-window",
@@ -1213,6 +1220,28 @@ def parse_args() -> argparse.Namespace:
             "window when shorter."
         ),
     )
+    native_options.add_argument(
+        "--selection-window",
+        type=int,
+        default=63,
+        help="[native] Prior-performance window used by the regime-adaptive strategy.",
+    )
+    native_options.add_argument(
+        "--mean-reversion-window",
+        type=int,
+        default=5,
+        help="[native] Short return window used by the regime-adaptive strategy.",
+    )
+    native_options.add_argument(
+        "--fixed-weight",
+        action="append",
+        default=[],
+        metavar="SYMBOL=WEIGHT",
+        help=(
+            "[native] Target for fixed-allocation backtests; repeat per symbol. "
+            "Weights must sum to 1.0."
+        ),
+    )
     cvxportfolio_options.add_argument(
         "--planning-horizon",
         type=int,
@@ -1322,6 +1351,13 @@ def main() -> None:
             return
     else:
         _validate_native_engine_args(args)
+    if (
+        args.strategy in {"regime-adaptive", "fixed-allocation"}
+        and args.backtest_days <= 0
+    ):
+        raise SystemExit(
+            f"{args.strategy} is research-only and requires --backtest-days"
+        )
 
     # Dynamic universe is only useful for live/dry-run trading, not backtesting
     if args.dynamic_universe and args.backtest_days > 0:
@@ -1419,6 +1455,8 @@ def main() -> None:
                 "dual-momentum",
                 "factor-momentum",
                 "protective-momentum",
+                "regime-adaptive",
+                "fixed-allocation",
             }:
                 raise ValueError(
                     "Sweep mode is only implemented for the mean-variance path."
@@ -1609,6 +1647,36 @@ def main() -> None:
                 linear_trade_cost=args.linear_trade_cost,
                 risk_free_rate=args.risk_free_rate,
                 ensemble_lookbacks=ensemble_lookbacks,
+            )
+        elif args.strategy == "regime-adaptive":
+            backtest = run_regime_adaptive_backtest(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                asset_classes=model.asset_classes,
+                lookback_days=args.lookback_days,
+                rebalance_every=args.rebalance_every,
+                top_k=args.top_k,
+                absolute_threshold=args.absolute_momentum_threshold,
+                selection_window=args.selection_window,
+                mean_reversion_window=args.mean_reversion_window,
+                trading_days_per_year=trading_days_per_year,
+                linear_trade_cost=args.linear_trade_cost,
+                risk_free_rate=args.risk_free_rate,
+            )
+        elif args.strategy == "fixed-allocation":
+            fixed_weights = parse_fixed_weights(
+                args.fixed_weight,
+                allowed_symbols=model.symbols,
+            )
+            backtest = run_fixed_allocation_backtest(
+                symbols=model.symbols,
+                closes_by_symbol=closes_by_symbol,
+                weights_by_symbol=fixed_weights,
+                start_day=args.lookback_days,
+                rebalance_every=args.rebalance_every,
+                trading_days_per_year=trading_days_per_year,
+                linear_trade_cost=args.linear_trade_cost,
+                risk_free_rate=args.risk_free_rate,
             )
         else:
             backtest = run_backtest(
