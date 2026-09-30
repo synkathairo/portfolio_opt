@@ -3,6 +3,10 @@
 This note records the evidence reviewed before extending the research code. It
 is a research protocol, not an investment recommendation.
 
+For the later dual-momentum parameter experiment and its additional primary
+sources, see [Momentum strategy and parameter comparison](MOMENTUM_VARIANTS_2026-09-29.md)
+and its [provenance record](MOMENTUM_VARIANTS_2026-09-29.provenance.md).
+
 ## Primary findings
 
 - [Short-term residual reversal](https://www.sciencedirect.com/science/article/abs/pii/S1386418112000468)
