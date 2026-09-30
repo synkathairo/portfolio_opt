@@ -23,6 +23,19 @@ def test_mean_reversion_selects_short_term_laggard_above_trend() -> None:
     assert weights == {"A": 0.0, "B": 1.0, "SGOV": 0.0}
 
 
+def test_mean_reversion_holds_cash_without_defensive_asset() -> None:
+    weights = compute_trend_filtered_mean_reversion_weights(
+        symbols=["A", "B"],
+        closes_by_symbol={"A": [100.0, 95.0, 90.0], "B": [100.0, 98.0, 96.0]},
+        asset_classes={"A": "equity", "B": "equity"},
+        trend_window=2,
+        mean_reversion_window=1,
+        top_k=1,
+    )
+
+    assert weights == {"A": 0.0, "B": 0.0}
+
+
 def test_regime_adaptive_backtest_applies_costs_and_returns_valid_weights() -> None:
     result = run_regime_adaptive_backtest(
         symbols=["A", "B", "SGOV"],

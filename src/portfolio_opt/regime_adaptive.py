@@ -62,7 +62,7 @@ def compute_trend_filtered_mean_reversion_weights(
     if not selected:
         selected = defensive
     if not selected:
-        raise ValueError("At least one risky or defensive asset is required.")
+        return {symbol: 0.0 for symbol in symbols}
 
     weight = 1.0 / len(selected)
     return {
