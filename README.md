@@ -23,6 +23,10 @@ whose numerical results need rerunning after implementation fixes. The research 
 residual reversal, a custom regime-adaptive selector, SPY, and equal weight;
 these are research-only comparisons, not live-trading recommendations.
 
+The [aligned research benchmark](docs/BENCHMARK_2026-09-04.md) compares those
+methods over common dates and three trading-cost levels. Its current-symbol
+universe makes the results exploratory.
+
 (**AI Disclosure**: some of the code in this repo was generated using the aid of coding tools such as Claude, Qwen Code and Codex)
 
 ## Usage
