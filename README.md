@@ -9,10 +9,19 @@ A tactical portfolio optimizer with various strategy paths that can rebalance an
 5. `regime-adaptive` — research-only daily-bar ensemble which switches between protective trend and trend-filtered short-term mean reversion using prior sleeve performance.
 6. `fixed-allocation` — research-only benchmark baseline with cost-aware targets that drift between scheduled rebalances; it is not treated as an alpha strategy.
 7. `SEC quality research layer` — point-in-time quality ranking sourced from SEC EDGAR filing dates; it is not a CLI strategy or enabled for live orders.
+8. `residual-reversion` — research-only market/sector-residual short-term reversal with inverse-volatility sizing; it is not enabled for live orders.
+9. `quality-momentum` — research-only point-in-time SEC quality blended with trailing trend; it is not enabled for live orders.
+10. `value-quality-trend` — research-only sector-capped blend of earnings yield, SEC quality, and trend; it is not enabled for live orders.
 
 It can also backtest against historical data (primarily [yfinance](https://pypi.org/project/yfinance/) data, but other data sources can be manually uploaded via csv), and output various metrics of performance.
 
 The SEC research layer in `src/portfolio_opt/sec_edgar.py` caches EDGAR responses and enforces a conservative request interval. Set `SEC_USER_AGENT` to an identifying application name and contact address before using it. `src/portfolio_opt/fundamental_quality.py` filters every annual fact by its SEC `filed` date, and `src/portfolio_opt/quality_backtest.py` requires explicit trading dates so a filing cannot affect the return that occurred before it was public. These modules are research-only and make no claim of outperformance.
+
+See [`docs/LITERATURE_REVIEW.md`](docs/LITERATURE_REVIEW.md) for the sources and
+[`docs/RESEARCH_LOG.md`](docs/RESEARCH_LOG.md) for historical experiments
+whose numerical results need rerunning after implementation fixes. The research runner compares SEC quality, dual momentum,
+residual reversal, a custom regime-adaptive selector, SPY, and equal weight;
+these are research-only comparisons, not live-trading recommendations.
 
 (**AI Disclosure**: some of the code in this repo was generated using the aid of coding tools such as Claude, Qwen Code and Codex)
 

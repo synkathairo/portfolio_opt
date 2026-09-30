@@ -214,12 +214,13 @@ def iter_facts(
     tag: str,
     unit: str = "USD",
     forms: Iterable[str] = ("10-K", "10-Q"),
+    taxonomy: str = "us-gaap",
 ) -> list[FactObservation]:
-    """Extract dated observations for a US-GAAP tag from companyfacts JSON."""
+    """Extract dated observations for a companyfacts taxonomy tag."""
     allowed_forms = set(forms)
     facts = payload.get("facts")
-    us_gaap = facts.get("us-gaap") if isinstance(facts, dict) else None
-    fact = us_gaap.get(tag) if isinstance(us_gaap, dict) else None
+    namespace = facts.get(taxonomy) if isinstance(facts, dict) else None
+    fact = namespace.get(tag) if isinstance(namespace, dict) else None
     units = fact.get("units") if isinstance(fact, dict) else None
     raw_observations = units.get(unit) if isinstance(units, dict) else None
     if not isinstance(raw_observations, list):

@@ -77,3 +77,21 @@ def test_quality_backtest_applies_selected_position_after_filing() -> None:
     )
 
     assert result.final_value == pytest.approx(1.21)
+
+
+def test_quality_backtest_weights_drift_between_rebalances() -> None:
+    dates = [date(2023, 1, 1) + timedelta(days=index) for index in range(3)]
+    result = run_quality_backtest(
+        symbols=["AAA", "BBB"],
+        closes_by_symbol={"AAA": [100, 200, 400], "BBB": [100, 100, 100]},
+        trading_dates=dates,
+        companyfacts_by_symbol={
+            "AAA": _facts(200, "2023-01-01"),
+            "BBB": _facts(50, "2023-01-01"),
+        },
+        rebalance_every=10,
+        top_k=2,
+    )
+
+    assert result.final_value == pytest.approx(2.5)
+    assert result.latest_weights.tolist() == pytest.approx([0.8, 0.2])

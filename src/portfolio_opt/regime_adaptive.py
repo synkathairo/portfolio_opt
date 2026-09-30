@@ -167,11 +167,12 @@ def run_regime_adaptive_backtest(
             rebalances += 1
 
         daily_returns = returns[:, step]
-        trend_value *= 1.0 + float(np.dot(trend_weights, daily_returns)) - trend_cost
-        reversion_value *= (
-            1.0 + float(np.dot(reversion_weights, daily_returns)) - reversion_cost
-        )
-        realized_return = float(np.dot(active_weights, daily_returns)) - active_cost
+        trend_return = float(np.dot(trend_weights, daily_returns))
+        reversion_return = float(np.dot(reversion_weights, daily_returns))
+        active_return = float(np.dot(active_weights, daily_returns))
+        trend_value *= 1.0 + trend_return - trend_cost
+        reversion_value *= 1.0 + reversion_return - reversion_cost
+        realized_return = active_return - active_cost
         value *= 1.0 + realized_return
         period_returns.append(realized_return)
         values.append(value)
@@ -179,6 +180,11 @@ def run_regime_adaptive_backtest(
         reversion_values.append(reversion_value)
         peak_value = max(peak_value, value)
         max_drawdown = max(max_drawdown, 1.0 - value / peak_value)
+        trend_weights = trend_weights * (1.0 + daily_returns) / (1.0 + trend_return)
+        reversion_weights = (
+            reversion_weights * (1.0 + daily_returns) / (1.0 + reversion_return)
+        )
+        active_weights = active_weights * (1.0 + daily_returns) / (1.0 + active_return)
 
     summary = summarize_return_series(
         np.array(period_returns),
