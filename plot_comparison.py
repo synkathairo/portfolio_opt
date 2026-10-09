@@ -1,5 +1,6 @@
 import json
 import subprocess
+import sys
 from datetime import date
 
 import matplotlib.pyplot as plt
@@ -9,7 +10,8 @@ today = str(date.today())
 
 # MODEL_NAME = "Nasdaq 100"
 # MODEL_NAME = "Nasdaq100+SP500+sectors"
-MODEL_NAME = "nasdaq100_sp500_sector_universe_b2016filtered"
+# MODEL_NAME = "nasdaq100_sp500_sector_universe_b2016filtered"
+MODEL_NAME = "sector_alternatives_universe"
 # MODEL_NAME = "yfiua_hsi_202307_current_valid_universe"
 # MODEL_NAME = "yfiua_ftse100_202307_current_valid_universe"
 # MODEL_NAME = "yfiua_csi300_202307_current_valid_universe"
@@ -31,7 +33,8 @@ LOOKBACK_DAYS = 252
 # BACKTEST_DAYS = 252*9
 # BACKTEST_DAYS = 252 * 15
 # BACKTEST_DAYS = 2748
-BACKTEST_DAYS = 2722
+# BACKTEST_DAYS = 2722
+BACKTEST_DAYS = 2929
 # BACKTEST_DAYS = 4454
 # BACKTEST_DAYS = 4439
 # BACKTEST_DAYS = 4300
@@ -550,7 +553,7 @@ strategy_results = [
 
 if not all(strategy_results):
     print("Failed to get backtest data.")
-    exit()
+    sys.exit()
 
 # 3. Extract Daily Values
 strategy_curves = [
@@ -569,7 +572,7 @@ for ticker, label in BENCHMARKS:
 
 if not benchmark_curves:
     print("Failed to fetch benchmark data.")
-    exit()
+    sys.exit()
 
 # Normalize to 1.0
 # spy_norm = (spy / spy.iloc[0]).tolist()
