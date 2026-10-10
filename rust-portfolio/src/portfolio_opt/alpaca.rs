@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use yfinance_rs::core::conversions::money_to_f64;
 use yfinance_rs::{Interval, Range, Ticker, YfClient};
 
-use crate::portfolio_opt::types::{AccountSnapshot, OrderPlan, Position};
+use crate::portfolio_opt::types::{AccountSnapshot, OrderPlan, PendingOrderExposure, Position};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct YahooCacheOptions {
@@ -110,11 +110,52 @@ impl PortfolioClients {
                 },
             );
 
-            if let Err(e) = alpaca.issue::<order::Create>(&req).await {
-                eprintln!("Failed to submit order for {}: {}", plan.symbol, e);
-            }
+            alpaca
+                .issue::<order::Create>(&req)
+                .await
+                .map_err(|e| format!("Failed to submit order for {}: {e}", plan.symbol))?;
         }
         Ok(())
+    }
+
+    pub fn pending_order_exposures(
+        orders: &[Order],
+        symbols: &[String],
+        latest_prices: &HashMap<String, f64>,
+    ) -> Result<Vec<PendingOrderExposure>, Box<dyn std::error::Error>> {
+        let mut exposures = Vec::new();
+        for order in orders {
+            if !symbols.iter().any(|symbol| symbol == &order.symbol) {
+                continue;
+            }
+
+            let price = latest_prices.get(&order.symbol).copied().unwrap_or(0.0);
+            if !price.is_finite() || price <= 0.0 {
+                return Err(format!(
+                    "Cannot account for open order on {} without a valid latest price",
+                    order.symbol
+                )
+                .into());
+            }
+
+            let signed_remaining_qty = estimate_signed_remaining_qty(
+                &order.amount,
+                order.side,
+                num_to_f64(order.filled_quantity.clone()),
+                order
+                    .average_fill_price
+                    .as_ref()
+                    .map(|value| num_to_f64(value.clone())),
+                price,
+            )?;
+            if signed_remaining_qty != 0.0 {
+                exposures.push(PendingOrderExposure {
+                    symbol: order.symbol.clone(),
+                    signed_remaining_qty,
+                });
+            }
+        }
+        Ok(exposures)
     }
 
     fn alpaca_client(&self) -> Result<&AlpacaClient, Box<dyn std::error::Error>> {
@@ -380,6 +421,79 @@ impl PortfolioClients {
         }
 
         Ok(closes)
+    }
+}
+
+fn estimate_signed_remaining_qty(
+    amount: &Amount,
+    side: Side,
+    filled_qty: f64,
+    average_fill_price: Option<f64>,
+    latest_price: f64,
+) -> Result<f64, Box<dyn std::error::Error>> {
+    if !latest_price.is_finite() || latest_price <= 0.0 {
+        return Err("Latest price must be a positive finite number".into());
+    }
+    let remaining_qty = match amount {
+        Amount::Quantity { quantity } => num_to_f64(quantity.clone()) - filled_qty,
+        Amount::Notional { notional } => {
+            let fill_price = average_fill_price.unwrap_or(latest_price);
+            if !fill_price.is_finite() || fill_price <= 0.0 {
+                return Err("Average fill price must be a positive finite number".into());
+            }
+            (num_to_f64(notional.clone()) - filled_qty * fill_price) / latest_price
+        }
+    }
+    .max(0.0);
+
+    Ok(match side {
+        Side::Buy => remaining_qty,
+        Side::Sell => -remaining_qty,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::estimate_signed_remaining_qty;
+    use apca::api::v2::order::{Amount, Side};
+
+    fn num(value: &str) -> num_decimal::Num {
+        value.parse().expect("valid decimal test value")
+    }
+
+    #[test]
+    fn quantity_order_returns_remaining_shares_with_side_sign() {
+        let amount = Amount::Quantity {
+            quantity: num("10"),
+        };
+
+        assert_eq!(
+            estimate_signed_remaining_qty(&amount, Side::Buy, 3.0, None, 20.0).unwrap(),
+            7.0
+        );
+        assert_eq!(
+            estimate_signed_remaining_qty(&amount, Side::Sell, 3.0, None, 20.0).unwrap(),
+            -7.0
+        );
+    }
+
+    #[test]
+    fn notional_order_estimates_remaining_shares_from_fill_and_latest_prices() {
+        let amount = Amount::Notional {
+            notional: num("1000"),
+        };
+        let remaining =
+            estimate_signed_remaining_qty(&amount, Side::Buy, 2.0, Some(100.0), 125.0).unwrap();
+
+        assert_eq!(remaining, 6.4);
+    }
+
+    #[test]
+    fn pending_order_exposure_rejects_invalid_latest_price() {
+        let amount = Amount::Quantity {
+            quantity: num("10"),
+        };
+        assert!(estimate_signed_remaining_qty(&amount, Side::Buy, 0.0, None, 0.0).is_err());
     }
 }
 

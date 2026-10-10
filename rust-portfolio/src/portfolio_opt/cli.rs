@@ -223,7 +223,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // Live / Dry-run mode
         let account = clients.get_account().await?;
         let positions = clients.get_positions().await?;
-        let open_orders: Vec<Order> = clients.get_open_orders().await.unwrap_or_default();
+        let open_orders: Vec<Order> = clients.get_open_orders().await?;
 
         // Fetch history for the signal (lookback + buffer)
         let history_days = args.lookback_days + 50;
@@ -252,6 +252,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .iter()
             .filter_map(|(s, v)| v.last().map(|p| (s.clone(), *p)))
             .collect();
+        let pending_exposures = PortfolioClients::pending_order_exposures(
+            &open_orders,
+            &model.symbols,
+            &latest_prices,
+        )?;
 
         // Compute actual Dual Momentum targets
         let target_weights = compute_dual_momentum_targets_with_options(
@@ -275,17 +280,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             &positions,
             &latest_prices,
             &config,
-            Some(
-                &open_orders
-                    .iter()
-                    .map(|o| {
-                        serde_json::json!({
-                            "symbol": o.symbol,
-                            "side": format!("{:?}", o.side)
-                        })
-                    })
-                    .collect::<Vec<_>>(),
-            ),
+            Some(&pending_exposures),
         );
 
         let result = serde_json::json!({
@@ -296,8 +291,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         });
         println!("{}", serde_json::to_string_pretty(&result)?);
 
-        if args.submit {
+        if should_submit_orders(args.submit, args.dry_run) {
             clients.submit_order_plan(&plan).await?;
+        } else if args.submit && args.dry_run {
+            eprintln!("Dry run: order submission suppressed.");
         }
     }
 
@@ -354,4 +351,29 @@ fn weights_by_symbol(symbols: &[String], weights: &[f64]) -> HashMap<String, f64
         .zip(weights.iter())
         .map(|(symbol, weight)| (symbol.clone(), *weight))
         .collect()
+}
+
+fn should_submit_orders(submit: bool, dry_run: bool) -> bool {
+    submit && !dry_run
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_submit_orders;
+
+    #[test]
+    fn submit_flag_allows_submission_without_dry_run() {
+        assert!(should_submit_orders(true, false));
+    }
+
+    #[test]
+    fn dry_run_suppresses_submission_even_when_submit_is_set() {
+        assert!(!should_submit_orders(true, true));
+    }
+
+    #[test]
+    fn submission_is_disabled_without_submit_flag() {
+        assert!(!should_submit_orders(false, false));
+        assert!(!should_submit_orders(false, true));
+    }
 }

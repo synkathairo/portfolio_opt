@@ -21,3 +21,10 @@ pub struct OrderPlan {
     pub side: String,
     pub notional_usd: f64,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingOrderExposure {
+    pub symbol: String,
+    /// Estimated remaining shares, positive for buys and negative for sells.
+    pub signed_remaining_qty: f64,
+}
