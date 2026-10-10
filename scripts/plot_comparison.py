@@ -1,17 +1,31 @@
 import json
+import os
 import subprocess
 import sys
 from datetime import date
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import yfinance as yf
+
+# Run from the repo root so relative paths (examples/, plots/) and
+# `uv run portfolio-opt` subprocesses resolve regardless of invocation cwd.
+os.chdir(Path(__file__).resolve().parents[1])
 
 today = str(date.today())
 
 # MODEL_NAME = "Nasdaq 100"
 # MODEL_NAME = "Nasdaq100+SP500+sectors"
 # MODEL_NAME = "nasdaq100_sp500_sector_universe_b2016filtered"
-MODEL_NAME = "sector_alternatives_universe"
+# MODEL_NAME = "sector_alternatives_universe"
+MODEL_NAME = "sector_alternatives_universe_v2"
+# MODEL_NAME = "sector_alternatives_universe_nolim"
+# MODEL_NAME = "sector_alternatives_universe_nomin"
+# MODEL_NAME = "sector_alternatives_universe_v3"
+# MODEL_NAME = "sector_alternatives_universe_v3_beta"
+# MODEL_NAME = "sector_alternatives_universe_v4"
+# MODEL_NAME = "nasdaq100_sp500_sector_universe"
+# MODEL_NAME = "sector_alternatives_universe_betahedged"
 # MODEL_NAME = "yfiua_hsi_202307_current_valid_universe"
 # MODEL_NAME = "yfiua_ftse100_202307_current_valid_universe"
 # MODEL_NAME = "yfiua_csi300_202307_current_valid_universe"

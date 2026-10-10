@@ -1,11 +1,17 @@
 import json
+import os
 import subprocess
 from datetime import date
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+
+# Run from the repo root so relative paths (examples/, plots/) and
+# `uv run portfolio-opt` subprocesses resolve regardless of invocation cwd.
+os.chdir(Path(__file__).resolve().parents[1])
 
 today = str(date.today())
 

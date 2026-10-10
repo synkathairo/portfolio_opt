@@ -102,14 +102,14 @@ def main() -> None:
         year = args.year if args.year is not None else default_year
         month = args.month if args.month is not None else default_month
         try:
-            historical_symbols, historical_names = (
+            historical_symbols, _historical_names = (
                 fetch_yfiua_index_constituents_with_names(
                     code,
                     year=year,
                     month=month,
                 )
             )
-            current_symbols, current_names = fetch_yfiua_index_constituents_with_names(
+            current_symbols, _current_names = fetch_yfiua_index_constituents_with_names(
                 code
             )
         except requests.HTTPError as exc:

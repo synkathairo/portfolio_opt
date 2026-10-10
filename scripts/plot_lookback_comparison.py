@@ -1,10 +1,17 @@
 import json
+import os
 import re
 import subprocess
+import sys
 from datetime import date
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import yfinance as yf
+
+# Run from the repo root so relative paths (examples/, plots/) and
+# `uv run portfolio-opt` subprocesses resolve regardless of invocation cwd.
+os.chdir(Path(__file__).resolve().parents[1])
 
 today = str(date.today())
 
@@ -123,7 +130,7 @@ for lookback_days in LOOKBACK_PERIODS:
 
 if not all(lookback_results):
     print("Failed to get backtest data.")
-    exit()
+    sys.exit()
 
 strategy_curves = [
     (result["label"], result["backtest"]["daily_values"]) for result in lookback_results
@@ -140,7 +147,7 @@ for ticker, label in BENCHMARKS:
 
 if not benchmark_curves:
     print("Failed to fetch benchmark data.")
-    exit()
+    sys.exit()
 
 # Align all curves to the same end date, then re-normalize each curve to 1.0.
 target_len = min(

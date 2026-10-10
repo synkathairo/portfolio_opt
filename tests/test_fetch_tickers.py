@@ -337,13 +337,7 @@ def test_fetch_ftse_tickers_uses_yfiua_constituents(monkeypatch) -> None:
 
 
 def test_fetch_historical_sp500_tickers_selects_latest_prior_row(monkeypatch) -> None:
-    csv = "\n".join(
-        [
-            "date,tickers",
-            '2015-12-31,"AAA,BBB"',
-            '2016-01-05,"AAA,CCC"',
-        ]
-    )
+    csv = 'date,tickers\n2015-12-31,"AAA,BBB"\n2016-01-05,"AAA,CCC"'
     requested: list[str] = []
 
     class FakeResponse:
