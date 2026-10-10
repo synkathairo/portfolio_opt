@@ -240,3 +240,108 @@ signals or connecting execution.
   is better for point-in-time filing fundamentals; Yahoo prices are convenient
   research data but do not solve delisted-security or historical-membership
   bias. No live-trading conclusion follows from these preliminary studies.
+
+## ETF-universe and risk-control comparison (2026-10-09)
+
+An offline, matched comparison was run across `examples/sector_universe.json` and
+seven `sector_alternatives_universe*` variants. It used daily Top-2 equal-weight
+dual momentum and a mean-variance momentum configuration, with no transaction
+costs. Results and curves are under `.cache/universe_comparison/`; the four
+comparison charts are `plots/universe_comparison_{long,recent}_{dm2_daily,mean_variance}_2026-10-09.png`.
+
+- Long window: 2,929 backtest days, 252-day lookback, 2014-09-22 to
+  2026-05-15. Short-history assets were automatically dropped (including
+  WTLS, AVUV, FTLS, DBMF, HEQT/HEGD, and the equity-income ETFs). Thus this
+  is not a full-basket test. Original sector and v3 Top-2 dual momentum both
+  returned 16.44% CAGR, 22.21% volatility, and 30.90% maximum drawdown;
+  adding BTAL lowered CAGR to 10.85% and volatility to 21.35%, with the same
+  maximum drawdown.
+- Recent common window: 850 backtest days, 63-day lookback,
+  2022-12-22 to 2026-05-15. WTLS was dropped; other v3 additions had enough
+  history. Top-2 dual momentum returned 23.11% CAGR for the original sector
+  universe, 20.86% for v3, and 18.78% for v3-beta. Maximum drawdown was
+  24.28% for all three. SPY returned 23.27% CAGR with 15.17% volatility and
+  18.76% drawdown over this same window. The cache endpoint is May 15 despite
+  newer file timestamps, so these runs omit later 2026 market data.
+- In the recent v3 dual-momentum run, AVUV was selected on 57 of 850 daily
+  decisions, FTLS on 9, and DBMF on 23; JEPI, DIVO, SPYI, HEQT, HEGD, and QAI
+  were not selected. BTAL was selected on 98 dates in v3-beta. These are
+  selection counts, not additional allocations beyond the Top-2 holdings.
+- Class min/max weights do not constrain the native dual-momentum path; they
+  do affect mean-variance. The recent mean-variance run had 10.50% CAGR and
+  9.35% drawdown for sector, 10.03% and 9.12% for v3, and 9.23% and 9.09%
+  for v3-beta. The risk/return trade-off is inconclusive, and this is not
+  evidence that any alternative reliably beats SPY.
+- A separate 49-stock experiment with a 15% simulated trailing stop reported
+  25.6% CAGR and 39.2% drawdown for Top-2 versus 15.4% and 33.7% for SPY
+  (10 bps costs). The stop did not remove the higher drawdown in that sample;
+  it is not a hard portfolio loss limit. Universe membership was a static
+  current-survivor sample, so the finding is exploratory, not causal.
+
+Current research direction: broaden the ETF baseline carefully (the compact
+`examples/sector_alternatives_universe_v4.json` copies v3, adds XLB/XLC/XLY,
+USMV, and QUAL, and removes the inherited class minimums). Evaluate it against
+the original and v3 on matched post-inception dates. Do not add leverage as a
+substitute for risk controls. For stock universes, compare Top-5/10 with
+sector/position limits and point-in-time constituents; more names alone do not
+guarantee lower drawdown. Also test trailing stops and volatility targeting
+separately, with turnover costs, rolling windows, and a held-out period. The
+v4 configuration was subsequently backtested against v3 on matched offline
+windows (no costs; SPY cache ended 2026-05-15). Dual-momentum Top-2 daily:
+long window CAGR 16.44% for v3 vs. 15.50% for v4, with both at 30.90% max
+drawdown; recent window 20.86% vs. 22.68% CAGR, but drawdown rose from
+24.28% to 25.79%. Thus v4 was not uniformly worse. Mean-variance CAGR was
+lower for v4 (long 5.46% vs. 4.76%; recent 10.03% vs. 7.73%), with slightly
+lower volatility / similar or marginally lower drawdown. That comparison is
+confounded by v4 removing the inherited class minimums, which mean-variance
+respects. In the long window XLC was excluded for insufficient history; recent
+window dropped WTLS. All these results are exploratory and cost-free. The v2 comparison was also
+checked: on the recent window, dual-momentum Top-2 CAGR was 20.86% for v2,
+22.19% for alternatives v1, and 23.11% for the sector baseline; mean-variance
+CAGR was 9.96%, 9.86%, and 10.50%, respectively. On the long window v2
+matched v1 because its newer additions were filtered out. These tests had no
+transaction costs.
+
+## Proposed follow-up test routes (2026-10-09)
+
+These are hypotheses to test, not accepted strategies. Prioritize the following
+as separate experiments; do not add every signal or ETF to one basket and tune
+against the same history.
+
+1. **Establish whether dual momentum needs better breadth/risk controls.** On
+   identical symbols and dates, compare Top-2, Top-5, and Top-10 equal-weight
+   portfolios; monthly (21-day) and slower (63-day) rebalance; then test
+   trailing stops and volatility targets one at a time. Include no-stop and
+   no-target baselines, turnover, and 10/30/50 bps cost sensitivities. Stops
+   are not hard loss limits; volatility targeting is backward-looking. The
+   current native dual-momentum path does not enforce model class min/max
+   weights.
+2. **Compare universe sizes fairly.** Use the 20-ETF sector baseline, compact
+   v4 ETF universe, an approximately 100–200-name liquid stock universe, and
+   the 535-name Nasdaq/S&P/sector file as a broad exploratory endpoint. Apply
+   the same strategy, dates, warm-up, transaction costs, and rebalancing; use
+   point-in-time membership and delisted names where available. The 198-name
+   `nasdaq100_sector_universe_b2016filtered.json` is an existing intermediate
+   prototype, but its static membership and large historical drawdown limit
+   conclusions.
+3. **Test a low-drawdown ETF hypothesis separately.** Compare the completed
+   sector sleeve against sector + USMV, sector + QUAL, and sector + both; add
+   AVUV only as a separate small-value hypothesis. Keep the existing
+   alternatives (managed futures, anti-beta, option-income/hedged equity) as
+   separate sleeves/ablations, since they can reduce risk, dilute return, or
+   simply fail to enter a momentum Top-K basket.
+4. **Explore different strategy families only after the baselines.** Candidate
+   approaches are sector-neutral quality + momentum in a broader stock set;
+   cross-asset time-series trend with volatility-scaled positions across
+   equities/bonds/commodities; and downside-aware or robust allocation (e.g.,
+   CVaR / uncertainty-aware constraints). First rerun existing factor,
+   protective, regime-adaptive, and risk-parity implementations consistently.
+5. **Defer leverage.** Daily-reset leveraged funds add path-dependent exposure
+   and nominal position limits do not cap their effective beta. Test them only
+   in a separate, leverage-aware design after an unleveraged strategy has a
+   repeatable, out-of-sample edge.
+
+Each study should state whether its objective is to beat SPY on raw return or
+improve risk-adjusted return/drawdown. Report CAGR, volatility, max drawdown,
+turnover, cost sensitivity, rolling/regime results, and a held-out period. Do
+not select a winner from a single full-sample CAGR or visual plot.
