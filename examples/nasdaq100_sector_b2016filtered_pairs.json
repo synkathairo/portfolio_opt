@@ -1,0 +1,348 @@
+{
+  "symbols": [],
+  "asset_classes": {
+    "GOOG": "sector_communication_services",
+    "GOOGL": "sector_communication_services",
+    "CMCSA": "sector_communication_services",
+    "WBD": "sector_communication_services",
+    "META": "sector_communication_services",
+    "CHTR": "sector_communication_services",
+    "EA": "sector_communication_services",
+    "TTWO": "sector_communication_services",
+    "NFLX": "sector_communication_services",
+    "ROST": "sector_consumer_cyclical",
+    "TJX": "sector_consumer_cyclical",
+    "ORLY": "sector_consumer_cyclical",
+    "SBUX": "sector_consumer_cyclical",
+    "MAR": "sector_consumer_cyclical",
+    "MELI": "sector_consumer_cyclical",
+    "EBAY": "sector_consumer_cyclical",
+    "BKNG": "sector_consumer_cyclical",
+    "TSLA": "sector_consumer_cyclical",
+    "PEP": "sector_consumer_defensive",
+    "XLP": "sector_consumer_defensive",
+    "GIS": "sector_consumer_defensive",
+    "MKC": "sector_consumer_defensive",
+    "CPB": "sector_consumer_defensive",
+    "KDP": "sector_consumer_defensive",
+    "HSY": "sector_consumer_defensive",
+    "COST": "sector_consumer_defensive",
+    "TGT": "sector_consumer_defensive",
+    "WMT": "sector_consumer_defensive",
+    "BKR": "sector_energy",
+    "XLE": "sector_energy",
+    "FANG": "sector_energy",
+    "CVS": "sector_health_care",
+    "XLV": "sector_health_care",
+    "AMGN": "sector_health_care",
+    "GILD": "sector_health_care",
+    "REGN": "sector_health_care",
+    "ISRG": "sector_health_care",
+    "VRTX": "sector_health_care",
+    "IDXX": "sector_health_care",
+    "INSM": "sector_health_care",
+    "HON": "sector_industrials",
+    "XLI": "sector_industrials",
+    "CTAS": "sector_industrials",
+    "CPRT": "sector_industrials",
+    "PCAR": "sector_industrials",
+    "ODFL": "sector_industrials",
+    "TRI": "sector_industrials",
+    "VRSK": "sector_industrials",
+    "FAST": "sector_industrials",
+    "CSGP": "sector_real_estate",
+    "VNQ": "sector_real_estate",
+    "ADP": "sector_technology",
+    "PAYX": "sector_technology",
+    "XLK": "sector_technology",
+    "ROP": "sector_technology",
+    "TEL": "sector_technology",
+    "TXN": "sector_technology",
+    "CDNS": "sector_technology",
+    "SNPS": "sector_technology",
+    "IBM": "sector_technology",
+    "ORCL": "sector_technology",
+    "AEP": "sector_utilities",
+    "XLU": "sector_utilities",
+    "XEL": "sector_utilities"
+  },
+  "pairs": [
+    {
+      "long": "GOOG",
+      "short": "GOOGL",
+      "category": "sector_communication_services"
+    },
+    {
+      "long": "CMCSA",
+      "short": "WBD",
+      "category": "sector_communication_services"
+    },
+    {
+      "long": "CMCSA",
+      "short": "META",
+      "category": "sector_communication_services"
+    },
+    {
+      "long": "GOOGL",
+      "short": "META",
+      "category": "sector_communication_services"
+    },
+    {
+      "long": "CHTR",
+      "short": "GOOG",
+      "category": "sector_communication_services"
+    },
+    {
+      "long": "CHTR",
+      "short": "WBD",
+      "category": "sector_communication_services"
+    },
+    {
+      "long": "EA",
+      "short": "TTWO",
+      "category": "sector_communication_services"
+    },
+    {
+      "long": "EA",
+      "short": "NFLX",
+      "category": "sector_communication_services"
+    },
+    {
+      "long": "ROST",
+      "short": "TJX",
+      "category": "sector_consumer_cyclical"
+    },
+    {
+      "long": "ORLY",
+      "short": "SBUX",
+      "category": "sector_consumer_cyclical"
+    },
+    {
+      "long": "SBUX",
+      "short": "TJX",
+      "category": "sector_consumer_cyclical"
+    },
+    {
+      "long": "ORLY",
+      "short": "ROST",
+      "category": "sector_consumer_cyclical"
+    },
+    {
+      "long": "MAR",
+      "short": "MELI",
+      "category": "sector_consumer_cyclical"
+    },
+    {
+      "long": "EBAY",
+      "short": "MAR",
+      "category": "sector_consumer_cyclical"
+    },
+    {
+      "long": "EBAY",
+      "short": "MELI",
+      "category": "sector_consumer_cyclical"
+    },
+    {
+      "long": "BKNG",
+      "short": "TSLA",
+      "category": "sector_consumer_cyclical"
+    },
+    {
+      "long": "PEP",
+      "short": "XLP",
+      "category": "sector_consumer_defensive"
+    },
+    {
+      "long": "GIS",
+      "short": "XLP",
+      "category": "sector_consumer_defensive"
+    },
+    {
+      "long": "MKC",
+      "short": "PEP",
+      "category": "sector_consumer_defensive"
+    },
+    {
+      "long": "GIS",
+      "short": "MKC",
+      "category": "sector_consumer_defensive"
+    },
+    {
+      "long": "CPB",
+      "short": "KDP",
+      "category": "sector_consumer_defensive"
+    },
+    {
+      "long": "CPB",
+      "short": "HSY",
+      "category": "sector_consumer_defensive"
+    },
+    {
+      "long": "COST",
+      "short": "TGT",
+      "category": "sector_consumer_defensive"
+    },
+    {
+      "long": "COST",
+      "short": "WMT",
+      "category": "sector_consumer_defensive"
+    },
+    {
+      "long": "BKR",
+      "short": "XLE",
+      "category": "sector_energy"
+    },
+    {
+      "long": "FANG",
+      "short": "XLE",
+      "category": "sector_energy"
+    },
+    {
+      "long": "BKR",
+      "short": "FANG",
+      "category": "sector_energy"
+    },
+    {
+      "long": "CVS",
+      "short": "XLV",
+      "category": "sector_health_care"
+    },
+    {
+      "long": "AMGN",
+      "short": "XLV",
+      "category": "sector_health_care"
+    },
+    {
+      "long": "CVS",
+      "short": "GILD",
+      "category": "sector_health_care"
+    },
+    {
+      "long": "AMGN",
+      "short": "REGN",
+      "category": "sector_health_care"
+    },
+    {
+      "long": "ISRG",
+      "short": "VRTX",
+      "category": "sector_health_care"
+    },
+    {
+      "long": "ISRG",
+      "short": "REGN",
+      "category": "sector_health_care"
+    },
+    {
+      "long": "GILD",
+      "short": "VRTX",
+      "category": "sector_health_care"
+    },
+    {
+      "long": "IDXX",
+      "short": "INSM",
+      "category": "sector_health_care"
+    },
+    {
+      "long": "HON",
+      "short": "XLI",
+      "category": "sector_industrials"
+    },
+    {
+      "long": "CTAS",
+      "short": "XLI",
+      "category": "sector_industrials"
+    },
+    {
+      "long": "CTAS",
+      "short": "HON",
+      "category": "sector_industrials"
+    },
+    {
+      "long": "CPRT",
+      "short": "PCAR",
+      "category": "sector_industrials"
+    },
+    {
+      "long": "CPRT",
+      "short": "ODFL",
+      "category": "sector_industrials"
+    },
+    {
+      "long": "TRI",
+      "short": "VRSK",
+      "category": "sector_industrials"
+    },
+    {
+      "long": "FAST",
+      "short": "PCAR",
+      "category": "sector_industrials"
+    },
+    {
+      "long": "ODFL",
+      "short": "TRI",
+      "category": "sector_industrials"
+    },
+    {
+      "long": "CSGP",
+      "short": "VNQ",
+      "category": "sector_real_estate"
+    },
+    {
+      "long": "ADP",
+      "short": "PAYX",
+      "category": "sector_technology"
+    },
+    {
+      "long": "PAYX",
+      "short": "XLK",
+      "category": "sector_technology"
+    },
+    {
+      "long": "ADP",
+      "short": "XLK",
+      "category": "sector_technology"
+    },
+    {
+      "long": "ROP",
+      "short": "TEL",
+      "category": "sector_technology"
+    },
+    {
+      "long": "TEL",
+      "short": "TXN",
+      "category": "sector_technology"
+    },
+    {
+      "long": "ROP",
+      "short": "TXN",
+      "category": "sector_technology"
+    },
+    {
+      "long": "CDNS",
+      "short": "SNPS",
+      "category": "sector_technology"
+    },
+    {
+      "long": "IBM",
+      "short": "ORCL",
+      "category": "sector_technology"
+    },
+    {
+      "long": "AEP",
+      "short": "XLU",
+      "category": "sector_utilities"
+    },
+    {
+      "long": "XEL",
+      "short": "XLU",
+      "category": "sector_utilities"
+    },
+    {
+      "long": "AEP",
+      "short": "XEL",
+      "category": "sector_utilities"
+    }
+  ],
+  "description": "Point-in-time pair list selected from examples/nasdaq100_sector_universe_b2016filtered.json on the first 252 trading days (2015-2016), then fixed.",
+  "source": "examples/nasdaq100_sector_universe_b2016filtered.json"
+}

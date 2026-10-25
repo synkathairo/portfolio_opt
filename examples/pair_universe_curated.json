@@ -1,0 +1,280 @@
+{
+  "symbols": [],
+  "asset_classes": {
+    "KO": "sector_consumer_defensive",
+    "PEP": "sector_consumer_defensive",
+    "PG": "sector_consumer_defensive",
+    "CL": "sector_consumer_defensive",
+    "XOM": "sector_energy",
+    "CVX": "sector_energy",
+    "COP": "sector_energy",
+    "EOG": "sector_energy",
+    "SLB": "sector_energy",
+    "HAL": "sector_energy",
+    "JPM": "sector_financials",
+    "BAC": "sector_financials",
+    "GS": "sector_financials",
+    "MS": "sector_financials",
+    "V": "sector_financials",
+    "MA": "sector_financials",
+    "PGR": "sector_financials",
+    "ALL": "sector_financials",
+    "SPGI": "sector_financials",
+    "MCO": "sector_financials",
+    "JNJ": "sector_health_care",
+    "PFE": "sector_health_care",
+    "MRK": "sector_health_care",
+    "ABBV": "sector_health_care",
+    "UNH": "sector_health_care",
+    "ELV": "sector_health_care",
+    "TMO": "sector_health_care",
+    "DHR": "sector_health_care",
+    "GOOGL": "sector_communication_services",
+    "META": "sector_communication_services",
+    "NVDA": "sector_technology",
+    "AMD": "sector_technology",
+    "AVGO": "sector_technology",
+    "QCOM": "sector_technology",
+    "ORCL": "sector_technology",
+    "CRM": "sector_technology",
+    "UPS": "sector_industrials",
+    "FDX": "sector_industrials",
+    "DAL": "sector_industrials",
+    "UAL": "sector_industrials",
+    "CAT": "sector_industrials",
+    "DE": "sector_industrials",
+    "ETN": "sector_industrials",
+    "EMR": "sector_industrials",
+    "UNP": "sector_industrials",
+    "CSX": "sector_industrials",
+    "DUK": "sector_utilities",
+    "SO": "sector_utilities",
+    "AEP": "sector_utilities",
+    "EXC": "sector_utilities",
+    "AVB": "sector_real_estate",
+    "EQR": "sector_real_estate",
+    "PSA": "sector_real_estate",
+    "EXR": "sector_real_estate",
+    "TMUS": "sector_communication_services",
+    "VZ": "sector_communication_services",
+    "CMCSA": "sector_communication_services",
+    "CHTR": "sector_communication_services",
+    "LIN": "sector_basic_materials",
+    "APD": "sector_basic_materials",
+    "HD": "sector_consumer_cyclical",
+    "LOW": "sector_consumer_cyclical",
+    "MCD": "sector_consumer_cyclical",
+    "YUM": "sector_consumer_cyclical",
+    "ADBE": "sector_technology",
+    "NKE": "sector_consumer_cyclical",
+    "LULU": "sector_consumer_cyclical"
+  },
+  "pairs": [
+    {
+      "long": "KO",
+      "short": "PEP",
+      "category": "beverages",
+      "rationale": "Carbonated/soft drinks and packaged beverages"
+    },
+    {
+      "long": "PG",
+      "short": "CL",
+      "category": "household_products",
+      "rationale": "Household and personal-care consumer staples"
+    },
+    {
+      "long": "XOM",
+      "short": "CVX",
+      "category": "integrated_oil",
+      "rationale": "Integrated major oil companies"
+    },
+    {
+      "long": "COP",
+      "short": "EOG",
+      "category": "e_and_p",
+      "rationale": "Large-cap oil and gas exploration and production"
+    },
+    {
+      "long": "SLB",
+      "short": "HAL",
+      "category": "oil_services",
+      "rationale": "Oilfield services and equipment"
+    },
+    {
+      "long": "JPM",
+      "short": "BAC",
+      "category": "large_banks",
+      "rationale": "Diversified large-cap banks"
+    },
+    {
+      "long": "GS",
+      "short": "MS",
+      "category": "investment_banks",
+      "rationale": "Investment banking and trading"
+    },
+    {
+      "long": "V",
+      "short": "MA",
+      "category": "payments",
+      "rationale": "Global card payment networks"
+    },
+    {
+      "long": "PGR",
+      "short": "ALL",
+      "category": "insurance",
+      "rationale": "Property and casualty insurers"
+    },
+    {
+      "long": "SPGI",
+      "short": "MCO",
+      "category": "ratings",
+      "rationale": "Credit ratings and financial data"
+    },
+    {
+      "long": "JNJ",
+      "short": "PFE",
+      "category": "pharma",
+      "rationale": "Large-cap pharmaceutical and consumer health"
+    },
+    {
+      "long": "MRK",
+      "short": "ABBV",
+      "category": "pharma",
+      "rationale": "Large-cap pharmaceutical"
+    },
+    {
+      "long": "UNH",
+      "short": "ELV",
+      "category": "managed_care",
+      "rationale": "Managed-care health insurers"
+    },
+    {
+      "long": "TMO",
+      "short": "DHR",
+      "category": "life_sciences",
+      "rationale": "Life-science tools and diagnostics"
+    },
+    {
+      "long": "GOOGL",
+      "short": "META",
+      "category": "advertising",
+      "rationale": "Digital advertising platforms"
+    },
+    {
+      "long": "NVDA",
+      "short": "AMD",
+      "category": "semiconductors",
+      "rationale": "GPU and CPU semiconductor designers"
+    },
+    {
+      "long": "AVGO",
+      "short": "QCOM",
+      "category": "semiconductors",
+      "rationale": "Broadband and wireless semiconductor designers"
+    },
+    {
+      "long": "ORCL",
+      "short": "CRM",
+      "category": "enterprise_software",
+      "rationale": "Enterprise software and cloud applications"
+    },
+    {
+      "long": "UPS",
+      "short": "FDX",
+      "category": "parcel",
+      "rationale": "Parcel and express logistics"
+    },
+    {
+      "long": "DAL",
+      "short": "UAL",
+      "category": "airlines",
+      "rationale": "Network airlines"
+    },
+    {
+      "long": "CAT",
+      "short": "DE",
+      "category": "machinery",
+      "rationale": "Heavy machinery and agricultural equipment"
+    },
+    {
+      "long": "ETN",
+      "short": "EMR",
+      "category": "electrical_equipment",
+      "rationale": "Electrical equipment and automation"
+    },
+    {
+      "long": "UNP",
+      "short": "CSX",
+      "category": "railroads",
+      "rationale": "Class-I railroads"
+    },
+    {
+      "long": "DUK",
+      "short": "SO",
+      "category": "regulated_utilities",
+      "rationale": "Large regulated electric utilities"
+    },
+    {
+      "long": "AEP",
+      "short": "EXC",
+      "category": "regulated_utilities",
+      "rationale": "Large regulated electric utilities"
+    },
+    {
+      "long": "AVB",
+      "short": "EQR",
+      "category": "residential_reits",
+      "rationale": "Apartment residential REITs"
+    },
+    {
+      "long": "PSA",
+      "short": "EXR",
+      "category": "self_storage_reits",
+      "rationale": "Self-storage REITs"
+    },
+    {
+      "long": "TMUS",
+      "short": "VZ",
+      "category": "telecom",
+      "rationale": "Wireless telecommunications carriers"
+    },
+    {
+      "long": "CMCSA",
+      "short": "CHTR",
+      "category": "cable",
+      "rationale": "Cable and broadband providers"
+    },
+    {
+      "long": "LIN",
+      "short": "APD",
+      "category": "industrial_gases",
+      "rationale": "Industrial gas producers"
+    },
+    {
+      "long": "HD",
+      "short": "LOW",
+      "category": "home_improvement",
+      "rationale": "Home-improvement retailers"
+    },
+    {
+      "long": "MCD",
+      "short": "YUM",
+      "category": "restaurants",
+      "rationale": "Quick-service restaurant franchisors"
+    },
+    {
+      "long": "ADBE",
+      "short": "CRM",
+      "category": "enterprise_software",
+      "rationale": "Enterprise software and creative applications"
+    },
+    {
+      "long": "NKE",
+      "short": "LULU",
+      "category": "apparel",
+      "rationale": "Athletic and activewear brands"
+    }
+  ],
+  "description": "Manually curated same-industry pairs. Fixed before the backtest; pairs are not selected using historical performance.",
+  "selection_method": "Economic similarity: same sub-industry, comparable business model, and liquid large-cap constituents. Betas are estimated point-in-time in the backtest."
+}

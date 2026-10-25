@@ -7,6 +7,8 @@ from typing import Any
 
 import numpy as np
 
+from .instruments import HedgeMode, Leg, SpreadSpec
+
 
 @dataclass(frozen=True)
 class ModelInputs:
@@ -16,6 +18,7 @@ class ModelInputs:
     asset_classes: dict[str, str]
     class_min_weights: dict[str, float]
     class_max_weights: dict[str, float]
+    pairs: tuple[SpreadSpec, ...] = ()
 
 
 def _require_mapping(value: Any, name: str) -> dict[str, Any]:
@@ -32,6 +35,79 @@ def _float_mapping(value: Any, name: str) -> dict[str, float]:
     return parsed
 
 
+def _parse_hedge_mode(value: Any, pair_id: str) -> HedgeMode:
+    hedge = str(value)
+    if hedge == "fixed":
+        return "fixed"
+    if hedge == "beta":
+        return "beta"
+    raise ValueError(f"Pair {pair_id} hedge must be 'fixed' or 'beta'.")
+
+
+def _parse_pairs(raw_pairs: Any, symbols: list[str]) -> tuple[SpreadSpec, ...]:
+    if raw_pairs is None:
+        return ()
+    if not isinstance(raw_pairs, list):
+        raise TypeError("Model pairs must be a list.")
+    parsed: list[SpreadSpec] = []
+    seen: set[str] = set()
+    symbol_set = set(symbols)
+    for item in raw_pairs:
+        pair = _require_mapping(item, "pair")
+        if "id" in pair:
+            pair_id = str(pair["id"])
+        elif "long" in pair and "short" in pair:
+            pair_id = f"{pair['long']}/{pair['short']}"
+        else:
+            pair_id = ""
+        if not pair_id:
+            raise ValueError("Each pair must have a non-empty id.")
+        if pair_id in seen:
+            raise ValueError(f"Duplicate pair id: {pair_id}")
+        if pair_id in symbol_set:
+            raise ValueError(f"Pair id collides with a symbol: {pair_id}")
+        seen.add(pair_id)
+
+        if "legs" in pair:
+            raw_legs = pair["legs"]
+            if not isinstance(raw_legs, list):
+                raise TypeError(f"Pair {pair_id} legs must be a list.")
+            legs = []
+            for raw_leg in raw_legs:
+                leg = _require_mapping(raw_leg, f"Pair {pair_id} leg")
+                legs.append(
+                    Leg(
+                        symbol=str(leg.get("symbol", "")),
+                        weight=float(leg.get("weight", 0.0)),
+                    )
+                )
+        elif "long" in pair and "short" in pair:
+            # Legacy schema support for the existing research universe files.
+            legs = [
+                Leg(symbol=str(pair["long"]), weight=1.0),
+                Leg(symbol=str(pair["short"]), weight=-1.0),
+            ]
+        else:
+            raise ValueError(
+                f"Pair {pair_id} must define 'legs' or legacy 'long'/'short'."
+            )
+
+        category = str(pair.get("category", pair_id))
+        asset_class = str(pair.get("asset_class", category))
+        hedge = _parse_hedge_mode(pair.get("hedge", "beta"), pair_id)
+        parsed.append(
+            SpreadSpec(
+                id=pair_id,
+                legs=tuple(legs),
+                category=category,
+                asset_class=asset_class,
+                hedge=hedge,
+                shortable=bool(pair.get("shortable", True)),
+            )
+        )
+    return tuple(parsed)
+
+
 def load_model_inputs(path: str | Path) -> ModelInputs:
     raw = json.loads(Path(path).read_text())
     if not isinstance(raw, dict):
@@ -39,12 +115,16 @@ def load_model_inputs(path: str | Path) -> ModelInputs:
     symbols = raw["symbols"]
     if not isinstance(symbols, list):
         raise TypeError("Model symbols must be a list.")
-    if not symbols:
-        raise ValueError("Model must contain at least one symbol.")
     if any(not isinstance(symbol, str) or not symbol for symbol in symbols):
         raise ValueError("Model symbols must be non-empty strings.")
     if len(set(symbols)) != len(symbols):
         raise ValueError("Model symbols must be unique.")
+    pairs = _parse_pairs(raw.get("pairs", []), symbols)
+    if not symbols and not pairs:
+        raise ValueError("Model must contain at least one symbol or pair.")
+    known_symbols = set(symbols)
+    for pair in pairs:
+        known_symbols.update(leg.symbol for leg in pair.legs)
     expected_returns = None
     covariance = None
     asset_classes_raw = _require_mapping(raw.get("asset_classes", {}), "asset_classes")
@@ -101,14 +181,16 @@ def load_model_inputs(path: str | Path) -> ModelInputs:
         )
 
     unknown_class_symbols = [
-        symbol for symbol in asset_classes if symbol not in symbols
+        symbol for symbol in asset_classes if symbol not in known_symbols
     ]
     if unknown_class_symbols:
         raise ValueError(
             f"Asset classes provided for unknown symbols: {unknown_class_symbols}"
         )
 
-    declared_classes = set(asset_classes.values())
+    declared_classes = set(asset_classes.values()) | {
+        pair.asset_class for pair in pairs
+    }
     constrained_classes = set(class_min_weights) | set(class_max_weights)
     unknown_constraint_classes = sorted(constrained_classes - declared_classes)
     if unknown_constraint_classes:
@@ -151,4 +233,5 @@ def load_model_inputs(path: str | Path) -> ModelInputs:
         class_max_weights={
             name: float(value) for name, value in class_max_weights.items()
         },
+        pairs=pairs,
     )
