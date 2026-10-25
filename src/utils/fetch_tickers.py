@@ -1,3 +1,4 @@
+import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -10,9 +11,12 @@ from typing import Any
 import pandas as pd
 import requests
 import yfinance as yf
+from yfinance.exceptions import YFException
 
 from portfolio_opt.cache import cache_path, read_cache, write_cache
 from portfolio_opt.yfinance_data import _yahoo_symbol_candidates
+
+logger = logging.getLogger(__name__)
 
 _TICKER_INFO_MEMORY_CACHE: dict[str, dict[str, Any]] = {}
 
@@ -154,7 +158,8 @@ def _get_ticker_info_payload(ticker: str) -> dict[str, Any]:
             continue
         try:
             info = yf.Ticker(yahoo_ticker).info or {}
-        except Exception:
+        except (YFException, OSError, ValueError, TypeError, KeyError) as exc:
+            logger.debug("Failed to fetch ticker info for %s: %s", yahoo_ticker, exc)
             continue
         if isinstance(info, dict) and info:
             info["asset_class"] = _asset_class_from_ticker_info(info)
@@ -175,7 +180,8 @@ def _get_ticker_info(ticker: str) -> tuple[str, str]:
         info = _get_ticker_info_payload(ticker)
         asset_class = info.get("asset_class")
         return ticker, asset_class if isinstance(asset_class, str) else "sector_unknown"
-    except Exception:
+    except (YFException, OSError, ValueError, TypeError, KeyError) as exc:
+        logger.debug("Failed to classify %s: %s", ticker, exc)
         return ticker, "sector_unknown"
 
 
@@ -294,7 +300,7 @@ def _historical_sp500_symbols_from_payload(
 ) -> list[str]:
     rows = payload.get("rows")
     if not isinstance(rows, list):
-        raise ValueError("Unexpected historical S&P 500 payload format.")
+        raise TypeError("Unexpected historical S&P 500 payload format.")
 
     selected: dict[str, Any] | None = None
     selected_date: pd.Timestamp | None = None
@@ -316,7 +322,7 @@ def _historical_sp500_symbols_from_payload(
         raise ValueError(f"No historical S&P 500 data on or before {snapshot.date()}.")
     tickers = selected.get("tickers")
     if not isinstance(tickers, str):
-        raise ValueError("Unexpected historical S&P 500 ticker row format.")
+        raise TypeError("Unexpected historical S&P 500 ticker row format.")
     return [ticker.strip() for ticker in tickers.split(",") if ticker.strip()]
 
 
@@ -442,10 +448,10 @@ def fetch_nikkei225_constituents(
 
 def _nikkei_constituents_from_cache(payload: Any) -> list[NikkeiConstituent]:
     if not isinstance(payload, dict):
-        raise ValueError("Unexpected cached Nikkei 225 payload format.")
+        raise TypeError("Unexpected cached Nikkei 225 payload format.")
     records = payload.get("constituents")
     if not isinstance(records, list):
-        raise ValueError("Unexpected cached Nikkei 225 constituents format.")
+        raise TypeError("Unexpected cached Nikkei 225 constituents format.")
     constituents: list[NikkeiConstituent] = []
     for record in records:
         if not isinstance(record, dict):
@@ -594,7 +600,7 @@ def _extract_yfiua_symbol_records(payload: Any) -> list[tuple[str, str | None]]:
         values = None
 
     if not isinstance(values, list):
-        raise ValueError("Unexpected index constituent payload format.")
+        raise TypeError("Unexpected index constituent payload format.")
 
     records: list[tuple[str, str | None]] = []
     for item in values:
@@ -708,7 +714,7 @@ def get_ticker_firstTradeDate(symbol: str) -> datetime | None:
         else:
             return None
 
-    except Exception as e:
+    except (OSError, ValueError, TypeError, KeyError, OverflowError) as e:
         print(f"{symbol:<8} | Error: {e}")
         return None
 

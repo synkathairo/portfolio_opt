@@ -18,6 +18,8 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from alpaca.common.exceptions import APIError, RetryException
+
 from .alpaca_interface import AlpacaClient
 from .config import AlpacaConfig
 from .runtime import configure_local_cache_dirs
@@ -104,6 +106,7 @@ def _plot_from_alpaca_history(
     import matplotlib.pyplot as plt
     import pandas as pd
     import yfinance as yf
+    from yfinance.exceptions import YFException
 
     alpaca = AlpacaClient(AlpacaConfig.from_env())
     payload = alpaca.get_portfolio_history(period=period, timeframe=timeframe)
@@ -132,8 +135,8 @@ def _plot_from_alpaca_history(
         start = dates.min().to_pydatetime().replace(tzinfo=None)
         end = dates.max().to_pydatetime().replace(tzinfo=None)
         spy_bars = alpaca.get_stock_bars_raw(benchmark, start, end)
-    except Exception:
-        pass
+    except (APIError, RetryException, OSError, ValueError, TypeError) as exc:
+        print(f"Warning: Alpaca benchmark fetch failed: {exc}", file=sys.stderr)
 
     # Fallback to yfinance if Alpaca didn't return data (e.g. range too long)
     if not spy_bars:
@@ -145,7 +148,7 @@ def _plot_from_alpaca_history(
                     {"timestamp": t, "close": c}
                     for t, c in zip(hist.index, hist["Close"])
                 ]
-        except Exception:
+        except (YFException, OSError, ValueError, TypeError, KeyError):
             print(f"Warning: Could not fetch {benchmark} data.", file=sys.stderr)
 
     if not spy_bars:

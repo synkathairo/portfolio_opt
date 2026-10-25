@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import time
 import warnings
@@ -11,6 +12,7 @@ from typing import Any, cast
 from urllib.parse import urlparse
 from uuid import UUID
 
+from alpaca.common.exceptions import APIError, RetryException
 from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.models.bars import BarSet
@@ -29,10 +31,13 @@ from alpaca.trading.requests import (
     MarketOrderRequest,
     TrailingStopOrderRequest,
 )
+from yfinance.exceptions import YFException
 
 from .cache import cache_path, read_cache, write_cache
 from .config import AlpacaConfig
 from .types import AccountSnapshot, OrderPlan, Position, TrailingStopPlan
+
+logger = logging.getLogger(__name__)
 
 warnings.filterwarnings(
     "ignore",
@@ -678,7 +683,8 @@ class AlpacaClient:
                 }
                 for o in orders
             ]
-        except Exception:
+        except (APIError, RetryException, OSError, ValueError, TypeError) as exc:
+            logger.warning("Failed to fetch open orders: %s", exc)
             return []
 
     def submit_order_plan(self, plans: list[OrderPlan]) -> list[dict[str, Any]]:
@@ -699,7 +705,7 @@ class AlpacaClient:
                         "side": plan.side,
                     }
                 )
-            except Exception as exc:
+            except (APIError, RetryException, OSError, ValueError, TypeError) as exc:
                 print(
                     f"Failed to submit order for {plan.symbol}: {exc}", file=sys.stderr
                 )
@@ -728,7 +734,7 @@ class AlpacaClient:
             try:
                 self._trading.cancel_order_by_id(str(order_id))
                 canceled.append({"id": order_id, "symbol": symbol})
-            except Exception as exc:
+            except (APIError, RetryException, OSError, ValueError, TypeError) as exc:
                 print(
                     f"Failed to cancel trailing stop for {symbol}: {exc}",
                     file=sys.stderr,
@@ -755,7 +761,13 @@ class AlpacaClient:
             for order_id in list(pending):
                 try:
                     order = self._trading.get_order_by_id(order_id)
-                except Exception as exc:
+                except (
+                    APIError,
+                    RetryException,
+                    OSError,
+                    ValueError,
+                    TypeError,
+                ) as exc:
                     pending[order_id]["status"] = f"poll_failed: {exc}"
                     completed.append(pending.pop(order_id))
                     continue
@@ -798,7 +810,7 @@ class AlpacaClient:
                         "trail_percent": plan.trail_percent,
                     }
                 )
-            except Exception as exc:
+            except (APIError, RetryException, OSError, ValueError, TypeError) as exc:
                 print(
                     f"Failed to submit trailing stop for {plan.symbol}: {exc}",
                     file=sys.stderr,
@@ -958,7 +970,8 @@ class AlpacaClient:
                 hist = ticker.history(period=range_str)
                 if not hist.empty:
                     closes[symbol] = hist["Close"].tolist()
-            except Exception:
+            except (YFException, OSError, ValueError, TypeError, KeyError) as exc:
+                logger.debug("Failed to fetch %s from yfinance: %s", symbol, exc)
                 continue
 
         return closes

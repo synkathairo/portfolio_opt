@@ -376,7 +376,7 @@ def main() -> None:
     for index, symbol in enumerate(priced_symbols, start=1):
         try:
             facts[symbol] = client.company_facts(ciks[symbol])
-        except Exception as exc:  # noqa: BLE001 - one bad issuer should not abort research
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
             print(f"Skipping {symbol}: {exc}", file=sys.stderr)
         print(f"SEC facts {index}/{len(priced_symbols)}: {symbol}", file=sys.stderr)
     symbols = [symbol for symbol in priced_symbols if symbol in facts]

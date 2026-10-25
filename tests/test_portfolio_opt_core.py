@@ -329,7 +329,7 @@ def test_dynamic_universe_payload_rejects_invalid_asset_classes() -> None:
     for payload in invalid_payloads:
         try:
             cli._dynamic_universe_payload(payload)
-        except ValueError:
+        except TypeError:
             pass
         else:
             raise AssertionError(f"Invalid asset classes should fail: {payload}")

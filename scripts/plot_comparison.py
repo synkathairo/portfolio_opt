@@ -109,7 +109,10 @@ BENCHMARKS = [
 def run_backtest(label: str, args):
     print(f"Running: {args[1]} ...")
     result = subprocess.run(
-        ["uv", "run", "portfolio-opt"] + args, capture_output=True, text=True
+        ["uv", "run", "portfolio-opt"] + args,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode != 0:
         print(f"Error running backtest: {result.stderr}")

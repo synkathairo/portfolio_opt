@@ -81,7 +81,7 @@ def _dynamic_universe_payload(fetched: dict[str, Any]) -> dict[str, Any]:
     if len(set(symbols)) != len(symbols):
         raise ValueError("Dynamic universe fetch returned duplicate symbols.")
     if not isinstance(asset_classes, dict):
-        raise ValueError("Dynamic universe fetch returned invalid asset classes.")
+        raise TypeError("Dynamic universe fetch returned invalid asset classes.")
     if any(
         not isinstance(symbol, str)
         or not symbol
@@ -89,7 +89,7 @@ def _dynamic_universe_payload(fetched: dict[str, Any]) -> dict[str, Any]:
         or not asset_class
         for symbol, asset_class in asset_classes.items()
     ):
-        raise ValueError("Dynamic universe fetch returned invalid asset classes.")
+        raise TypeError("Dynamic universe fetch returned invalid asset classes.")
     validated_symbols = list(symbols)
     validated_asset_classes = dict(asset_classes)
     unknown_asset_class_symbols = sorted(
@@ -146,7 +146,7 @@ def _read_dynamic_universe_cache(
     meta = json.loads(meta_path.read_text())
     fetched_at_raw = meta.get("fetched_at") if isinstance(meta, dict) else None
     if not isinstance(fetched_at_raw, str):
-        raise ValueError(
+        raise TypeError(
             f"Cached dynamic universe metadata is missing fetched_at: {meta_path}"
         )
     fetched_at = datetime.fromisoformat(fetched_at_raw)
@@ -209,7 +209,7 @@ def _resolve_model_inputs(
                 cache_dir=dynamic_universe_cache_dir,
                 max_age_days=max_stale_dynamic_universe_days,
             )
-        except Exception:
+        except (FileNotFoundError, OSError, ValueError, TypeError):
             try:
                 fetched = fetch_ticker_dict(ticker_basket=ticker_basket)
                 _write_dynamic_universe_cache(

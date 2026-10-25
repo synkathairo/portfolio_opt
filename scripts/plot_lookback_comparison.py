@@ -77,7 +77,10 @@ def supported_backtest_days(stderr: str):
 def run_backtest(label: str, args, *, retry_supported_backtest_days: bool = True):
     print(f"Running: {label} ...")
     result = subprocess.run(
-        ["uv", "run", "portfolio-opt"] + args, capture_output=True, text=True
+        ["uv", "run", "portfolio-opt"] + args,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode != 0:
         supported_days = supported_backtest_days(result.stderr)

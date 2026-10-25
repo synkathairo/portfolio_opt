@@ -92,7 +92,9 @@ def prime_cache():
         refresh_cache=True,
         offline=False,
     )
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT_LEN)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=TIMEOUT_LEN, check=False
+    )
     if result.returncode != 0:
         raise RuntimeError(f"Cache prime failed: {result.stderr.strip()}")
 
@@ -101,14 +103,21 @@ def run_backtest(rebal_days, k):
     cmd = build_backtest_cmd(rebal_days, k, offline=PRIME_CACHE)
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=TIMEOUT_LEN
+            cmd, capture_output=True, text=True, timeout=TIMEOUT_LEN, check=False
         )
         if result.returncode != 0:
             print(f"Error for rebal={rebal_days}, k={k}: {result.stderr.strip()}")
             return None
         data = json.loads(result.stdout)
         return data["backtest"]
-    except Exception as e:
+    except (
+        subprocess.SubprocessError,
+        json.JSONDecodeError,
+        KeyError,
+        IndexError,
+        TypeError,
+        ValueError,
+    ) as e:
         print(f"Error for rebal={rebal_days}, k={k}: {e}")
         return None
 

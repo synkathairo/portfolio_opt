@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import pandas as pd
+from yfinance.exceptions import YFException
 
 from .cache import cache_path, read_cache, write_cache
 
@@ -70,7 +71,7 @@ def _fetch_single_symbol(
                 )
                 closes = closes[~closes.index.duplicated(keep="last")].sort_index()
                 return symbol, closes
-            except Exception as exc:
+            except (YFException, OSError, ValueError, TypeError, KeyError) as exc:
                 last_err = exc
                 logger.debug("Failed to fetch %s as %s: %s", symbol, yahoo_sym, exc)
                 continue
@@ -102,7 +103,7 @@ def _fetch_single_symbol_from(
                 )
                 closes = closes[~closes.index.duplicated(keep="last")].sort_index()
                 return symbol, closes
-            except Exception as exc:
+            except (YFException, OSError, ValueError, TypeError, KeyError) as exc:
                 last_err = exc
                 logger.debug("Failed to fetch %s as %s: %s", symbol, yahoo_sym, exc)
                 continue

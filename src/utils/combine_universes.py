@@ -67,7 +67,7 @@ def main() -> None:
         payload = json.loads(path.read_text())
         input_symbols = payload["symbols"]
         if not isinstance(input_symbols, list):
-            raise ValueError(f"Input symbols must be a list: {path}")
+            raise TypeError(f"Input symbols must be a list: {path}")
         input_asset_classes = payload.get("asset_classes", {})
         if not isinstance(input_asset_classes, dict):
             input_asset_classes = {}

@@ -95,7 +95,7 @@ def _fetch_symbol_payload(symbol: str, *, start: str, end: str) -> dict[str, Any
     response.raise_for_status()
     payload = response.json()
     if not isinstance(payload, dict):
-        raise ValueError(f"Unexpected StockAnalysis payload for {symbol}.")
+        raise TypeError(f"Unexpected StockAnalysis payload for {symbol}.")
     return payload
 
 

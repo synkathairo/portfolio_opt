@@ -181,7 +181,7 @@ def _canonical_asset_classes(symbols: list[str], *, max_workers: int) -> dict[st
     formatted = _format_ticker_dict(symbols, max_workers=max_workers)
     asset_classes = formatted.get("asset_classes", {})
     if not isinstance(asset_classes, dict):
-        raise ValueError("Canonical asset class formatting returned invalid payload.")
+        raise TypeError("Canonical asset class formatting returned invalid payload.")
     return {str(symbol): str(asset_classes[symbol]) for symbol in symbols}
 
 

@@ -88,7 +88,14 @@ def run_command(cmd: list[str], label: str) -> dict | None:
             return None
         data = json.loads(result.stdout)
         return data["backtest"]
-    except Exception as exc:
+    except (
+        subprocess.SubprocessError,
+        json.JSONDecodeError,
+        KeyError,
+        IndexError,
+        TypeError,
+        ValueError,
+    ) as exc:
         print(f"Error for {label}: {exc}")
         return None
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -10,6 +11,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 import yfinance as yf
+from yfinance.exceptions import YFException
 
 from portfolio_opt.yfinance_data import (
     _fetch_single_symbol_from,
@@ -20,6 +22,8 @@ from utils.fetch_tickers import (
     _format_ticker_dict,
     fetch_yfiua_index_constituents_with_names,
 )
+
+logger = logging.getLogger(__name__)
 
 YFIUA_EXCHANGE_SUFFIXES = {"AX", "DE", "HK", "L", "MC", "MI", "NS", "SS", "SZ"}
 
@@ -188,7 +192,8 @@ def _filter_current_valid_symbols(
         batch = candidates[i : i + batch_size]
         try:
             valid_candidates = _valid_yfinance_candidates(batch, start)
-        except Exception:
+        except (YFException, OSError, ValueError, TypeError, KeyError) as exc:
+            logger.warning("Yahoo validation failed for a batch: %s", exc)
             failed_candidates.extend(batch)
             continue
         for candidate in valid_candidates:
@@ -216,7 +221,7 @@ def _read_existing_symbols(path: Path) -> list[str]:
     payload = json.loads(path.read_text())
     symbols = payload.get("symbols")
     if not isinstance(symbols, list):
-        raise ValueError(f"Existing universe symbols must be a list: {path}")
+        raise TypeError(f"Existing universe symbols must be a list: {path}")
     return [str(symbol) for symbol in symbols]
 
 
@@ -297,7 +302,7 @@ def _canonical_asset_classes(symbols: list[str], *, max_workers: int) -> dict[st
     formatted = _format_ticker_dict(symbols, max_workers=max_workers)
     asset_classes = formatted.get("asset_classes", {})
     if not isinstance(asset_classes, dict):
-        raise ValueError("Canonical asset class formatting returned invalid payload.")
+        raise TypeError("Canonical asset class formatting returned invalid payload.")
     return {str(symbol): str(asset_classes[symbol]) for symbol in symbols}
 
 

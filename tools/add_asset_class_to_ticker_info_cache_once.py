@@ -29,7 +29,7 @@ def main() -> None:
     for path in paths:
         try:
             payload = json.loads(path.read_text())
-        except Exception as exc:
+        except (OSError, json.JSONDecodeError) as exc:
             print(f"{path}: skipped unreadable JSON ({exc})")
             skipped += 1
             continue

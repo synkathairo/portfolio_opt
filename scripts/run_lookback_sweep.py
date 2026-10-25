@@ -69,7 +69,7 @@ def run_backtest(lookback, k):
     cmd = build_backtest_cmd(lookback, k)
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=TIMEOUT_LEN
+            cmd, capture_output=True, text=True, timeout=TIMEOUT_LEN, check=False
         )
         if result.stderr.strip():
             print(result.stderr.strip())
@@ -78,7 +78,14 @@ def run_backtest(lookback, k):
             return None
         data = json.loads(result.stdout)
         return data["backtest"]
-    except Exception as e:
+    except (
+        subprocess.SubprocessError,
+        json.JSONDecodeError,
+        KeyError,
+        IndexError,
+        TypeError,
+        ValueError,
+    ) as e:
         print(f"Error for lookback={lookback}, k={k}: {e}")
         return None
 
